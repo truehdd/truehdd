@@ -1,0 +1,24 @@
+[package]
+name = "truehd"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Research implementation of Dolby TrueHD parser/decoder"
+authors = ["Rainbaby"]
+rust-version = "1.87.0"
+
+[lib]
+name = "truehd"
+crate-type = ["lib"]
+
+[dependencies]
+anyhow = "1.0.98"
+bitstream-io = "4.3.0"
+thiserror = "2.0.12"
+log = "0.4.27"
+
+[package.metadata.release]
+pre-release-replacements = [
+    {file="README.md", search="truehd = \"[a-z0-9\\.-]+\"", replace="truehd = \"{{version}}\""},
+#    {file="CHANGELOG.md", search="## \\[Unreleased\\]", replace="## [Unreleased]\n\n## [{{version}}] - {{date}}"},
+]

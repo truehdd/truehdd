@@ -1,0 +1,38 @@
+[workspace]
+members = ["truehd", "bytes_macro"]
+resolver = "2"
+
+[package]
+name = "truehdd"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+build = "build.rs"
+authors = ["Rainbaby"]
+rust-version = "1.87.0"
+
+[[bin]]
+name = "truehdd"
+path = "src/main.rs"
+
+[dependencies]
+bytes_macro = { version = "0.1.0", path = "bytes_macro" }
+truehd = { version = "0.1.0", path = "truehd" }
+
+anyhow = "1.0.98"
+clap = { version = "4.5.40", features = ["derive"] }
+env_logger = "0.11.8"
+indicatif = "0.18.0"
+indicatif-log-bridge = "0.2.3"
+log = "0.4.27"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_yaml_ng = "0.10.0"
+
+[build-dependencies]
+anyhow = "1.0.98"
+vergen-gitcl = { version = "1.0.8", default-features = false, features = ["build"] }
+
+[profile.release-deploy]
+inherits = "release"
+lto = "thin"
+strip = "symbols"

@@ -1,0 +1,41 @@
+[graph]
+# cargo-deny is really only ever intended to run on the "normal" tier-1 targets
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+]
+all-features = true
+
+[advisories]
+unmaintained = "workspace"
+
+[bans]
+multiple-versions = "deny"
+wildcards = 'allow'
+skip = [
+    {crate = "windows-sys"},
+    {crate = "windows-targets"},
+    {crate = "windows_x86_64_gnu"},
+    {crate = "windows_x86_64_msvc"},
+
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+
+[licenses]
+confidence-threshold = 0.93
+
+allow = [
+    "Apache-2.0",
+    "MIT",
+]
+
+exceptions = [
+    { allow = ["Unicode-3.0"], crate = "unicode-ident" },
+]
+

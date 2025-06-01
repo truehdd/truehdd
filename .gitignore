@@ -1,0 +1,54 @@
+# Rust build artifacts
+/target
+**/target/
+Cargo.lock
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Test files and outputs
+*.pcm
+*.caf
+*.mlp
+*.thd
+*.wav
+test_*.out
+output.*
+Run_*.collapsed
+
+# Temporary files
+*.tmp
+*.temp
+.#*
+
+# Python cache (for any Python scripts)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Coverage and profiling
+*.profraw
+lcov.info
+coverage/
+
+# Logs
+*.log
+
+# Local development files
+.env
+.env.local
