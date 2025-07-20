@@ -110,7 +110,7 @@ TrueHD ストリームを PCM 音声にデコードする。
 
 **使用例:**
 ```bash
-# 進捗バー付きで TrueHD ファイルをデコードし、出力なし
+# 進捗バー付きで TrueHD ファイルをデコード
 truehdd decode --progress audio.thd --output-path decoded_audio
 
 # ffmpeg パイプからデコード

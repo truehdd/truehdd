@@ -109,7 +109,7 @@ truehdd info movie.thd
 
 **使用示例：**
 ```bash
-# 解码 TrueHD 流并显示进度，不输出文件
+# 解码 TrueHD 流并显示进度
 truehdd decode --progress audio.thd --output-path decoded_audio
 
 # 从 ffmpeg 管道解码

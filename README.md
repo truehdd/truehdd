@@ -111,7 +111,7 @@ When `--output-path` is specified, the tool generates appropriate output files:
 
 **Examples:**
 ```bash
-# Decode a TrueHD file with progress, without output
+# Decode a TrueHD file with progress
 truehdd decode --progress audio.thd --output-path decoded_audio
 
 # Decode from ffmpeg pipe
