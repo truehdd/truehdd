@@ -731,7 +731,7 @@ presentations:
         SomeSurroundsNoHeights:
             surroundTrim: -9.0
             frontBackBalanceOverheadFloor: 1.0
-            frontBackBalanceListener: 1.0
+            frontBackBalanceListener: -1.0
         ManySurroundsNoHeights:
             surroundTrim: -4.5
             heightTrim: -3.0
