@@ -176,7 +176,7 @@ impl TrimOptions {
             surround_trim: trim.trim_surround,
             height_trim: trim.trim_height,
             front_back_balance_overhead_floor: trim.bal3d_y_tb,
-            front_back_balance_listener: trim.bal3d_y_tb,
+            front_back_balance_listener: trim.bal3d_y_lis,
         })
     }
 }
