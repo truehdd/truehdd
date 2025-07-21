@@ -1,5 +1,6 @@
 use anyhow::Result;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use log::Level;
 
 use super::command::{Cli, InfoArgs};
 use crate::input::InputReader;
@@ -46,6 +47,14 @@ fn analyze_stream(
     let mut input_reader = InputReader::new(input_path)?;
     let mut extractor = Extractor::default();
     let mut parser = Parser::default();
+
+    // Configure fail level based on strict mode
+    let fail_level = if cli.strict {
+        Level::Warn
+    } else {
+        Level::Error
+    };
+    parser.set_fail_level(fail_level);
 
     let mut context = AnalysisContext::default();
 

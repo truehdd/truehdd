@@ -8,6 +8,7 @@ use std::thread;
 
 use anyhow::Result;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use log::Level;
 
 use super::command::{AudioFormat, Cli, DecodeArgs};
 use crate::input::InputReader;
@@ -179,6 +180,15 @@ pub fn cmd_decode(args: &DecodeArgs, cli: &Cli, multi: Option<&MultiProgress>) -
     let mut extractor = Extractor::default();
     let mut parser = Parser::default();
     let mut decoder = Decoder::default();
+
+    // Configure fail level based on strict mode
+    let fail_level = if strict_mode {
+        Level::Warn
+    } else {
+        Level::Error
+    };
+    parser.set_fail_level(fail_level);
+    decoder.set_fail_level(fail_level);
 
     let mut required_presentations = [false; MAX_PRESENTATIONS];
     required_presentations[presentation as usize] = true;
