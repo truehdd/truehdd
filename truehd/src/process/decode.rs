@@ -38,6 +38,14 @@ impl Decoder {
 
         Ok(decoded)
     }
+
+    /// Sets the failure level for validation errors.
+    ///
+    /// - `log::Level::Error`: Only fail on Error level messages (default)  
+    /// - `log::Level::Warn`: Fail on Warning level and above (strict mode)
+    pub fn set_fail_level(&mut self, level: log::Level) {
+        self.state.fail_level = level;
+    }
 }
 
 /// The result of decoding an access unit to PCM audio.
@@ -162,6 +170,8 @@ impl Default for DecoderSubstreamState {
 #[derive(Debug)]
 #[repr(C)]
 pub struct DecoderState {
+    pub fail_level: log::Level,
+
     pub valid: bool,
     pub counter: usize,
 
@@ -190,6 +200,7 @@ pub struct DecoderState {
 impl Default for DecoderState {
     fn default() -> Self {
         Self {
+            fail_level: log::Level::Error,
             valid: false,
             counter: 0,
             sampling_frequency: 0,

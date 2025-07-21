@@ -46,6 +46,14 @@ impl Parser {
     pub fn hires_output_timing(&self) -> Option<usize> {
         self.state.hires_output_timing
     }
+
+    /// Sets the failure level for validation errors.
+    ///
+    /// - `log::Level::Error`: Only fail on Error level messages (default)  
+    /// - `log::Level::Warn`: Fail on Warning level and above (strict mode)
+    pub fn set_fail_level(&mut self, level: log::Level) {
+        self.state.fail_level = level;
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -164,9 +172,8 @@ impl Default for ParserSubstreamState {
 #[repr(C)]
 pub struct ParserState {
     // hyper
-    pub fail_on_warning: bool,
+    pub fail_level: log::Level,
     pub allow_seamless_branch: bool,
-    pub strict_validation: bool,
     pub check_fifo: bool,
 
     pub restart_gap: [usize; MAX_PRESENTATIONS],
@@ -247,9 +254,8 @@ pub struct ParserState {
 impl Default for ParserState {
     fn default() -> Self {
         Self {
-            fail_on_warning: false,
+            fail_level: log::Level::Error,
             allow_seamless_branch: false,
-            strict_validation: false,
             check_fifo: true,
             restart_gap: [0, 8, 8, 8],
 

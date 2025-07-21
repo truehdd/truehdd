@@ -1,7 +1,7 @@
 #[macro_export]
 macro_rules! log_or_err {
     ($state:expr, $level:expr, $err:expr $(,)?) => {{
-        if $state.fail_on_warning {
+        if $level <= $state.fail_level {
             return Err($err);
         } else {
             match $level {

@@ -52,7 +52,7 @@ pub struct Extractor {
     buffer_pool: BufferPool,
     error_count: usize,
     frames_processed: usize,
-    fail_on_warning: bool,
+    fail_level: log::Level,
 }
 
 impl Default for Extractor {
@@ -68,7 +68,7 @@ impl Default for Extractor {
             buffer_pool: BufferPool::default(),
             error_count: 0,
             frames_processed: 0,
-            fail_on_warning: false,
+            fail_level: log::Level::Error,
         }
     }
 }
