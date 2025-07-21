@@ -3,6 +3,8 @@ use std::fmt::Display;
 use std::path::Path;
 use truehd::structs::oamd::{ObjectAudioMetadataPayload, SpeakerLabels, Trim};
 
+pub const DAMF_VERSION: &str = "0.5.1";
+
 #[derive(Deserialize, Serialize)]
 pub struct Data {
     version: String,
@@ -267,7 +269,7 @@ impl Data {
             .map(|bed| VecDisplay(bed.to_index_vec().iter().map(|i| *i as u32).collect()));
 
         Self {
-            version: "0.5.1".to_string(),
+            version: DAMF_VERSION.to_string(),
             presentations: vec![Presentation {
                 presentation_type,
                 simplified: false,
@@ -623,7 +625,8 @@ fn format_yaml_string(mut yaml_str: String) -> String {
 
 #[test]
 fn roundtrip() {
-    let yaml_data = r#"version: 0.5.1
+    let yaml_data = format!(
+        r#"version: {DAMF_VERSION}
 presentations:
   - type: home
     simplified: false
@@ -691,28 +694,21 @@ presentations:
       - description: Dialog Object 3
         groupName: Dialog
         ID: 12
-"#;
+"#
+    );
 
-    let mut data: Data = serde_yaml_ng::from_str(yaml_data).unwrap();
+    let data: Data = serde_yaml_ng::from_str(&yaml_data).unwrap();
     let string = format_yaml_string(serde_yaml_ng::to_string(&data).unwrap());
-    assert_eq!(yaml_data, &string);
 
-    data.presentations[0].trim_mode = Some(TrimMode {
-        no_surrounds_no_heights: Some(TrimOptions {
-            center_trim: Some(1.5),
-            ..Default::default()
-        }),
-        ..Default::default()
-    });
-
-    // println!("{}", serde_yaml_ng::to_string(&data).unwrap());
+    assert_eq!(yaml_data, string);
 }
 
 #[test]
 fn damf() {
     use truehd::structs::oamd::TEST_DATA_TRIM;
 
-    let test_str = r#"version: 0.5.1
+    let test_str = format!(
+        r#"version: {DAMF_VERSION}
 presentations:
   - type: home
     simplified: false
@@ -722,7 +718,7 @@ presentations:
     fps: 24
     scBedConfiguration: [3]
     creationTool: truehdd
-    creationToolVersion: 0.1.0
+    creationToolVersion: {}
     warpMode: ProLogicIIx
     trimMode:
         NoSurroundsNoHeights:
@@ -761,9 +757,13 @@ presentations:
       - ID: 22
       - ID: 23
       - ID: 24
-"#;
+"#,
+        env!("CARGO_PKG_VERSION")
+    );
+
     let oamd = ObjectAudioMetadataPayload::read(TEST_DATA_TRIM).unwrap();
     let data = Data::with_oamd_payload(&oamd, Path::new("test"));
     let yaml_str = serde_yaml_ng::to_string(&data).unwrap();
-    assert_eq!(test_str.to_string(), format_yaml_string(yaml_str));
+
+    assert_eq!(test_str, format_yaml_string(yaml_str));
 }
