@@ -3,10 +3,12 @@
 //! Contains channel assignments, filter coefficients, and audio
 //! processing parameters for individual channels in audio streams.
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
+use log::Level::Error;
 use log::warn;
 use std::fmt::Display;
 
+use crate::log_or_err;
 use crate::process::decode::DecoderState;
 use crate::process::parse::ParserState;
 use crate::structs::filter::{CoeffType, FilterCoeffs};
@@ -213,19 +215,27 @@ impl ChannelParams {
 
         if let (Some(coeffs_a), Some(coeffs_b)) = (&mut cp.coeffs_a, &cp.coeffs_b) {
             if coeffs_a.order + coeffs_b.order > 8 {
-                bail!(ChannelError::FilterOrderTooHigh {
-                    a: coeffs_a.order,
-                    b: coeffs_b.order
-                });
+                log_or_err!(
+                    state,
+                    log::Level::Error,
+                    anyhow!(ChannelError::FilterOrderTooHigh {
+                        a: coeffs_a.order,
+                        b: coeffs_b.order
+                    })
+                );
             }
 
             if coeffs_b.order != 0 {
                 if coeffs_a.order != 0 && coeffs_b.coeff_q != coeffs_a.coeff_q {
-                    bail!(ChannelError::CoeffQMismatch {
-                        chan: chi,
-                        a_q: coeffs_a.coeff_q,
-                        b_q: coeffs_b.coeff_q
-                    });
+                    log_or_err!(
+                        state,
+                        log::Level::Error,
+                        anyhow!(ChannelError::CoeffQMismatch {
+                            chan: chi,
+                            a_q: coeffs_a.coeff_q,
+                            b_q: coeffs_b.coeff_q
+                        })
+                    );
                 }
 
                 if coeffs_a.order == 0 {
@@ -255,16 +265,20 @@ impl ChannelParams {
             24
         };
 
-        if cp.huff_lsbs > max_huff_lsbs {
-            bail!(ChannelError::HuffLsbsTooLarge {
-                chan: chi,
-                max: max_huff_lsbs,
-                actual: cp.huff_lsbs
-            });
-        }
-
         ss_state.huff_lsbs[chi] = cp.huff_lsbs;
         ss_state.huff_type[chi] = cp.huff_type;
+
+        if cp.huff_lsbs > max_huff_lsbs {
+            log_or_err!(
+                state,
+                Error,
+                anyhow!(ChannelError::HuffLsbsTooLarge {
+                    chan: chi,
+                    max: max_huff_lsbs,
+                    actual: cp.huff_lsbs
+                })
+            );
+        }
 
         Ok(cp)
     }

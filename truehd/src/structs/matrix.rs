@@ -12,8 +12,10 @@
 //! Coefficients can be updated with delta encoding and bit masks controlling
 //! which coefficients are modified.
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow};
+use log::Level::Warn;
 
+use crate::log_or_err;
 use crate::process::decode::DecoderState;
 use crate::process::parse::ParserState;
 use crate::structs::sync::BASE_SAMPLING_RATE_CD;
@@ -89,16 +91,6 @@ impl Matrixing {
                     {
                         matrices.matrix_ch = reader.get_n(4)?;
                         matrices.frac_bits = reader.get_n(4)?;
-
-                        if matrices.matrix_ch as usize > max_matrix_chan {
-                            bail!(MatrixError::MatrixChannelTooHigh {
-                                index: pmi,
-                                max: max_matrix_chan,
-                                actual: matrices.matrix_ch,
-                            });
-                        } else if matrices.frac_bits > 14 {
-                            bail!(MatrixError::FracBitsTooHigh(matrices.frac_bits));
-                        }
 
                         matrices.cf_shift_code = reader.get_n::<u8>(3)? as i8 - 1;
                         matrices.lsb_bypass_bit_count = reader.get_n(2)?;
@@ -190,24 +182,6 @@ impl Matrixing {
                 matrices.frac_bits = reader.get_n(4)?;
                 matrices.lsb_bypass_used = reader.get()?;
 
-                if matrices.matrix_ch as usize > max_matrix_chan {
-                    bail!(MatrixError::MatrixChannelTooHigh {
-                        index: pmi,
-                        max: max_matrix_chan,
-                        actual: matrices.matrix_ch,
-                    });
-                } else if matrices.frac_bits > 14 {
-                    bail!(MatrixError::FracBitsTooHigh(matrices.frac_bits));
-                } else if current_substream_index == 0
-                    && matrices.lsb_bypass_used
-                    && (this_substream_info & 2 != 0
-                        || audio_sampling_frequency_1 >= BASE_SAMPLING_RATE_CD << 2)
-                {
-                    bail!(MatrixError::InvalidLsbBypass {
-                        info: this_substream_info
-                    });
-                }
-
                 ss_state.matrix_ch[pmi] = matrices.matrix_ch;
                 ss_state.frac_bits[pmi] = matrices.frac_bits;
                 ss_state.lsb_bypass_used[pmi] = matrices.lsb_bypass_used;
@@ -230,6 +204,41 @@ impl Matrixing {
                 }
             }
         };
+
+        for (pmi, matrices) in matrixing.matrices[0..matrixing.primitive_matrices]
+            .iter()
+            .enumerate()
+        {
+            if matrices.matrix_ch as usize > max_matrix_chan {
+                log_or_err!(
+                    state,
+                    Warn,
+                    anyhow!(MatrixError::MatrixChannelTooHigh {
+                        index: pmi,
+                        max: max_matrix_chan,
+                        actual: matrices.matrix_ch,
+                    })
+                );
+            } else if matrices.frac_bits > 14 {
+                log_or_err!(
+                    state,
+                    Warn,
+                    anyhow!(MatrixError::FracBitsTooHigh(matrices.frac_bits))
+                );
+            } else if current_substream_index == 0
+                && matrices.lsb_bypass_used
+                && (this_substream_info & 2 != 0
+                    || audio_sampling_frequency_1 >= BASE_SAMPLING_RATE_CD << 2)
+            {
+                log_or_err!(
+                    state,
+                    Warn,
+                    anyhow!(MatrixError::InvalidLsbBypass {
+                        info: this_substream_info
+                    })
+                );
+            }
+        }
 
         Ok(matrixing)
     }

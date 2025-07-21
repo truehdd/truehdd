@@ -15,7 +15,7 @@
 //! Access units contain 40-160 samples based on sampling frequency.
 
 use anyhow::{Result, anyhow, bail};
-use log::Level::Warn;
+use log::Level::{Error, Warn};
 use log::{trace, warn};
 
 use crate::log_or_err;
@@ -206,13 +206,17 @@ impl MajorSyncInfo {
         ms.signature = reader.get_n(16)?;
 
         if ms.signature != 0xB752 {
-            bail!(SyncError::InvalidMajorSyncSignature(ms.signature))
+            log_or_err!(
+                state,
+                Warn,
+                anyhow!(SyncError::InvalidMajorSyncSignature(ms.signature))
+            )
         }
 
         ms.flags = reader.get_n(16)?;
 
         // check with bit-14
-        if state.strict_validation && (ms.flags & 0x67FF != 0) {
+        if ms.flags & 0x67FF != 0 {
             log_or_err!(
                 state,
                 Warn,
@@ -221,10 +225,14 @@ impl MajorSyncInfo {
         }
 
         if state.has_parsed_au && state.flags != ms.flags {
-            bail!(SyncError::FlagsMismatch {
-                read: ms.flags,
-                expected: state.flags
-            });
+            log_or_err!(
+                state,
+                Warn,
+                anyhow!(SyncError::FlagsMismatch {
+                    read: ms.flags,
+                    expected: state.flags
+                })
+            );
         }
 
         state.flags = ms.flags;
@@ -263,10 +271,14 @@ impl MajorSyncInfo {
 
         if let Some(substreams) = state.substreams {
             if substreams != ms.substreams {
-                bail!(SyncError::SubstreamCountMismatch {
-                    read: ms.substreams,
-                    expected: substreams,
-                })
+                log_or_err!(
+                    state,
+                    Warn,
+                    anyhow!(SyncError::SubstreamCountMismatch {
+                        read: ms.substreams,
+                        expected: substreams,
+                    })
+                )
             }
         } else {
             state.substreams = Some(ms.substreams);
@@ -296,10 +308,14 @@ impl MajorSyncInfo {
         let crc = reader.crc16_check(&state.crc_major_sync_info, start_pos, len)?;
 
         if crc != ms.major_sync_info_crc {
-            bail!(SyncError::MajorSyncCrcMismatch {
-                calculated: crc,
-                read: ms.major_sync_info_crc
-            });
+            log_or_err!(
+                state,
+                Error,
+                anyhow!(SyncError::MajorSyncCrcMismatch {
+                    calculated: crc,
+                    read: ms.major_sync_info_crc
+                })
+            );
         } else {
             // for gap check
         }

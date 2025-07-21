@@ -15,9 +15,10 @@
 //!
 //! Optional 8-bit parity check and CRC protection.
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow};
 use log::{trace, warn};
 
+use crate::log_or_err;
 use crate::process::parse::ParserState;
 use crate::structs::block::Block;
 use crate::structs::sync::{MAJOR_SYNC_FBA, MAJOR_SYNC_FBB};
@@ -65,7 +66,11 @@ impl SubstreamDirectory {
 
         if sd.extra_substream_word {
             if state.format_sync == MAJOR_SYNC_FBB {
-                bail!(SubstreamError::InvalidExtraSubstreamWordFbb);
+                log_or_err!(
+                    state,
+                    log::Level::Error,
+                    anyhow!(SubstreamError::InvalidExtraSubstreamWordFbb)
+                );
             }
 
             sd.drc_gain_update = reader.get_s(9)?;
@@ -82,14 +87,18 @@ impl SubstreamDirectory {
         }
 
         if !(state.is_major_sync ^ sd.restart_nonexistent) {
-            bail!(SubstreamError::InvalidRestartNonexistent {
-                expected: !sd.restart_nonexistent,
-                suffix: if state.is_major_sync {
-                    "".into()
-                } else {
-                    "out".into()
-                }
-            });
+            log_or_err!(
+                state,
+                log::Level::Warn,
+                anyhow!(SubstreamError::InvalidRestartNonexistent {
+                    expected: !sd.restart_nonexistent,
+                    suffix: if state.is_major_sync {
+                        "".into()
+                    } else {
+                        "out".into()
+                    }
+                })
+            );
         }
 
         let ss_state = state.substream_state_mut()?;
@@ -127,9 +136,13 @@ impl SubstreamSegment {
     pub fn read(state: &mut ParserState, reader: &mut BsIoSliceReader) -> Result<Self> {
         let start_pos = reader.position()?;
         if start_pos & 0xF != 0 {
-            bail!(
-                "Substream {} segment not byte-aligned at start",
-                state.substream_index
+            log_or_err!(
+                state,
+                log::Level::Error,
+                anyhow!(
+                    "Substream {} segment not byte-aligned at start",
+                    state.substream_index
+                )
             );
         }
 
@@ -139,7 +152,11 @@ impl SubstreamSegment {
 
         while !last_block_in_segment {
             if ss.block.len() > 4 || ss.block.len() >= 3 && state.format_sync == MAJOR_SYNC_FBA {
-                bail!(SubstreamError::TooManyBlocks(ss.block.len()));
+                log_or_err!(
+                    state,
+                    log::Level::Warn,
+                    anyhow!(SubstreamError::TooManyBlocks(ss.block.len()))
+                );
             }
             ss.block.push(Block::read(state, reader)?);
             last_block_in_segment = reader.get()?;
@@ -225,34 +242,50 @@ impl SubstreamSegment {
             ss.substream_crc = reader.get_n(8)?;
 
             if parity != ss.substream_parity {
-                bail!(SubstreamError::ParityMismatch {
-                    substream: state.substream_index,
-                    calculated: parity,
-                    read: ss.substream_parity
-                });
+                log_or_err!(
+                    state,
+                    log::Level::Error,
+                    anyhow!(SubstreamError::ParityMismatch {
+                        substream: state.substream_index,
+                        calculated: parity,
+                        read: ss.substream_parity
+                    })
+                );
             }
 
             let crc = reader.crc8_check(&state.crc_substream, start_pos, len)?;
 
             if crc != ss.substream_crc {
-                bail!(SubstreamError::CrcMismatch {
-                    substream: state.substream_index,
-                    calculated: crc,
-                    read: ss.substream_crc
-                });
+                log_or_err!(
+                    state,
+                    log::Level::Error,
+                    anyhow!(SubstreamError::CrcMismatch {
+                        substream: state.substream_index,
+                        calculated: crc,
+                        read: ss.substream_crc
+                    })
+                );
             }
         }
 
         let end_pos = reader.position()?;
 
         if end_pos & 0xF != 0 {
-            bail!(SubstreamError::UnalignedSegmentEnd(state.substream_index));
+            log_or_err!(
+                state,
+                log::Level::Error,
+                anyhow!(SubstreamError::UnalignedSegmentEnd(state.substream_index))
+            );
         } else if expected_end_pos != end_pos {
-            bail!(SubstreamError::SubstreamEndMismatch {
-                substream: state.substream_index,
-                read: reader.position()?,
-                expected: expected_end_pos
-            });
+            log_or_err!(
+                state,
+                log::Level::Error,
+                anyhow!(SubstreamError::SubstreamEndMismatch {
+                    substream: state.substream_index,
+                    read: reader.position()?,
+                    expected: expected_end_pos
+                })
+            );
         }
 
         Ok(ss)

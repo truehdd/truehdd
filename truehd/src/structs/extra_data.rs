@@ -3,9 +3,10 @@
 //! This module contains structures for handling extra data sections,
 //! which may contain Evolution frames and other auxiliary information.
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow};
 use log::trace;
 
+use crate::log_or_err;
 use crate::process::parse::ParserState;
 use crate::structs::evolution::EvoFrame;
 use crate::utils::bitstream_io::BsIoSliceReader;
@@ -26,7 +27,11 @@ pub struct ExtraData {
 impl ExtraData {
     pub fn read(state: &mut ParserState, reader: &mut BsIoSliceReader) -> Result<Self> {
         if reader.position()? & 0x7 != 0 {
-            bail!(ExtraDataError::MisalignedExtraDataStart);
+            log_or_err!(
+                state,
+                log::Level::Warn,
+                anyhow!(ExtraDataError::MisalignedExtraDataStart)
+            );
         }
 
         let mut extra_data = Self {
@@ -39,7 +44,11 @@ impl ExtraData {
         if extra_data.header_check_nibble == 0 && extra_data.extra_data_length == 0 {
             while reader.position()? < state.expected_au_end_pos() as u64 {
                 if reader.get_n::<u16>(16)? != 0 {
-                    bail!(ExtraDataError::PaddingNotZero);
+                    log_or_err!(
+                        state,
+                        log::Level::Warn,
+                        anyhow!(ExtraDataError::PaddingNotZero)
+                    );
                 }
 
                 extra_data.ectra_data_padding += 16;
@@ -56,7 +65,11 @@ impl ExtraData {
         let parity = reader.parity_check_nibble_for_last_n_bits(16)?;
 
         if parity != 0xF {
-            bail!(ExtraDataError::LengthParityFailed(parity));
+            log_or_err!(
+                state,
+                log::Level::Warn,
+                anyhow!(ExtraDataError::LengthParityFailed(parity))
+            );
         }
 
         // Does not contain first 16 bits
@@ -65,10 +78,14 @@ impl ExtraData {
         let expected_remaining_bits = state.expected_au_end_pos() - start_pos as usize;
 
         if extra_data_bits > expected_remaining_bits {
-            bail!(ExtraDataError::ExtraDataTooLong {
-                length: extra_data.extra_data_length,
-                remaining: expected_remaining_bits
-            });
+            log_or_err!(
+                state,
+                log::Level::Warn,
+                anyhow!(ExtraDataError::ExtraDataTooLong {
+                    length: extra_data.extra_data_length,
+                    remaining: expected_remaining_bits
+                })
+            );
         }
 
         extra_data.evo_frame = if state.flags & 0x1000 != 0 {
@@ -76,14 +93,22 @@ impl ExtraData {
             extra_data.evo_frame_byte_length = reader.get_n(12)?;
 
             if ((extra_data.evo_frame_byte_length as usize) << 3) + 24 > extra_data_bits {
-                bail!(ExtraDataError::EvoFrameTooLong {
-                    evo_len: extra_data.evo_frame_byte_length,
-                    extra_len: extra_data.extra_data_length
-                });
+                log_or_err!(
+                    state,
+                    log::Level::Warn,
+                    anyhow!(ExtraDataError::EvoFrameTooLong {
+                        evo_len: extra_data.evo_frame_byte_length,
+                        extra_len: extra_data.extra_data_length
+                    })
+                );
             }
 
             if reader.position()? & 0x7 != 0 {
-                bail!(ExtraDataError::EvoFrameMisaligned);
+                log_or_err!(
+                    state,
+                    log::Level::Warn,
+                    anyhow!(ExtraDataError::EvoFrameMisaligned)
+                );
             }
 
             let start_pos = reader.position()?;
@@ -92,7 +117,11 @@ impl ExtraData {
 
             for _ in 0..(extra_data_bits - 24 - actual_evo_frame_bits) {
                 if reader.get()? {
-                    bail!(ExtraDataError::EvoFramePaddingNotZero);
+                    log_or_err!(
+                        state,
+                        log::Level::Warn,
+                        anyhow!(ExtraDataError::EvoFramePaddingNotZero)
+                    );
                 }
             }
 
@@ -105,10 +134,14 @@ impl ExtraData {
         extra_data.extra_data_parity = reader.get_n(8)?;
 
         if parity != extra_data.extra_data_parity {
-            bail!(ExtraDataError::ExtraDataParityMismatch {
-                expected: parity,
-                actual: extra_data.extra_data_parity
-            });
+            log_or_err!(
+                state,
+                log::Level::Warn,
+                anyhow!(ExtraDataError::ExtraDataParityMismatch {
+                    expected: parity,
+                    actual: extra_data.extra_data_parity
+                })
+            );
         }
 
         Ok(extra_data)

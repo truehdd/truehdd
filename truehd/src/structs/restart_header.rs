@@ -13,9 +13,7 @@
 //! Contains channel configuration, timing management, dithering parameters,
 //! and channel permutation mapping.
 
-use anyhow::{Result, bail};
-use log::{trace, warn};
-
+use crate::log_or_err;
 use crate::process::decode::DecoderState;
 use crate::process::parse::ParserState;
 use crate::structs::sync::{
@@ -23,6 +21,9 @@ use crate::structs::sync::{
 };
 use crate::utils::bitstream_io::BsIoSliceReader;
 use crate::utils::errors::RestartHeaderError;
+use anyhow::{Result, anyhow, bail};
+use log::Level::Warn;
+use log::{trace, warn};
 
 /// Restart synchronization words identifying substream types.
 ///
@@ -122,11 +123,15 @@ impl RestartHeader {
             if state.has_parsed_substream
                 && state.output_timing & 0xFFFF != rh.output_timing as usize
             {
-                bail!(RestartHeaderError::OutputTimingMismatch {
-                    read: rh.output_timing,
-                    substream: state.substream_index,
-                    expected: state.output_timing
-                });
+                log_or_err!(
+                    state,
+                    Warn,
+                    anyhow!(RestartHeaderError::OutputTimingMismatch {
+                        read: rh.output_timing,
+                        substream: state.substream_index,
+                        expected: state.output_timing
+                    })
+                );
             }
 
             if state.has_parsed_substream {
@@ -166,10 +171,14 @@ impl RestartHeader {
 
                 if state.allow_seamless_branch {
                     if state.has_jump {
-                        bail!(RestartHeaderError::OutputTimingAfterJump {
-                            read: state.output_timing,
-                            expected: expected_output_timing
-                        });
+                        log_or_err!(
+                            state,
+                            Warn,
+                            anyhow!(RestartHeaderError::OutputTimingAfterJump {
+                                read: state.output_timing,
+                                expected: expected_output_timing
+                            })
+                        );
                     }
                     state.output_timing_jump = true;
                     trace!(
@@ -177,10 +186,14 @@ impl RestartHeader {
                         state.output_timing, expected_output_timing
                     );
                 } else {
-                    bail!(RestartHeaderError::InvalidOutputTiming {
-                        read: state.output_timing,
-                        expected: expected_output_timing
-                    });
+                    log_or_err!(
+                        state,
+                        Warn,
+                        anyhow!(RestartHeaderError::InvalidOutputTiming {
+                            read: state.output_timing,
+                            expected: expected_output_timing
+                        })
+                    );
                 }
 
                 if state.has_branch || state.input_timing_jump || state.output_timing_jump {
@@ -349,14 +362,15 @@ impl RestartHeader {
                 lossless_check_i32 &= 0xFF;
 
                 if lossless_check_i32 != self.lossless_check as i32 {
-                    bail!(
-                        "{}",
-                        RestartHeaderError::LosslessCheckMismatch {
+                    log_or_err!(
+                        state,
+                        Warn,
+                        anyhow!(RestartHeaderError::LosslessCheckMismatch {
                             substream: state.substream_index,
                             calculated: lossless_check_i32,
                             read: self.lossless_check
-                        }
-                    );
+                        })
+                    )
                 }
             }
         }
