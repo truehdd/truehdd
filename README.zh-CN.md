@@ -96,16 +96,18 @@ truehdd info movie.thd
 
 **输出文件结构：**
 
+默认情况下，选择最大可用的表现索引进行解码。
 指定 `--output-path` 参数后，根据音频流类型生成对应文件：
 
-*标准 TrueHD 流：*
-- `output.caf` - Core Audio Format
-- `output.pcm` - 24 位原始 PCM 数据（需指定 `--format pcm`）
+- **通道表现：** 以下文件之一，表现索引为 0、1 或 2
+  - `output.caf` - Core Audio 格式封装的 PCM 数据
+  - `output.pcm` - 原始 PCM 数据（需指定 `--format pcm`）
 
-*Dolby Atmos 流：*
-- `output.atmos` - DAMF 头文件
-- `output.atmos.audio` - CAF 格式音频数据
-- `output.atmos.metadata` - DAMF 元数据文件
+
+- **对象表现：** Dolby Atmos 母版文件，表现索引为 3 （如果存在）
+  1. `output.atmos` - 表现的基本信息
+  2. `output.atmos.audio` - 所有声床和对象的 PCM 数据，采用 Core Audio 格式
+  3. `output.atmos.metadata` - 静态和动态信号的 3D 位置坐标
 
 **使用示例：**
 ```bash

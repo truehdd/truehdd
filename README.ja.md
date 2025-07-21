@@ -90,23 +90,25 @@ TrueHD ストリームを PCM 音声にデコードする。
 オプション:
       --output-path <PATH>       音声およびメタデータファイルの出力パス
       --format <FORMAT>          音声出力形式 [デフォルト: caf] [可能な値: caf, pcm]
-      --presentation <INDEX>     presentation インデックス (0-3) [デフォルト: 3]
+      --presentation <INDEX>     プレゼンテーションインデックス (0-3) [デフォルト: 3]
       --no-estimate-progress     進捗推定を無効化   
 ...
 ```
 
 **出力ファイル:**
 
+デフォルトでは、利用可能な最大のプレゼンテーションインデックスがデコードに選択される。
 `--output-path` を指定すると、ツールは適切な出力ファイルを生成する：
 
-*通常の TrueHD ストリーム:*
-- `output.caf` - Core Audio Format
-- `output.pcm` - Raw の 24 bit PCM（`--format pcm` を使用した場合）
+- **チャンネルプレゼンテーション：** プレゼンテーションインデックス 0、1、または 2 の以下のファイルのいずれか
+  - `output.caf` - Core Audio Format での PCM データ
+  - `output.pcm` - Raw の PCM データ（`--format pcm` を使用した場合）
 
-*Dolby Atmos ストリーム:*
-- `output.atmos` - DAMF header ファイル
-- `output.atmos.audio` - CAF 形式の audio data
-- `output.atmos.metadata` - DAMF metadata ファイル
+
+- **オブジェクトプレゼンテーション：** プレゼンテーションインデックス 3 の Dolby Atmos マスターファイルセット（存在する場合）
+  1. `output.atmos` - プレゼンテーションに関する基本情報
+  2. `output.atmos.audio` - すべてのベッド信号とオブジェクトのオーディオ、Core Audio Format で
+  3. `output.atmos.metadata` - 静的および動的信号の 3D 位置座標
 
 **使用例:**
 ```bash

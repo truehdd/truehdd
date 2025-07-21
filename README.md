@@ -98,16 +98,18 @@ Options:
 
 **Output Files:**
 
+By default, the maximum available presentation index is chosen for decoding.
 When `--output-path` is specified, the tool generates appropriate output files:
 
-*Regular TrueHD streams:*
-- `output.caf` - Core Audio Format
-- `output.pcm` - Raw 24-bit PCM (if `--format pcm`)
+- **Channel presentation:** One of the following files, with presentation index 0, 1, or 2
+  - `output.caf` - PCM data in Core Audio Format
+  - `output.pcm` - Raw PCM (if `--format pcm`)
 
-*Dolby Atmos streams:*
-- `output.atmos` - DAMF header file
-- `output.atmos.audio` - Audio data in CAF format
-- `output.atmos.metadata` - DAMF metadata file
+
+- **Object presentation:** Dolby Atmos master file set, with presentation index 3 (if available)
+  1. `output.atmos` - Essential information about the presentation
+  2. `output.atmos.audio` - Audio for all bed signals and objects in Core Audio format
+  3. `output.atmos.metadata` - 3D positional coordinates for static and dynamic signals
 
 **Examples:**
 ```bash
