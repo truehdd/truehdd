@@ -100,6 +100,9 @@ pub enum AccessUnitError {
 
     #[error("Access unit too long: {0} > {1}")]
     AccessUnitTooLong(usize, usize),
+
+    #[error("Stream is flagged as fixed rate, but variable rate detected: {0} != {1}")]
+    FixedRateMismatch(usize, usize),
 }
 
 #[derive(thiserror::Error, Debug)]

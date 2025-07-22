@@ -89,7 +89,7 @@ impl AccessUnit {
         {
             let mut unwrapped_input_timing =
                 au.input_timing
-                    .wrapping_sub(state.output_timing_offset as u16) as usize;
+                    .wrapping_sub(state.output_timing_deviation as u16) as usize;
 
             while state.prev_unwrapped_input_timing > unwrapped_input_timing {
                 unwrapped_input_timing += 0x10000;
@@ -422,7 +422,22 @@ impl AccessUnit {
             }
         }
 
-        // TODO: variable rate check
+        if !state.variable_rate {
+            let data_rate_16x =
+                (state.unwrapped_input_timing - state.first_input_timing) * state.peak_data_rate;
+            let total_length_16x = state.total_access_unit_length << 8;
+            if data_rate_16x.abs_diff(total_length_16x) >= 0x100 {
+                log_or_err!(
+                    state,
+                    Warn,
+                    anyhow!(AccessUnitError::FixedRateMismatch(
+                        data_rate_16x,
+                        total_length_16x
+                    ))
+                );
+            }
+        }
+
         Ok(())
     }
 

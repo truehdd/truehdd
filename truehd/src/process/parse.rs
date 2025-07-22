@@ -207,7 +207,7 @@ pub struct ParserState {
     pub output_timing: usize,
     pub first_output_timing: usize,
     /// 1456
-    pub output_timing_offset: usize,
+    pub output_timing_deviation: usize,
     pub hires_output_timing: Option<usize>,
 
     pub unwrapped_input_timing: usize,
@@ -289,7 +289,7 @@ impl Default for ParserState {
 
             output_timing: 0,
             first_output_timing: 0,
-            output_timing_offset: 0,
+            output_timing_deviation: 0,
             hires_output_timing: None,
 
             // quantization_word_length_1: 0,
