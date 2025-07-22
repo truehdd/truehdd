@@ -16,7 +16,7 @@
 
 use anyhow::{Result, anyhow, bail};
 use log::Level::{Error, Warn};
-use log::{trace, warn};
+use log::{debug, trace, warn};
 
 use crate::log_or_err;
 use crate::process::PresentationMap;
@@ -176,11 +176,10 @@ pub struct MajorSyncInfo {
     pub format_info: FormatInfo,
     pub signature: u16,
     pub flags: u16,
-    pub reserved1: u16,
+    pub reserved: u16,
     pub variable_rate: bool,
     pub peak_data_rate: u16,
     pub substreams: usize,
-    pub reserved2: u8,
     pub extended_substream_info: u8,
     pub substream_info: u8,
     pub channel_meaning: ChannelMeaning,
@@ -237,7 +236,7 @@ impl MajorSyncInfo {
 
         state.flags = ms.flags;
 
-        ms.reserved1 = reader.get_n(16)?;
+        ms.reserved = reader.get_n(16)?;
 
         ms.variable_rate = reader.get()?;
         ms.peak_data_rate = reader.get_n(15)?;
@@ -284,10 +283,156 @@ impl MajorSyncInfo {
             state.substreams = Some(ms.substreams);
         }
 
-        ms.reserved2 = reader.get_n(2)?;
-
-        ms.extended_substream_info = reader.get_n(2)?;
+        // reserved(2) field is part of extended_substream_info
+        ms.extended_substream_info = reader.get_n(4)?;
         ms.substream_info = reader.get_n(8)?;
+
+        'check_substream_info: {
+            if ms.extended_substream_info >> 2 != 0 {
+                log_or_err!(
+                    state,
+                    log::Level::Debug,
+                    anyhow!(SyncError::ReservedExtendedSubstreamInfo(
+                        ms.extended_substream_info >> 2
+                    ))
+                );
+            }
+
+            if ms.substream_info & 3 != 0 {
+                log_or_err!(
+                    state,
+                    log::Level::Debug,
+                    anyhow!(SyncError::ReservedSubstreamInfo(ms.substream_info))
+                );
+            }
+
+            if state.has_parsed_au {
+                if ms.substream_info != state.substream_info {
+                    log_or_err!(
+                        state,
+                        Error,
+                        anyhow!(SyncError::SubstreamInfoMismatch {
+                            read: ms.substream_info,
+                            expected: state.substream_info
+                        })
+                    )
+                }
+
+                if ms.extended_substream_info != state.extended_substream_info {
+                    log_or_err!(
+                        state,
+                        Error,
+                        anyhow!(SyncError::ExtendedSubstreamInfoMismatch {
+                            read: ms.extended_substream_info,
+                            expected: state.extended_substream_info
+                        })
+                    )
+                }
+
+                break 'check_substream_info;
+            }
+
+            let extended_substream_info = ms.extended_substream_info & 3;
+            let substream_info = ms.substream_info & 0x7C;
+
+            if substream_info <= 76
+                && (76562297473007889u64 >> substream_info.wrapping_sub(20)) & 1 != 0
+                || (68987981841u64 >> substream_info.wrapping_sub(88)) & 1 != 0
+            {
+                debug!("substream_info={substream_info:#02X}")
+            } else {
+                log_or_err!(
+                    state,
+                    Error,
+                    anyhow!(SyncError::InvalidSubstreamInfo(substream_info))
+                )
+            }
+
+            debug!("extended_substream_info={extended_substream_info:#X}");
+
+            if substream_info >> 7 != 0 && extended_substream_info == 3 && substream_info != 0x7C
+                || extended_substream_info == 2 && substream_info != 0x68
+                || extended_substream_info == 1 && substream_info & 0x78 != 0x48
+            {
+                log_or_err!(
+                    state,
+                    Warn,
+                    anyhow!(SyncError::SubstreamInfoInCompatible {
+                        substream_info,
+                        extended_substream_info
+                    })
+                )
+            }
+
+            let substream_info = ms.substream_info & 0xFC;
+
+            if substream_info >> 7 == 0 && extended_substream_info != 0 {
+                log_or_err!(
+                    state,
+                    log::Level::Debug,
+                    anyhow!(SyncError::ReservedExtendedSubstreamInfo(
+                        ms.extended_substream_info
+                    ))
+                );
+            };
+
+            if (substream_info >> 4) & 7 == (substream_info >> 2) & 0xC {
+                let sixch_assign = ms.format_info.sixch_decoder_channel_assignment;
+                let eightch_assign = ms.format_info.eightch_decoder_channel_assignment;
+
+                if sixch_assign as u16 != eightch_assign {
+                    log_or_err!(
+                        state,
+                        log::Level::Debug,
+                        anyhow!(SyncError::SixchAndEightchChannelAssignmentMismatch {
+                            sixch: sixch_assign,
+                            eightch: eightch_assign
+                        })
+                    );
+                }
+
+                if sixch_assign == 1 || eightch_assign == 1 {
+                    let sixch_modifier = ms.format_info.sixch_decoder_channel_modifier;
+                    let eightch_modifier = ms.format_info.eightch_decoder_channel_modifier;
+
+                    if sixch_modifier != eightch_modifier {
+                        log_or_err!(
+                            state,
+                            Warn,
+                            anyhow!(SyncError::SixchAndEightchChannelModifierMismatch {
+                                sixch: sixch_modifier,
+                                eightch: eightch_modifier,
+                            })
+                        )
+                    }
+                }
+            }
+
+            for (min, bit) in [(2, 3), (2, 5), (3, 6), (4, 7)] {
+                if substream_info & (1 << bit) != 0 && ms.substreams < min {
+                    log_or_err!(
+                        state,
+                        Warn,
+                        anyhow!(SyncError::SubstreamCountInsufficient { min, bit })
+                    );
+                }
+            }
+
+            if if substream_info >> 7 != 0 {
+                4
+            } else if substream_info & 0x48 != 0 || substream_info & 0x60 == 0x20 {
+                (substream_info as usize >> 6 & 1) + 2
+            } else {
+                1
+            } != ms.substreams
+            {
+                log_or_err!(
+                    state,
+                    log::Level::Debug,
+                    anyhow!(SyncError::SubstreamCountInfoInconsistent)
+                );
+            };
+        }
 
         let presentation_map =
             PresentationMap::with_substream_info(ms.substream_info, ms.extended_substream_info);
@@ -298,6 +443,7 @@ impl MajorSyncInfo {
             .substream_mask_by_required_presentations(&state.required_presentations);
 
         state.substream_info = ms.substream_info;
+        state.extended_substream_info = ms.extended_substream_info;
 
         ms.channel_meaning = ChannelMeaning::read(state, reader)?;
 

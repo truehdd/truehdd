@@ -389,6 +389,53 @@ pub enum SyncError {
 
     #[error("Invalid major_sync_info, CRC failed. Calculated {calculated:#04X}, Read {read:#04X}")]
     MajorSyncCrcMismatch { calculated: u16, read: u16 },
+
+    #[error("Reserved bits in substream_info should be 0. Read {0:#02X}")]
+    ReservedSubstreamInfo(u8),
+
+    #[error("Invalid substream_info {0:#02X}")]
+    InvalidSubstreamInfo(u8),
+
+    #[error(
+        "substream_info must be constant throughout the stream. Read {read:#02X}, expected {expected:#02X}"
+    )]
+    SubstreamInfoMismatch { read: u8, expected: u8 },
+
+    #[error("Reserved bits in extended_substream_info should be 0. Read {0:#02X}")]
+    ReservedExtendedSubstreamInfo(u8),
+
+    #[error(
+        "extended_substream_info must be constant throughout the FBA stream. Read {read:#X}, expected {expected:#X}"
+    )]
+    ExtendedSubstreamInfoMismatch { read: u8, expected: u8 },
+
+    #[error(
+        "If 6ch and 8ch presentation use the same substreams the channel_assignments must be the same. \
+        6ch_decoder_channel_assignment {sixch:#02X}, 8ch_decoder_channel_assignment {eightch:#04X}"
+    )]
+    SixchAndEightchChannelAssignmentMismatch { sixch: u8, eightch: u16 },
+
+    #[error(
+        "If 6ch and 8ch presentation use the same substreams and only Main channels, \
+    the channel_modifiers must be the same. 6ch_decoder_channel_modifier {sixch:#02X}, 8ch_decoder_channel_modifer {sixch:#02X}"
+    )]
+    SixchAndEightchChannelModifierMismatch { sixch: u8, eightch: u8 },
+
+    #[error(
+        "extended_substream_info={extended_substream_info:#X} and substream_info={substream_info:#2X} are incompatible"
+    )]
+    SubstreamInfoInCompatible {
+        substream_info: u8,
+        extended_substream_info: u8,
+    },
+
+    #[error("Must have at least {min} substreams when bit {bit} of substream_info is set")]
+    SubstreamCountInsufficient { min: usize, bit: u8 },
+
+    #[error(
+        "substream_info, extendend_substream_info are inconsistent with major_sync_info::substreams"
+    )]
+    SubstreamCountInfoInconsistent,
 }
 
 #[derive(thiserror::Error, Debug)]
