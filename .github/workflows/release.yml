@@ -10,8 +10,10 @@ env:
   WINDOWS_TARGET: x86_64-pc-windows-msvc
   WINDOWS_ARM_TARGET: aarch64-pc-windows-msvc
   MACOS_X86_TARGET: x86_64-apple-darwin
-  LINUX_TARGET: x86_64-unknown-linux-musl
-  LINUX_ARM_TARGET: aarch64-unknown-linux-musl
+  LINUX_MUSL_TARGET: x86_64-unknown-linux-musl
+  LINUX_MUSL_ARM_TARGET: aarch64-unknown-linux-musl
+  LINUX_GNU_TARGET: x86_64-unknown-linux-gnu
+  LINUX_GNU_ARM_TARGET: aarch64-unknown-linux-gnu
 
 jobs:
   linux-binary:
@@ -21,33 +23,55 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-release-env
 
-      - name: Install musl-tools
+      - name: Install build tools
         run: |
           sudo apt-get update -y
           sudo apt-get install musl-tools gcc-aarch64-linux-gnu -y
 
       - name: Build
         run: |
-          rustup target add ${{ env.LINUX_TARGET }}
-          rustup target add ${{ env.LINUX_ARM_TARGET }}
+          rustup target add ${{ env.LINUX_MUSL_TARGET }}
+          rustup target add ${{ env.LINUX_MUSL_ARM_TARGET }}
+          rustup target add ${{ env.LINUX_GNU_TARGET }}
+          rustup target add ${{ env.LINUX_GNU_ARM_TARGET }}
 
-          cargo build --profile ${{ env.BUILD_PROFILE }} --target ${{ env.LINUX_TARGET }}
-          cargo build --config "target.${{ env.LINUX_ARM_TARGET }}.linker = 'aarch64-linux-gnu-gcc'" \
-            --profile ${{ env.BUILD_PROFILE }} --target ${{ env.LINUX_ARM_TARGET }}
+          # MUSL builds
+          cargo build --profile ${{ env.BUILD_PROFILE }} --target ${{ env.LINUX_MUSL_TARGET }}
+          cargo build --config "target.${{ env.LINUX_MUSL_ARM_TARGET }}.linker = 'aarch64-linux-gnu-gcc'" \
+            --profile ${{ env.BUILD_PROFILE }} --target ${{ env.LINUX_MUSL_ARM_TARGET }}
+
+          # GNU builds
+          cargo build --profile ${{ env.BUILD_PROFILE }} --target ${{ env.LINUX_GNU_TARGET }}
+          cargo build --config "target.${{ env.LINUX_GNU_ARM_TARGET }}.linker = 'aarch64-linux-gnu-gcc'" \
+            --profile ${{ env.BUILD_PROFILE }} --target ${{ env.LINUX_GNU_ARM_TARGET }}
 
       - name: Create tarball and checksum
         run: |
-          X86_64_ARCHIVE_FILE=${{ env.RELEASE_DIR }}/${{ env.ARCHIVE_PREFIX }}-${{ env.LINUX_TARGET }}.tar.gz
-          AARCH64_ARCHIVE_FILE=${{ env.RELEASE_DIR }}/${{ env.ARCHIVE_PREFIX }}-${{ env.LINUX_ARM_TARGET }}.tar.gz
+          # MUSL builds
+          X86_64_MUSL_ARCHIVE=${{ env.RELEASE_DIR }}/${{ env.ARCHIVE_PREFIX }}-${{ env.LINUX_MUSL_TARGET }}.tar.gz
+          AARCH64_MUSL_ARCHIVE=${{ env.RELEASE_DIR }}/${{ env.ARCHIVE_PREFIX }}-${{ env.LINUX_MUSL_ARM_TARGET }}.tar.gz
 
-          mv ./target/${{ env.LINUX_TARGET }}/${{ env.BUILD_PROFILE }}/${{ env.RELEASE_BIN }} ./${{ env.RELEASE_BIN }}
-          tar -cvzf ./${X86_64_ARCHIVE_FILE} ./${{ env.RELEASE_BIN }}
+          mv ./target/${{ env.LINUX_MUSL_TARGET }}/${{ env.BUILD_PROFILE }}/${{ env.RELEASE_BIN }} ./${{ env.RELEASE_BIN }}
+          tar -cvzf ./${X86_64_MUSL_ARCHIVE} ./${{ env.RELEASE_BIN }}
 
-          mv ./target/${{ env.LINUX_ARM_TARGET }}/${{ env.BUILD_PROFILE }}/${{ env.RELEASE_BIN }} ./${{ env.RELEASE_BIN }}
-          tar -cvzf ./${AARCH64_ARCHIVE_FILE} ./${{ env.RELEASE_BIN }}
+          mv ./target/${{ env.LINUX_MUSL_ARM_TARGET }}/${{ env.BUILD_PROFILE }}/${{ env.RELEASE_BIN }} ./${{ env.RELEASE_BIN }}
+          tar -cvzf ./${AARCH64_MUSL_ARCHIVE} ./${{ env.RELEASE_BIN }}
 
-          python -c "import hashlib; import pathlib; print(hashlib.sha256(pathlib.Path('${X86_64_ARCHIVE_FILE}').read_bytes()).hexdigest())" > ${X86_64_ARCHIVE_FILE}.sha256
-          python -c "import hashlib; import pathlib; print(hashlib.sha256(pathlib.Path('${AARCH64_ARCHIVE_FILE}').read_bytes()).hexdigest())" > ${AARCH64_ARCHIVE_FILE}.sha256
+          # GNU builds
+          X86_64_GNU_ARCHIVE=${{ env.RELEASE_DIR }}/${{ env.ARCHIVE_PREFIX }}-${{ env.LINUX_GNU_TARGET }}.tar.gz
+          AARCH64_GNU_ARCHIVE=${{ env.RELEASE_DIR }}/${{ env.ARCHIVE_PREFIX }}-${{ env.LINUX_GNU_ARM_TARGET }}.tar.gz
+
+          mv ./target/${{ env.LINUX_GNU_TARGET }}/${{ env.BUILD_PROFILE }}/${{ env.RELEASE_BIN }} ./${{ env.RELEASE_BIN }}
+          tar -cvzf ./${X86_64_GNU_ARCHIVE} ./${{ env.RELEASE_BIN }}
+
+          mv ./target/${{ env.LINUX_GNU_ARM_TARGET }}/${{ env.BUILD_PROFILE }}/${{ env.RELEASE_BIN }} ./${{ env.RELEASE_BIN }}
+          tar -cvzf ./${AARCH64_GNU_ARCHIVE} ./${{ env.RELEASE_BIN }}
+
+          # Generate checksums
+          python -c "import hashlib; import pathlib; print(hashlib.sha256(pathlib.Path('${X86_64_MUSL_ARCHIVE}').read_bytes()).hexdigest())" > ${X86_64_MUSL_ARCHIVE}.sha256
+          python -c "import hashlib; import pathlib; print(hashlib.sha256(pathlib.Path('${AARCH64_MUSL_ARCHIVE}').read_bytes()).hexdigest())" > ${AARCH64_MUSL_ARCHIVE}.sha256
+          python -c "import hashlib; import pathlib; print(hashlib.sha256(pathlib.Path('${X86_64_GNU_ARCHIVE}').read_bytes()).hexdigest())" > ${X86_64_GNU_ARCHIVE}.sha256
+          python -c "import hashlib; import pathlib; print(hashlib.sha256(pathlib.Path('${AARCH64_GNU_ARCHIVE}').read_bytes()).hexdigest())" > ${AARCH64_GNU_ARCHIVE}.sha256
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
