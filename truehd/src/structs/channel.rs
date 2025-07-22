@@ -49,7 +49,7 @@ impl ExtraChannelMeaning {
             ..Default::default()
         };
 
-        if state.substream_info & 0x80 != 0 {
+        if state.substream_info >> 7 != 0 {
             ecm.sixteench_dialogue_norm = reader.get_n(5)?;
             ecm.sixteench_mix_level = reader.get_n(6)?;
             ecm.sixteench_channel_count = reader.get_n(5)?;

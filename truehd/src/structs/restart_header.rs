@@ -23,7 +23,7 @@ use crate::utils::bitstream_io::BsIoSliceReader;
 use crate::utils::errors::RestartHeaderError;
 use anyhow::{Result, anyhow, bail};
 use log::Level::Warn;
-use log::{trace, warn};
+use log::{info, trace, warn};
 
 /// Restart synchronization words identifying substream types.
 ///
@@ -118,7 +118,6 @@ impl RestartHeader {
             ..Default::default()
         };
 
-        // TODO: check all substreams
         'check_output_timing: {
             if state.has_parsed_substream
                 && state.output_timing & 0xFFFF != rh.output_timing as usize
@@ -134,6 +133,7 @@ impl RestartHeader {
                 );
             }
 
+            // TODO: check all substreams
             if state.has_parsed_substream {
                 break 'check_output_timing;
             }
@@ -143,14 +143,14 @@ impl RestartHeader {
             if !state.has_parsed_au {
                 state.first_output_timing = state.output_timing;
 
-                // if state.output_timing < state.input_timing {
-                //     state.output_timing += 0x10000;
-                // }
-                //
-                // trace!(
-                //     "output_timing adjusted for first AU: {}",
-                //     state.output_timing
-                // );
+                if state.output_timing < state.input_timing {
+                    state.output_timing += 0x10000;
+                }
+
+                trace!(
+                    "AU {}: first output_timing adjusted to {}",
+                    state.au_counter, state.output_timing
+                );
             } else {
                 let history_index = state.substream_state()?.history_index.wrapping_sub(1) & 0x7F;
 
@@ -158,10 +158,11 @@ impl RestartHeader {
 
                 state.advance = state
                     .output_timing
-                    .wrapping_add(samples_per_au)
+                    .wrapping_sub(samples_per_au)
                     .wrapping_sub(state.input_timing)
                     & 0xFFFF;
-                let expected_output_timing = state.output_timing_offset
+
+                let expected_output_timing = state.output_timing_deviation
                     + samples_per_au
                     + state.substream_state()?.output_timing_history[history_index];
 
@@ -197,7 +198,86 @@ impl RestartHeader {
                 }
 
                 if state.has_branch || state.input_timing_jump || state.output_timing_jump {
-                    unimplemented!("SEAMLESS BRANCH")
+                    let samples_per_au = state.samples_per_au;
+                    let prev_advance = state.prev_advance;
+                    let advance = state.advance;
+                    let prev_access_unit_length = state.prev_access_unit_length;
+                    let prev_fifo_duration = state.prev_fifo_duration;
+
+                    let input_timing_interval = samples_per_au
+                        .wrapping_add(prev_advance)
+                        .wrapping_sub(advance)
+                        & 0xFFFF;
+
+                    let data_rate = (state.audio_sampling_frequency_1 as usize
+                        * (prev_access_unit_length << 4))
+                        .div_ceil(input_timing_interval);
+
+                    if data_rate > state.max_data_rate {
+                        state.max_data_rate = data_rate;
+                        state.max_data_rate_au_index = state.au_counter - 1;
+                    }
+
+                    let samples_per_au_3q4 = 3 * (samples_per_au >> 2);
+                    let samples_per_75ms =
+                        (state.audio_sampling_frequency_1 as usize * 3).div_ceil(40);
+
+                    let c1 = advance <= prev_advance + samples_per_au_3q4;
+                    let c2 = advance <= prev_advance + samples_per_au - prev_fifo_duration;
+                    let c3 = advance <= samples_per_75ms - samples_per_au;
+                    let c4 = prev_access_unit_length << 8 <= state.prev_peak_data_rate;
+
+                    if c1 && c2 && c3 && c4 {
+                        state.has_jump = true;
+                        state.reset_for_branch();
+
+                        state.output_timing_deviation = state
+                            .output_timing
+                            .wrapping_sub(state.first_output_timing)
+                            .wrapping_sub(state.au_counter * samples_per_au)
+                            & 0xFFFF;
+
+                        info!(
+                            "Valid seamless branch. Latency in access unit before branch is {} samples, \
+                        latency at branch is {} samples",
+                            state.substream_state()?.prev_latency,
+                            state.output_timing.wrapping_sub(state.input_timing) & 0xFFFF,
+                        );
+
+                        break 'check_output_timing;
+                    }
+
+                    if c1 {
+                        warn!(
+                            "advance[n]>advance[n-1]+3*samples_per_au/4, \
+                            ({advance} > {prev_advance} + {})",
+                            3 * (samples_per_au >> 2)
+                        );
+                    }
+
+                    if c2 {
+                        warn!(
+                            "advance[n]>advance[n-1]+samples_per_au-duration[n-1], \
+                            ({advance} > {prev_advance} + {samples_per_au} - {prev_fifo_duration})"
+                        );
+                    }
+
+                    if c3 {
+                        warn!(
+                            "advance[n]>samples_per_75ms-samples_per_au, \
+                            ({advance} > {samples_per_75ms} - {samples_per_au})"
+                        );
+                    }
+
+                    if c4 {
+                        warn!("data_rate exceeds peak_data_rate after adjusting timing for jump");
+                    }
+
+                    log_or_err!(
+                        state,
+                        Warn,
+                        anyhow!(RestartHeaderError::InvalidSeamlessBranch)
+                    );
                 }
             }
         }

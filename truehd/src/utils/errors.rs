@@ -274,6 +274,9 @@ pub enum RestartHeaderError {
     #[error("Invalid output_timing. Read {read}, expected {expected}")]
     InvalidOutputTiming { read: usize, expected: usize },
 
+    #[error("Invalid seamless branch")]
+    InvalidSeamlessBranch,
+
     #[error("Substream 1 must use sync word 0x31EB unless it is last in 6ch presentation")]
     InvalidSyncBForSubstream1,
 

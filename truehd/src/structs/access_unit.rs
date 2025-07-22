@@ -61,16 +61,17 @@ impl AccessUnit {
     pub fn read(state: &mut ParserState, reader: &mut BsIoSliceReader) -> Result<Self> {
         state.is_major_sync = false;
 
-        // state.au_start_pos = reader.position()? as usize;
         if !state.has_jump {
             state.prev_access_unit_length = state.access_unit_length;
             state.prev_advance = state.advance;
             state.prev_fifo_duration = state.fifo_duration;
             state.prev_input_timing = state.input_timing;
             state.prev_unwrapped_input_timing = state.unwrapped_input_timing;
+            state.prev_peak_data_rate = state.peak_data_rate;
         }
 
         state.input_timing_jump = false;
+        state.output_timing_jump = false;
         state.has_branch = false;
 
         let mut au = Self {
@@ -124,14 +125,14 @@ impl AccessUnit {
 
             let suffix = if state.last_major_sync_index > 0 {
                 format!(
-                    " after {} AU",
+                    "after {} AU",
                     state.au_counter - state.last_major_sync_index
                 )
             } else {
                 String::new()
             };
 
-            trace!("Major sync found at AU {}{}", state.au_counter, suffix);
+            trace!("AU {}: Major sync found {}", state.au_counter, suffix);
 
             state.last_major_sync_index = state.au_counter;
         } else if test_bytes == MAJOR_SYNC_FBB {
@@ -202,7 +203,6 @@ impl AccessUnit {
 
         if state.expected_au_end_pos() > reader.position()? as usize + 16 {
             let extra_data = ExtraData::read(state, reader)?;
-            // trace!("Extra data: {:?}", extra_data);
             au.extra_data = Some(extra_data);
         }
 
@@ -284,11 +284,7 @@ impl AccessUnit {
         let peak_data_rate = state.peak_data_rate;
 
         state.fifo_duration = if peak_data_rate != 0 {
-            let au_length_16x = state.access_unit_length << 8;
-            let mut fifo_duration = au_length_16x / peak_data_rate;
-            if !au_length_16x.is_multiple_of(peak_data_rate) {
-                fifo_duration += 1;
-            }
+            let fifo_duration = (state.access_unit_length << 8).div_ceil(peak_data_rate);
 
             trace!(
                 "AU {}: length={}, peak_rate={}, fifo_duration={}",
@@ -314,7 +310,7 @@ impl AccessUnit {
             return Ok(());
         }
 
-        let input_timing_duration = if state.has_jump {
+        let input_timing_interval = if state.has_jump {
             state
                 .unwrapped_input_timing
                 .wrapping_sub(state.prev_unwrapped_input_timing)
@@ -323,11 +319,11 @@ impl AccessUnit {
         };
 
         trace!(
-            "AU {}: input_timing {}, prev_input_timing {}, input_timing_duration {}",
-            state.au_counter, state.input_timing, state.prev_input_timing, input_timing_duration
+            "AU {}: input_timing {}, prev_input_timing {}, input_timing_interval {}",
+            state.au_counter, state.input_timing, state.prev_input_timing, input_timing_interval
         );
 
-        if input_timing_duration < state.samples_per_au >> 2 {
+        if input_timing_interval < state.samples_per_au >> 2 {
             if !state.allow_seamless_branch || !state.is_major_sync {
                 log_or_err!(
                     state,
@@ -352,7 +348,7 @@ impl AccessUnit {
             state.input_timing_jump = true;
         }
 
-        if input_timing_duration < state.prev_fifo_duration {
+        if input_timing_interval < state.prev_fifo_duration {
             if !state.allow_seamless_branch || !state.is_major_sync {
                 log_or_err!(
                     state,
@@ -374,7 +370,7 @@ impl AccessUnit {
         }
 
         if state.variable_rate
-            && (state.prev_access_unit_length << 8 > input_timing_duration * state.peak_data_rate)
+            && (state.prev_access_unit_length << 8 > input_timing_interval * state.peak_data_rate)
         {
             if !state.allow_seamless_branch || !state.is_major_sync {
                 log_or_err!(state, Warn, anyhow!(AccessUnitError::DataRateExceeded));
@@ -392,9 +388,9 @@ impl AccessUnit {
             state.input_timing_jump = true;
         }
 
-        let samples_per_75ms = (state.audio_sampling_frequency_1 * 6 + 1) / 80;
+        let samples_per_75ms = (state.audio_sampling_frequency_1 * 3).div_ceil(40);
 
-        if state.has_parsed_au && input_timing_duration > samples_per_75ms as usize {
+        if state.has_parsed_au && input_timing_interval > samples_per_75ms as usize {
             if !state.allow_seamless_branch || !state.is_major_sync {
                 log_or_err!(state, Warn, anyhow!(AccessUnitError::TimingTooLong));
             }
@@ -413,12 +409,12 @@ impl AccessUnit {
 
         if !state.input_timing_jump {
             let data_rate = (state.audio_sampling_frequency_1 as usize
-                * (state.prev_access_unit_length << 5)
-                + 1)
-                / (input_timing_duration << 1);
+                * (state.prev_access_unit_length << 4))
+                .div_ceil(input_timing_interval);
+
             if data_rate > state.max_data_rate {
                 state.max_data_rate = data_rate;
-                state.max_data_rate_au_index = state.au_counter - 1; // TODO: correct?
+                state.max_data_rate_au_index = state.au_counter - 1;
             }
         }
 

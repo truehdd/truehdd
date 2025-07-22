@@ -242,16 +242,12 @@ impl Block {
             }
 
             if !state.is_major_sync {
-                state.advance = latency - samples_per_au;
+                state.advance = latency.wrapping_sub(samples_per_au);
             }
 
             trace!(
                 "AU {}: latency = {}, prev_latency = {}, advance = {}",
-                state.au_counter,
-                // state.substream_index,
-                latency,
-                prev_latency,
-                state.advance
+                state.au_counter, latency, prev_latency, state.advance
             );
 
             if state.flags & 0x8000 == 0 || (!state.has_parsed_au) {
@@ -277,7 +273,7 @@ impl Block {
                 );
             }
 
-            let samples_per_75ms = (state.audio_sampling_frequency_1 * 6 + 1) / 80;
+            let samples_per_75ms = (state.audio_sampling_frequency_1 * 3).div_ceil(40);
 
             if prev_latency as u32 > samples_per_75ms {
                 log_or_err!(

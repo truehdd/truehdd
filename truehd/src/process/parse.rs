@@ -222,6 +222,7 @@ pub struct ParserState {
 
     pub variable_rate: bool,
     pub peak_data_rate: usize,
+    pub prev_peak_data_rate: usize,
 
     // pub quantization_word_length_1: u8,
     // pub quantization_word_length_2: u8,
@@ -235,6 +236,7 @@ pub struct ParserState {
     pub required_presentations: [bool; MAX_PRESENTATIONS],
 
     pub substreams: Option<usize>,
+    pub extended_substream_info: u8,
     pub substream_info: u8,
 
     pub has_parsed_substream: bool,
@@ -256,7 +258,7 @@ impl Default for ParserState {
     fn default() -> Self {
         Self {
             fail_level: log::Level::Error,
-            allow_seamless_branch: false,
+            allow_seamless_branch: true,
             check_fifo: true,
             restart_gap: [0, 8, 8, 8],
 
@@ -305,6 +307,7 @@ impl Default for ParserState {
 
             variable_rate: false,
             peak_data_rate: 0,
+            prev_peak_data_rate: 0,
 
             audio_sampling_frequency_1: 0,
             // audio_sampling_frequency_2: 0,
@@ -316,6 +319,7 @@ impl Default for ParserState {
             required_presentations: [true; MAX_PRESENTATIONS],
 
             substreams: None,
+            extended_substream_info: 0,
             substream_info: 0,
 
             has_parsed_substream: false,
@@ -377,6 +381,12 @@ impl ParserState {
             history_index: ss_state.history_index,
             // state: ss_state.coeff_state,
             ..Default::default()
+        }
+    }
+
+    pub fn reset_for_branch(&mut self) {
+        for mut ss_state in self.substream_state {
+            ss_state.hires_output_timing_state.reset_for_branch()
         }
     }
 

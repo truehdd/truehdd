@@ -4,7 +4,7 @@
 //! state management for stream synchronization.
 
 use anyhow::Result;
-use log::{trace, warn};
+use log::{debug, trace, warn};
 
 use crate::process::parse::ParserState;
 
@@ -141,7 +141,7 @@ impl HiresOutputTimingState {
                         let hires_output_timing = (self.timing << 16)
                             .wrapping_add(self.au_output_timing)
                             .wrapping_sub(self.au_index * state.samples_per_au()?);
-                        trace!(
+                        debug!(
                             "First high-resolution timing field: {} (AU {}), stream start timing: {}",
                             self.timing, self.au_index, hires_output_timing
                         );
@@ -186,5 +186,10 @@ impl HiresOutputTimingState {
             _ => unreachable!("Invalid state for parsing hires_output_timing."),
         }
         Ok(())
+    }
+
+    pub fn reset_for_branch(&mut self) {
+        self.state_index = 0;
+        self.counter = 0;
     }
 }
