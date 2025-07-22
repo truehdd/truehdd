@@ -1,4 +1,4 @@
-no# Changelog
+# Changelog
 
 All notable changes to the truehd library crate will be documented in this file.
 
