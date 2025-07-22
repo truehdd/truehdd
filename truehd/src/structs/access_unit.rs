@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow, bail};
-use log::Level::Warn;
+use log::Level::{Error, Warn};
 use log::{trace, warn};
 
 use crate::log_or_err;
@@ -207,6 +207,20 @@ impl AccessUnit {
         }
 
         state.has_parsed_au = true;
+
+        if reader.position()? <= state.expected_au_end_pos() as u64 {
+            state.total_access_unit_length += au.access_unit_length as usize;
+        } else {
+            log_or_err!(
+                state,
+                Error,
+                anyhow!(AccessUnitError::AccessUnitTooLong(
+                    reader.position()? as usize,
+                    state.expected_au_end_pos()
+                ))
+            );
+        }
+
         state.au_counter += 1; // TODO: migrate to gap check, should reset on sync check
 
         Ok(au)

@@ -97,6 +97,9 @@ pub enum AccessUnitError {
 
     #[error("input_timing[n]-input_timing[n-1] > samples_per_75ms after jump")]
     TimingTooLongAfterJump,
+
+    #[error("Access unit too long: {0} > {1}")]
+    AccessUnitTooLong(usize, usize),
 }
 
 #[derive(thiserror::Error, Debug)]

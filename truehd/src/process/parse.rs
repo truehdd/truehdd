@@ -186,6 +186,7 @@ pub struct ParserState {
 
     pub access_unit_length: usize,
     pub prev_access_unit_length: usize,
+    pub total_access_unit_length: usize,
 
     pub au_end_pos_bit: usize,
 
@@ -268,6 +269,7 @@ impl Default for ParserState {
 
             access_unit_length: 0,
             prev_access_unit_length: 0,
+            total_access_unit_length: 0,
 
             au_end_pos_bit: 0,
 
