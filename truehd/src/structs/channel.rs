@@ -225,22 +225,16 @@ impl ChannelParams {
                 );
             }
 
-            if coeffs_b.order != 0 {
-                if coeffs_a.order != 0 && coeffs_b.coeff_q != coeffs_a.coeff_q {
-                    log_or_err!(
-                        state,
-                        log::Level::Error,
-                        anyhow!(ChannelError::CoeffQMismatch {
-                            chan: chi,
-                            a_q: coeffs_a.coeff_q,
-                            b_q: coeffs_b.coeff_q
-                        })
-                    );
-                }
-
-                if coeffs_a.order == 0 {
-                    coeffs_a.coeff_q = coeffs_b.coeff_q;
-                }
+            if coeffs_b.order != 0 && coeffs_a.order != 0 && coeffs_b.coeff_q != coeffs_a.coeff_q {
+                log_or_err!(
+                    state,
+                    Error,
+                    anyhow!(ChannelError::CoeffQMismatch {
+                        chan: chi,
+                        a_q: coeffs_a.coeff_q,
+                        b_q: coeffs_b.coeff_q
+                    })
+                );
             }
         }
 
@@ -290,6 +284,12 @@ impl ChannelParams {
 
         if let Some(coeffs_b) = &self.coeffs_b {
             coeffs_b.update_decoder_state(state, CoeffType::B, chi)?;
+        }
+
+        let ss_state = state.substream_state_mut()?;
+
+        if ss_state.order[0][chi] == 0 && ss_state.order[1][chi] != 0 {
+            ss_state.coeff_q[0][chi] = ss_state.coeff_q[1][chi];
         }
 
         Ok(())
