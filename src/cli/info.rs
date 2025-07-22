@@ -282,7 +282,7 @@ impl StreamInfo {
                 * major_sync.format_info.sampling_frequency_1()?)
                 / 16000,
             substreams: major_sync.substreams,
-            is_atmos: major_sync.substream_info & 0x80 != 0,
+            is_atmos: major_sync.substream_info >> 7 != 0,
         })
     }
 }

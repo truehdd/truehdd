@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "truehdd"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 license = "Apache-2.0"
 build = "build.rs"
@@ -17,7 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 bytes_macro = { version = "0.1.0", path = "bytes_macro" }
-truehd = { version = "0.1.0", path = "truehd" }
+truehd = { version = "0.2.0", path = "truehd" }
 
 anyhow = "1.0.98"
 clap = { version = "4.5.40", features = ["derive"] }
