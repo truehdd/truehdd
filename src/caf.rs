@@ -1,5 +1,5 @@
-use std::io::{self, Seek, SeekFrom, Write, Read, BufReader, BufWriter};
 use std::fs::File;
+use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use crate::byteorder::{WriteBytesBe, WriteBytesLe};
@@ -604,7 +604,7 @@ impl<W: Write + Seek> Drop for CAFWriter<W> {
 }
 
 /// Wrap an existing PCM file with a CAF header, converting it to a proper CAF file
-/// 
+///
 /// This function is used when PCM data was written first, then Atmos was detected,
 /// requiring the PCM data to be wrapped in a CAF container.
 pub fn wrap_pcm_file_with_caf_header(
@@ -615,11 +615,11 @@ pub fn wrap_pcm_file_with_caf_header(
 ) -> io::Result<()> {
     // Open PCM file for reading
     let pcm_file = File::open(pcm_file_path)?;
-    
+
     // Create a temporary file for the CAF output
     let temp_path = pcm_file_path.with_extension("caf.tmp");
     let temp_file = File::create(&temp_path)?;
-    
+
     // Create CAF writer with little-endian format (since our PCM data is little-endian)
     let mut caf_writer = CAFWriter::new(BufWriter::new(temp_file));
     caf_writer.set_audio_format_with_options(
@@ -631,11 +631,11 @@ pub fn wrap_pcm_file_with_caf_header(
     )?;
     caf_writer.set_basic_channel_layout(channels)?;
     caf_writer.write_header()?;
-    
+
     // Copy PCM data to the CAF file
     let mut pcm_reader = BufReader::new(pcm_file);
     let mut buffer = vec![0u8; 64 * 1024]; // 64KB buffer
-    
+
     loop {
         let bytes_read = pcm_reader.read(&mut buffer)?;
         if bytes_read == 0 {
@@ -643,14 +643,14 @@ pub fn wrap_pcm_file_with_caf_header(
         }
         caf_writer.write_data(&buffer[..bytes_read])?;
     }
-    
+
     // Finalize the CAF file
     caf_writer.finish()?;
     drop(caf_writer);
-    
+
     // Replace the original PCM file with the CAF file
     std::fs::rename(&temp_path, pcm_file_path)?;
-    
+
     Ok(())
 }
 
