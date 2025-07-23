@@ -1,4 +1,6 @@
-use std::io::{self, Seek, SeekFrom, Write};
+use std::io::{self, Seek, SeekFrom, Write, Read, BufReader, BufWriter};
+use std::fs::File;
+use std::path::Path;
 
 use crate::byteorder::{WriteBytesBe, WriteBytesLe};
 use crate::impl_u32_enum;
@@ -599,6 +601,57 @@ impl<W: Write + Seek> Drop for CAFWriter<W> {
             let _ = self.finish();
         }
     }
+}
+
+/// Wrap an existing PCM file with a CAF header, converting it to a proper CAF file
+/// 
+/// This function is used when PCM data was written first, then Atmos was detected,
+/// requiring the PCM data to be wrapped in a CAF container.
+pub fn wrap_pcm_file_with_caf_header(
+    pcm_file_path: &Path,
+    sample_rate: f64,
+    channels: u32,
+    bits_per_channel: u32,
+) -> io::Result<()> {
+    // Open PCM file for reading
+    let pcm_file = File::open(pcm_file_path)?;
+    
+    // Create a temporary file for the CAF output
+    let temp_path = pcm_file_path.with_extension("caf.tmp");
+    let temp_file = File::create(&temp_path)?;
+    
+    // Create CAF writer with little-endian format (since our PCM data is little-endian)
+    let mut caf_writer = CAFWriter::new(BufWriter::new(temp_file));
+    caf_writer.set_audio_format_with_options(
+        sample_rate,
+        channels,
+        bits_per_channel,
+        PCMDataType::SignedInteger,
+        Endianness::LittleEndian, // Match the PCM data endianness
+    )?;
+    caf_writer.set_basic_channel_layout(channels)?;
+    caf_writer.write_header()?;
+    
+    // Copy PCM data to the CAF file
+    let mut pcm_reader = BufReader::new(pcm_file);
+    let mut buffer = vec![0u8; 64 * 1024]; // 64KB buffer
+    
+    loop {
+        let bytes_read = pcm_reader.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        caf_writer.write_data(&buffer[..bytes_read])?;
+    }
+    
+    // Finalize the CAF file
+    caf_writer.finish()?;
+    drop(caf_writer);
+    
+    // Replace the original PCM file with the CAF file
+    std::fs::rename(&temp_path, pcm_file_path)?;
+    
+    Ok(())
 }
 
 #[cfg(test)]

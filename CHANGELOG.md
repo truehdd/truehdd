@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- CAF wrapping functionality for post-processing PCM files into proper CAF containers
+
+### Fixed
+- Atmos output files now get correct extensions when OAMD is detected after initial file creation
+- PCM format files are properly wrapped with CAF headers when Atmos content is discovered
+- Resolved format corruption where PCM files contained CAF data due to late Atmos detection
+
 ## [0.1.2] - 2025-07-22
 
 ### Changed

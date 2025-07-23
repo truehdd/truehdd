@@ -1,4 +1,4 @@
-use crate::caf::CAFWriter;
+use crate::caf::{CAFWriter, wrap_pcm_file_with_caf_header};
 use crate::damf::{Configuration, Data, Event};
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -192,6 +192,12 @@ pub fn cmd_decode(args: &DecodeArgs, cli: &Cli, multi: Option<&MultiProgress>) -
 
     let mut required_presentations = [false; MAX_PRESENTATIONS];
     required_presentations[presentation as usize] = true;
+
+    // Track audio file path for potential renaming if Atmos is detected later
+    let mut original_audio_path: Option<PathBuf> = None;
+    let mut audio_created_without_atmos = false;
+    let mut original_format_used: Option<AudioFormat> = None;
+    let mut audio_params: Option<(u32, u32)> = None; // (sample_rate, channel_count)
     parser.set_required_presentations(&required_presentations);
 
     let input_path = args.input.clone();
@@ -353,6 +359,12 @@ pub fn cmd_decode(args: &DecodeArgs, cli: &Cli, multi: Option<&MultiProgress>) -
                             create_output_paths(base_path, effective_format, has_atmos);
                         log::info!("Creating audio file: {}", audio_path.display());
 
+                        // Track the original path and whether it was created without Atmos detection
+                        original_audio_path = Some(audio_path.clone());
+                        audio_created_without_atmos = !has_atmos;
+                        original_format_used = Some(effective_format);
+                        audio_params = Some((sample_rate, channel_count as u32));
+
                         match effective_format {
                             AudioFormat::Caf => {
                                 let mut caf_writer =
@@ -454,6 +466,43 @@ pub fn cmd_decode(args: &DecodeArgs, cli: &Cli, multi: Option<&MultiProgress>) -
                 let header_str = &damf_data.serialize_damf();
                 write!(header_writer, "{header_str}")?;
                 header_writer.flush()?;
+            }
+        }
+
+        // Handle audio file conversion/renaming if Atmos was detected after initial creation
+        if audio_created_without_atmos && has_atmos {
+            if let (Some(original_path), Some(original_format), Some((sample_rate, channel_count))) = 
+                (&original_audio_path, &original_format_used, &audio_params) {
+                
+                // If original format was PCM, wrap it with CAF header first
+                if *original_format == AudioFormat::Pcm {
+                    log::info!("Wrapping PCM file with CAF header for Atmos: {}", original_path.display());
+                    
+                    if let Err(e) = wrap_pcm_file_with_caf_header(
+                        original_path, 
+                        *sample_rate as f64, 
+                        *channel_count, 
+                        24 // TrueHD is always 24-bit
+                    ) {
+                        log::warn!("Failed to wrap PCM file with CAF header: {e}");
+                    } else {
+                        log::info!("Successfully converted PCM to CAF format");
+                    }
+                }
+                
+                // Now rename to .atmos.audio regardless of original format
+                let (new_audio_path, _) = create_output_paths(base_path, *original_format, true);
+                
+                if original_path != &new_audio_path {
+                    log::info!(
+                        "Renaming audio file to: {}",
+                        new_audio_path.display()
+                    );
+
+                    if let Err(e) = std::fs::rename(original_path, &new_audio_path) {
+                        log::warn!("Failed to rename audio file: {e}");
+                    }
+                }
             }
         }
     }
