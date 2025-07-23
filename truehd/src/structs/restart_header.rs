@@ -162,9 +162,11 @@ impl RestartHeader {
                     .wrapping_sub(state.input_timing)
                     & 0xFFFF;
 
-                let expected_output_timing = state.output_timing_deviation
-                    + samples_per_au
-                    + state.substream_state()?.output_timing_history[history_index];
+                let expected_output_timing = state
+                    .output_timing_deviation
+                    .wrapping_add(samples_per_au)
+                    .wrapping_add(state.substream_state()?.output_timing_history[history_index])
+                    & 0xFFFF;
 
                 if expected_output_timing & 0xFFFF == state.output_timing {
                     break 'check_output_timing;
@@ -172,6 +174,11 @@ impl RestartHeader {
 
                 if state.allow_seamless_branch {
                     if state.has_jump {
+                if expected_output_timing == state.output_timing {
+                    if !state.input_timing_jump && !state.peak_data_rate_jump {
+                        break 'check_output_timing;
+                    }
+                } else if state.allow_seamless_branch {
                         log_or_err!(
                             state,
                             Warn,
