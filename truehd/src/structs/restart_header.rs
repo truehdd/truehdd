@@ -247,7 +247,7 @@ impl RestartHeader {
                         break 'check_output_timing;
                     }
 
-                    if c1 {
+                    if !c1 {
                         warn!(
                             "advance[n]>advance[n-1]+3*samples_per_au/4, \
                             ({advance} > {prev_advance} + {})",
@@ -255,21 +255,21 @@ impl RestartHeader {
                         );
                     }
 
-                    if c2 {
+                    if !c2 {
                         warn!(
                             "advance[n]>advance[n-1]+samples_per_au-duration[n-1], \
                             ({advance} > {prev_advance} + {samples_per_au} - {prev_fifo_duration})"
                         );
                     }
 
-                    if c3 {
+                    if !c3 {
                         warn!(
                             "advance[n]>samples_per_75ms-samples_per_au, \
                             ({advance} > {samples_per_75ms} - {samples_per_au})"
                         );
                     }
 
-                    if c4 {
+                    if !c4 {
                         warn!("data_rate exceeds peak_data_rate after adjusting timing for jump");
                     }
 
