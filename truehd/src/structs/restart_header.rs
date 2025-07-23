@@ -225,7 +225,8 @@ impl RestartHeader {
                     let c1 = advance <= prev_advance + samples_per_au_3q4;
                     let c2 = advance <= prev_advance + samples_per_au - prev_fifo_duration;
                     let c3 = advance <= samples_per_75ms - samples_per_au;
-                    let c4 = prev_access_unit_length << 8 <= state.prev_peak_data_rate;
+                    let c4 = prev_access_unit_length << 8
+                        <= state.prev_peak_data_rate * input_timing_interval;
 
                     if c1 && c2 && c3 && c4 {
                         state.has_jump = true;
