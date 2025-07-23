@@ -1,9 +1,10 @@
 [package]
 name = "truehd"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 license = "Apache-2.0"
 description = "Research implementation of Dolby TrueHD parser/decoder"
+repository = "https://github.com/truehdd/truehdd/tree/main/truehd"
 authors = ["Rainbaby"]
 rust-version = "1.87.0"
 
@@ -20,5 +21,5 @@ log = "0.4.27"
 [package.metadata.release]
 pre-release-replacements = [
     {file="README.md", search="truehd = \"[a-z0-9\\.-]+\"", replace="truehd = \"{{version}}\""},
-#    {file="CHANGELOG.md", search="## \\[Unreleased\\]", replace="## [Unreleased]\n\n## [{{version}}] - {{date}}"},
+    {file="CHANGELOG.md", search="## \\[Unreleased\\]", replace="## [Unreleased]\n\n## [{{version}}] - {{date}}"},
 ]
