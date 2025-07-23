@@ -471,33 +471,36 @@ pub fn cmd_decode(args: &DecodeArgs, cli: &Cli, multi: Option<&MultiProgress>) -
 
         // Handle audio file conversion/renaming if Atmos was detected after initial creation
         if audio_created_without_atmos && has_atmos {
-            if let (Some(original_path), Some(original_format), Some((sample_rate, channel_count))) = 
-                (&original_audio_path, &original_format_used, &audio_params) {
-                
+            if let (
+                Some(original_path),
+                Some(original_format),
+                Some((sample_rate, channel_count)),
+            ) = (&original_audio_path, &original_format_used, &audio_params)
+            {
                 // If original format was PCM, wrap it with CAF header first
                 if *original_format == AudioFormat::Pcm {
-                    log::info!("Wrapping PCM file with CAF header for Atmos: {}", original_path.display());
-                    
+                    log::info!(
+                        "Wrapping PCM file with CAF header for Atmos: {}",
+                        original_path.display()
+                    );
+
                     if let Err(e) = wrap_pcm_file_with_caf_header(
-                        original_path, 
-                        *sample_rate as f64, 
-                        *channel_count, 
-                        24 // TrueHD is always 24-bit
+                        original_path,
+                        *sample_rate as f64,
+                        *channel_count,
+                        24, // TrueHD is always 24-bit
                     ) {
                         log::warn!("Failed to wrap PCM file with CAF header: {e}");
                     } else {
                         log::info!("Successfully converted PCM to CAF format");
                     }
                 }
-                
+
                 // Now rename to .atmos.audio regardless of original format
                 let (new_audio_path, _) = create_output_paths(base_path, *original_format, true);
-                
+
                 if original_path != &new_audio_path {
-                    log::info!(
-                        "Renaming audio file to: {}",
-                        new_audio_path.display()
-                    );
+                    log::info!("Renaming audio file to: {}", new_audio_path.display());
 
                     if let Err(e) = std::fs::rename(original_path, &new_audio_path) {
                         log::warn!("Failed to rename audio file: {e}");
