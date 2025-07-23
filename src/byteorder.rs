@@ -76,7 +76,7 @@ pub use {join_bytes_be, join_bytes_le};
 #[cfg(test)]
 mod tests {
     use crate::byteorder::{WriteBytesBe, WriteBytesLe};
-    use bytes_macro::ToBytes;
+    use truehdd_macros::ToBytes;
 
     #[derive(ToBytes)]
     struct Mini {

@@ -2,7 +2,7 @@ use std::io::{self, Seek, SeekFrom, Write};
 
 use crate::byteorder::{WriteBytesBe, WriteBytesLe};
 use crate::impl_u32_enum;
-use bytes_macro::{ToBytes, caf_chunk_type};
+use truehdd_macros::{ToBytes, caf_chunk_type};
 
 pub fn write_caf_file_header<W: Write>(writer: &mut W) -> io::Result<()> {
     writer.write_all(b"caff")?;

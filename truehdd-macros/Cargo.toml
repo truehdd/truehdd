@@ -1,8 +1,10 @@
 [package]
-name = "bytes_macro"
+name = "truehdd-macros"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
+description = "Procedural macros for the truehdd project"
+repository = "https://github.com/truehdd/truehdd/tree/main/truehdd-macros"
 authors = ["Rainbaby"]
 rust-version = "1.87.0"
 
