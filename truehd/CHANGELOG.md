@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - AccessUnit struct now includes `has_valid_branch` field to indicate valid branch points
 
+### Fixed
+- Lossless check failures are now allowed at valid branch points to prevent false positive warnings
+
 ### Changed
 - **BREAKING**: Renamed seamless branch related struct fields for clarity
   - `ParserState::has_branch` → `peak_data_rate_jump`

@@ -446,15 +446,21 @@ impl RestartHeader {
                 lossless_check_i32 &= 0xFF;
 
                 if lossless_check_i32 != self.lossless_check as i32 {
-                    log_or_err!(
-                        state,
-                        Warn,
-                        anyhow!(RestartHeaderError::LosslessCheckMismatch {
-                            substream: state.substream_index,
-                            calculated: lossless_check_i32,
-                            read: self.lossless_check
-                        })
-                    )
+                    if state.has_valid_branch {
+                        log::debug!(
+                            "lossless_check failure is allowed on first access unit immediately after the jump"
+                        )
+                    } else {
+                        log_or_err!(
+                            state,
+                            Warn,
+                            anyhow!(RestartHeaderError::LosslessCheckMismatch {
+                                substream: state.substream_index,
+                                calculated: lossless_check_i32,
+                                read: self.lossless_check
+                            })
+                        )
+                    }
                 }
             }
         }
