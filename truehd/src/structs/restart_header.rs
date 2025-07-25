@@ -168,17 +168,12 @@ impl RestartHeader {
                     .wrapping_add(state.substream_state()?.output_timing_history[history_index])
                     & 0xFFFF;
 
-                if expected_output_timing & 0xFFFF == state.output_timing {
-                    break 'check_output_timing;
-                }
-
-                if state.allow_seamless_branch {
-                    if state.has_jump {
                 if expected_output_timing == state.output_timing {
                     if !state.input_timing_jump && !state.peak_data_rate_jump {
                         break 'check_output_timing;
                     }
                 } else if state.allow_seamless_branch {
+                    if state.has_valid_branch {
                         log_or_err!(
                             state,
                             Warn,
@@ -204,7 +199,8 @@ impl RestartHeader {
                     );
                 }
 
-                if state.has_branch || state.input_timing_jump || state.output_timing_jump {
+                if state.peak_data_rate_jump || state.input_timing_jump || state.output_timing_jump
+                {
                     let samples_per_au = state.samples_per_au;
                     let prev_advance = state.prev_advance;
                     let advance = state.advance;
@@ -236,7 +232,7 @@ impl RestartHeader {
                         <= state.prev_peak_data_rate * input_timing_interval;
 
                     if c1 && c2 && c3 && c4 {
-                        state.has_jump = true;
+                        state.has_valid_branch = true;
                         state.reset_for_branch();
 
                         state.output_timing_deviation = state

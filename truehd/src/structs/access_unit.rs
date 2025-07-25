@@ -55,13 +55,16 @@ pub struct AccessUnit {
     ///
     /// Contains auxiliary information including object audio metadata.
     pub extra_data: Option<ExtraData>,
+
+    /// Indicates if this access unit is at a valid branch point.
+    pub has_valid_branch: bool,
 }
 
 impl AccessUnit {
     pub fn read(state: &mut ParserState, reader: &mut BsIoSliceReader) -> Result<Self> {
         state.is_major_sync = false;
 
-        if !state.has_jump {
+        if !state.has_valid_branch {
             state.prev_access_unit_length = state.access_unit_length;
             state.prev_advance = state.advance;
             state.prev_fifo_duration = state.fifo_duration;
@@ -72,7 +75,7 @@ impl AccessUnit {
 
         state.input_timing_jump = false;
         state.output_timing_jump = false;
-        state.has_branch = false;
+        state.peak_data_rate_jump = false;
 
         let mut au = Self {
             check_nibble: reader.get_n(4)?,
@@ -168,7 +171,7 @@ impl AccessUnit {
             au.substream_directory[i] = SubstreamDirectory::read(state, reader)?;
         }
 
-        state.has_jump = false;
+        state.has_valid_branch = false;
 
         if reader.position()? & 7 != 0 {
             bail!(AccessUnitError::MisalignedSync)
@@ -222,6 +225,8 @@ impl AccessUnit {
         }
 
         state.au_counter += 1; // TODO: migrate to gap check, should reset on sync check
+
+        au.has_valid_branch = state.has_valid_branch;
 
         Ok(au)
     }
@@ -310,7 +315,7 @@ impl AccessUnit {
             return Ok(());
         }
 
-        let input_timing_interval = if state.has_jump {
+        let input_timing_interval = if state.has_valid_branch {
             state
                 .unwrapped_input_timing
                 .wrapping_sub(state.prev_unwrapped_input_timing)
@@ -322,6 +327,8 @@ impl AccessUnit {
             "AU {}: input_timing {}, prev_input_timing {}, input_timing_interval {}",
             state.au_counter, state.input_timing, state.prev_input_timing, input_timing_interval
         );
+
+        let samples_per_75ms = (state.audio_sampling_frequency_1 * 3).div_ceil(40);
 
         if input_timing_interval < state.samples_per_au >> 2 {
             if !state.allow_seamless_branch || !state.is_major_sync {
@@ -336,7 +343,7 @@ impl AccessUnit {
                 );
             }
 
-            if state.has_jump {
+            if state.has_valid_branch {
                 log_or_err!(
                     state,
                     Warn,
@@ -357,7 +364,7 @@ impl AccessUnit {
                 );
             }
 
-            if state.has_jump {
+            if state.has_valid_branch {
                 log_or_err!(
                     state,
                     Warn,
@@ -376,7 +383,7 @@ impl AccessUnit {
                 log_or_err!(state, Warn, anyhow!(AccessUnitError::DataRateExceeded));
             }
 
-            if state.has_jump {
+            if state.has_valid_branch {
                 log_or_err!(
                     state,
                     Warn,
@@ -388,14 +395,12 @@ impl AccessUnit {
             state.input_timing_jump = true;
         }
 
-        let samples_per_75ms = (state.audio_sampling_frequency_1 * 3).div_ceil(40);
-
         if state.has_parsed_au && input_timing_interval > samples_per_75ms as usize {
             if !state.allow_seamless_branch || !state.is_major_sync {
                 log_or_err!(state, Warn, anyhow!(AccessUnitError::TimingTooLong));
             }
 
-            if state.has_jump {
+            if state.has_valid_branch {
                 log_or_err!(
                     state,
                     Warn,
@@ -438,6 +443,7 @@ impl AccessUnit {
     }
 
     pub fn update_decoder_state(&self, state: &mut DecoderState) -> Result<()> {
+        state.has_valid_branch = self.has_valid_branch;
         if let Some(major_sync_info) = &self.major_sync_info {
             major_sync_info.update_decoder_state(state)?;
         } else if !state.valid {

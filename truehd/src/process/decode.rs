@@ -174,6 +174,7 @@ pub struct DecoderState {
 
     pub valid: bool,
     pub counter: usize,
+    pub has_valid_branch: bool,
 
     pub sampling_frequency: u32,
     pub samples_per_au: usize,
@@ -203,6 +204,7 @@ impl Default for DecoderState {
             fail_level: log::Level::Error,
             valid: false,
             counter: 0,
+            has_valid_branch: false,
             sampling_frequency: 0,
             samples_per_au: 0,
             presentation_map: None,

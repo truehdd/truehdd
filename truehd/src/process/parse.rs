@@ -217,8 +217,8 @@ pub struct ParserState {
     pub input_timing_jump: bool,
     pub output_timing_jump: bool,
     /// 1452
-    pub has_branch: bool,
-    pub has_jump: bool,
+    pub peak_data_rate_jump: bool,
+    pub has_valid_branch: bool,
 
     pub variable_rate: bool,
     pub peak_data_rate: usize,
@@ -302,8 +302,8 @@ impl Default for ParserState {
 
             input_timing_jump: false,
             output_timing_jump: false,
-            has_branch: false,
-            has_jump: false,
+            peak_data_rate_jump: false,
+            has_valid_branch: false,
 
             variable_rate: false,
             peak_data_rate: 0,

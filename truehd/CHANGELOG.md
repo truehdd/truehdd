@@ -5,6 +5,18 @@ All notable changes to the truehd library crate will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- AccessUnit struct now includes `has_valid_branch` field to indicate valid branch points
+
+### Changed
+- **BREAKING**: Renamed seamless branch related struct fields for clarity
+  - `ParserState::has_branch` → `peak_data_rate_jump`
+  - `ParserState::has_jump` → `has_valid_branch`
+  - Updated field usage throughout parser and decoder states for consistent naming
+  - Enhanced branch validation logic in restart header processing
+
 ## [0.2.1] - 2025-07-23
 
 ### Fixed

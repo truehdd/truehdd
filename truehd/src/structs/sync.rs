@@ -16,7 +16,7 @@
 
 use anyhow::{Result, anyhow, bail};
 use log::Level::{Error, Warn};
-use log::{debug, trace, warn};
+use log::{debug, warn};
 
 use crate::log_or_err;
 use crate::process::PresentationMap;
@@ -248,11 +248,11 @@ impl MajorSyncInfo {
             && state.peak_data_rate != ms.peak_data_rate as usize
         {
             if state.allow_seamless_branch {
-                trace!(
+                debug!(
                     "Peak data rate change allowed at branch: {} -> {}",
                     state.peak_data_rate, ms.peak_data_rate
                 );
-                state.has_branch = true;
+                state.peak_data_rate_jump = true;
             } else {
                 log_or_err!(
                     state,
