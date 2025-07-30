@@ -191,7 +191,9 @@ pub fn cmd_decode(args: &DecodeArgs, cli: &Cli, multi: Option<&MultiProgress>) -
     decoder.set_fail_level(fail_level);
 
     let mut required_presentations = [false; MAX_PRESENTATIONS];
-    required_presentations[presentation as usize] = true;
+    required_presentations[..=presentation as usize]
+        .iter_mut()
+        .for_each(|p| *p = true);
 
     // Track audio file path for potential renaming if Atmos is detected later
     let mut original_audio_path: Option<PathBuf> = None;

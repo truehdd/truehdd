@@ -70,13 +70,13 @@ impl PresentationMap {
         PresentationType::Invalid
     }
 
-    pub fn max_independent_presentation(&self) -> usize {
+    pub fn max_independent_presentation(&self) -> Option<usize> {
         self.masks
             .iter()
             .enumerate()
             .rev()
             .find(|&(i, &mask)| mask >> i != 0)
-            .map_or(0, |(i, _)| i)
+            .map(|(i, _)| i)
     }
 
     pub fn substream_mask_by_required_presentations(
@@ -115,7 +115,7 @@ impl Display for PresentationType {
 #[test]
 fn test_presentation_map() {
     let map = PresentationMap::with_substream_info(0b11001100, 0b00000001);
-    assert_eq!(map.max_independent_presentation(), 3);
+    assert_eq!(map.max_independent_presentation().unwrap(), 3);
     assert_eq!(map.masks, [1, 3, 4, 12]);
 
     assert_eq!(
@@ -132,7 +132,7 @@ fn test_presentation_map() {
     );
 
     let map = PresentationMap::with_substream_info(0b01011000, 0b00000000);
-    assert_eq!(map.max_independent_presentation(), 2);
+    assert_eq!(map.max_independent_presentation().unwrap(), 2);
     assert_eq!(map.masks, [1, 2, 5, 0]);
 
     assert_eq!(

@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `ParserState::has_jump` → `has_valid_branch`
   - Updated field usage throughout parser and decoder states for consistent naming
   - Enhanced branch validation logic in restart header processing
+- **BREAKING**: `PresentationMap::max_independent_presentation()` now returns `Option<usize>` instead of `usize`
+  - Returns `None` when no independent presentations are available
+  - Improves error handling for invalid presentation configurations
 
 ## [0.2.1] - 2025-07-23
 

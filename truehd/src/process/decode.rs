@@ -5,7 +5,7 @@ use crate::structs::oamd::ObjectAudioMetadataPayload;
 use crate::utils::dither::dither_31eb;
 use crate::utils::errors::DecodeError;
 use anyhow::{Result, bail};
-use log::info;
+use log::{info, trace};
 use std::collections::VecDeque;
 
 /// Decodes access units to PCM audio samples.
@@ -306,7 +306,10 @@ impl DecoderState {
         match presentation_map.presentation_type_by_index(presentation) {
             PresentationType::Invalid => {
                 if !self.valid {
-                    let max_independent = presentation_map.max_independent_presentation();
+                    let Some(max_independent) = presentation_map.max_independent_presentation()
+                    else {
+                        bail!("No presentation is available");
+                    };
                     info!(
                         "Presentation {presentation} is not available, using presentation {max_independent}"
                     );
@@ -595,6 +598,11 @@ impl DecoderState {
 
                     output_buffer[blki] = output;
                 }
+
+                trace!(
+                    "AU {}: lossless_check_i32: {:08X}",
+                    self.counter, lossless_check_data
+                );
 
                 ss_state.lossless_check_i32 ^= lossless_check_data;
             }
