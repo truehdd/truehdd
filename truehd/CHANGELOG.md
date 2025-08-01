@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Lossless check failures are now allowed at valid branch points to prevent false positive warnings
+- Fix iterator borrowing issue in `ParserState::reset_for_branch()` method
 
 ### Changed
 - **BREAKING**: Renamed seamless branch related struct fields for clarity

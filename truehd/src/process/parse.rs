@@ -49,7 +49,7 @@ impl Parser {
 
     /// Sets the failure level for validation errors.
     ///
-    /// - `log::Level::Error`: Only fail on Error level messages (default)  
+    /// - `log::Level::Error`: Only fail on Error level messages (default)
     /// - `log::Level::Warn`: Fail on Warning level and above (strict mode)
     pub fn set_fail_level(&mut self, level: log::Level) {
         self.state.fail_level = level;
@@ -385,7 +385,7 @@ impl ParserState {
     }
 
     pub fn reset_for_branch(&mut self) {
-        for mut ss_state in self.substream_state {
+        for ss_state in &mut self.substream_state {
             ss_state.hires_output_timing_state.reset_for_branch()
         }
     }
