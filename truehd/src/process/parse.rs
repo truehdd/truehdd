@@ -362,6 +362,10 @@ impl ParserState {
         Ok(&self.substream_state[i])
     }
 
+    pub fn has_jump(&self) -> bool {
+        self.peak_data_rate_jump || self.input_timing_jump || self.output_timing_jump
+    }
+
     // TODO: provide iterator for sss here
 
     pub fn reset_parser_substream_state(&mut self) {

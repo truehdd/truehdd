@@ -199,8 +199,7 @@ impl RestartHeader {
                     );
                 }
 
-                if state.peak_data_rate_jump || state.input_timing_jump || state.output_timing_jump
-                {
+                if state.has_jump() {
                     let samples_per_au = state.samples_per_au;
                     let prev_advance = state.prev_advance;
                     let advance = state.advance;

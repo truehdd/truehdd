@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING**: `PresentationMap::max_independent_presentation()` now returns `Option<usize>` instead of `usize`
   - Returns `None` when no independent presentations are available
   - Improves error handling for invalid presentation configurations
+- Extract jump detection logic into `ParserState::has_jump()` method for better code organization
 
 ## [0.2.1] - 2025-07-23
 
