@@ -2,12 +2,12 @@
 
 use anyhow::Result;
 use clap::Parser as ClapParser;
-use indicatif::MultiProgress;
-use indicatif_log_bridge::LogWrapper;
-
 use cli::command::{Cli, Commands, LogFormat};
 use cli::decode::cmd_decode;
 use cli::info::cmd_info;
+use indicatif::MultiProgress;
+use indicatif_log_bridge::LogWrapper;
+use log::info;
 
 mod byteorder;
 mod caf;
@@ -51,6 +51,8 @@ fn main() -> Result<()> {
         env_builder.try_init()?;
         None
     };
+
+    info!("{}", cli::command::VERSION_INFO);
 
     match cli.command {
         Commands::Decode(ref args) => cmd_decode(args, &cli, pb)?,

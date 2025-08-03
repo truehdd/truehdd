@@ -41,7 +41,7 @@ fn main() -> Result<()> {
 /// Get truehd version using cargo metadata (works with published and local dependencies)
 fn get_truehd_version_from_metadata() -> Result<String> {
     let output = Command::new("cargo")
-        .args(&["metadata", "--format-version", "1"])
+        .args(["metadata", "--format-version", "1"])
         .output()?;
 
     if !output.status.success() {

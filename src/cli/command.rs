@@ -2,12 +2,20 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser as ClapParser, Subcommand, ValueEnum};
 
+pub const VERSION_INFO: &str = concat!(
+    env!("VERGEN_GIT_DESCRIBE"),
+    " (truehd library ",
+    env!("TRUEHD_VERSION"),
+    ") Built: ",
+    env!("BUILD_TIMESTAMP")
+);
+
 #[derive(Debug, ClapParser)]
 #[command(
     name       = env!("CARGO_PKG_NAME"),
-    version    = env!("CARGO_PKG_VERSION"),
+    version    = VERSION_INFO,
     author     = env!("CARGO_PKG_AUTHORS"),
-    about      = "Tools for inspecting and decoding Dolby TrueHD bitstreams",
+    about      = env!("CARGO_PKG_DESCRIPTION"),
     long_about = None,
 )]
 pub struct Cli {
