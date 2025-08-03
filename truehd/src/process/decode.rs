@@ -34,6 +34,7 @@ impl Decoder {
             channel_count: self.state.substream_state[self.state.presentation].max_matrix_chan + 1,
             pcm_data: self.state.output_buffer,
             oamd: self.state.oamd.iter().cloned().collect::<Vec<_>>(),
+            is_duplicate: self.state.has_duplicate_timing && self.state.has_duplicate_sample,
         };
 
         Ok(decoded)
@@ -89,18 +90,28 @@ pub struct DecodedAccessUnit {
     ///
     /// Contains spatial audio metadata when present in the stream.
     pub oamd: Vec<ObjectAudioMetadataPayload>,
+
+    /// Indicates whether this access unit is a duplicate of the previous one.
+    ///
+    /// This is `true` when both the output timing and the decoded audio sample
+    /// checksum match the previous access unit.
+    /// Downstream applications may safely discard this frame.
+    pub is_duplicate: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct DecoderSubstreamState {
     pub restart_sync_word: u16,
+    pub output_timing: u16,
     pub min_chan: usize,
     pub max_chan: usize,
     pub max_matrix_chan: usize,
     pub dither_shift: u32,
     pub dither_seed: u32,
     pub lossless_check_i32: i32,
+    pub lossless_check_i32_prev_au: i32,
+    pub lossless_check_i32_accum: i32,
     pub ch_assign: [usize; 16],
 
     pub block_size: usize,
@@ -132,12 +143,15 @@ impl Default for DecoderSubstreamState {
     fn default() -> Self {
         Self {
             restart_sync_word: 0,
+            output_timing: 0,
             min_chan: 0,
             max_chan: 0,
             max_matrix_chan: 0,
             dither_shift: 0,
             dither_seed: 0,
             lossless_check_i32: 0,
+            lossless_check_i32_prev_au: 0,
+            lossless_check_i32_accum: 0,
             ch_assign: [0; 16],
 
             block_size: 8,
@@ -175,6 +189,8 @@ pub struct DecoderState {
     pub valid: bool,
     pub counter: usize,
     pub has_valid_branch: bool,
+    pub has_duplicate_timing: bool,
+    pub has_duplicate_sample: bool,
 
     pub sampling_frequency: u32,
     pub samples_per_au: usize,
@@ -205,6 +221,8 @@ impl Default for DecoderState {
             valid: false,
             counter: 0,
             has_valid_branch: false,
+            has_duplicate_timing: false,
+            has_duplicate_sample: false,
             sampling_frequency: 0,
             samples_per_au: 0,
             presentation_map: None,
@@ -246,6 +264,8 @@ impl DecoderState {
                 .unwrap_or_default();
         }
 
+        self.has_duplicate_timing = false;
+        self.has_duplicate_sample = false;
         self.oamd.clear();
 
         for i in 0..=self.presentation {
@@ -299,7 +319,9 @@ impl DecoderState {
         };
 
         let mut presentations = [false; MAX_PRESENTATIONS];
-        presentations[presentation] = true;
+        presentations[..=presentation]
+            .iter_mut()
+            .for_each(|p| *p = true);
 
         self.substream_mask =
             presentation_map.substream_mask_by_required_presentations(&presentations);
@@ -332,7 +354,10 @@ impl DecoderState {
 
     pub fn reset_decoder_substream_state(&mut self) {
         let ss_state = &mut self.substream_state[self.substream_index];
-        *ss_state = DecoderSubstreamState::default();
+        *ss_state = DecoderSubstreamState {
+            lossless_check_i32_prev_au: ss_state.lossless_check_i32_prev_au,
+            ..Default::default()
+        }
     }
 
     fn decode(&mut self) -> Result<()> {
@@ -574,6 +599,10 @@ impl DecoderState {
             {
                 let output_buffer = &mut self.output_buffer[*decoded_sample_len..];
 
+                if *decoded_sample_len == 0 {
+                    ss_state.lossless_check_i32 = 0;
+                }
+
                 let mut lossless_check_data = 0;
 
                 for blki in 0..block_size {
@@ -599,12 +628,26 @@ impl DecoderState {
                     output_buffer[blki] = output;
                 }
 
-                trace!(
-                    "AU {}: lossless_check_i32: {:08X}",
-                    self.counter, lossless_check_data
-                );
-
                 ss_state.lossless_check_i32 ^= lossless_check_data;
+                ss_state.lossless_check_i32_accum ^= lossless_check_data;
+
+                if *decoded_sample_len + block_size == samples_per_au {
+                    trace!(
+                        "AU {}: lossless_check_i32: {:08X}, lossless_check_i32_prev_au {:08X}",
+                        self.counter,
+                        ss_state.lossless_check_i32,
+                        ss_state.lossless_check_i32_prev_au
+                    );
+
+                    if self.has_duplicate_timing
+                        && ss_state.lossless_check_i32 == ss_state.lossless_check_i32_prev_au
+                    {
+                        self.has_duplicate_sample = true;
+                        info!("AU {}: duplicate samples at branch, should be discarded", self.counter);
+                    }
+
+                    ss_state.lossless_check_i32_prev_au = ss_state.lossless_check_i32;
+                }
             }
         }
 

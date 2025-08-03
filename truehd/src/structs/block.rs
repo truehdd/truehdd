@@ -497,6 +497,11 @@ impl Block {
     pub fn update_decoder_state(&self, state: &mut DecoderState) -> Result<()> {
         if let Some(restart_header) = &self.restart_header {
             restart_header.update_decoder_state(state)?;
+        } else if state.substream_state()?.decoded_sample_len == 0 {
+            let samples_per_au = state.samples_per_au as u16;
+            let output_timing = &mut state.substream_state_mut()?.output_timing;
+
+            *output_timing = output_timing.wrapping_add(samples_per_au);
         }
 
         if let Some(block_header) = &self.block_header {

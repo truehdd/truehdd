@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - AccessUnit struct now includes `has_valid_branch` field to indicate valid branch points
-
+- Duplicate sample detection at TrueHD stream branch points. DecodedAccessUnit struct now includes `is_duplicate` field. Such access units should be discarded
 ### Fixed
 - Lossless check failures are now allowed at valid branch points to prevent false positive warnings
 - Fix iterator borrowing issue in `ParserState::reset_for_branch()` method
