@@ -1,6 +1,6 @@
 [package]
 name = "truehd"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 license = "Apache-2.0"
 description = "Research implementation of Dolby TrueHD parser/decoder"

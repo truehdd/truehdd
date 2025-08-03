@@ -17,7 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 truehdd-macros = { version = "0.1.0", path = "truehdd-macros" }
-truehd = { version = "0.2.0", path = "truehd" }
+truehd = { version = "0.3.0", path = "truehd" }
 
 anyhow = "1.0.98"
 clap = { version = "4.5.40", features = ["derive"] }
