@@ -643,7 +643,10 @@ impl DecoderState {
                         && ss_state.lossless_check_i32 == ss_state.lossless_check_i32_prev_au
                     {
                         self.has_duplicate_sample = true;
-                        info!("AU {}: duplicate samples at branch, should be discarded", self.counter);
+                        info!(
+                            "AU {}: duplicate samples at branch, should be discarded",
+                            self.counter
+                        );
                     }
 
                     ss_state.lossless_check_i32_prev_au = ss_state.lossless_check_i32;
