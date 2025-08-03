@@ -308,8 +308,12 @@ pub fn cmd_decode(args: &DecodeArgs, cli: &Cli, multi: Option<&MultiProgress>) -
                 let sample_pos = decoded_samples;
                 let channel_count = decoded.channel_count;
 
-                decoded_samples += decoded.sample_length as u64;
+                if decoded.is_duplicate {
+                    continue;
+                }
+
                 decoded_frames += 1u64;
+                decoded_samples += decoded.sample_length as u64;
                 final_sample_rate = sample_rate;
 
                 for oamd in decoded.oamd {
