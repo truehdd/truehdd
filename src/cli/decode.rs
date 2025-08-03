@@ -1,18 +1,18 @@
 use crate::caf::{CAFWriter, wrap_pcm_file_with_caf_header};
 use crate::damf::{Configuration, Data, Event};
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
 
-use anyhow::Result;
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use log::Level;
-
 use super::command::{AudioFormat, Cli, DecodeArgs};
 use crate::input::InputReader;
 use crate::timestamp::time_str;
+use anyhow::{Result, anyhow};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use log::Level;
+use truehd::log_or_err;
 use truehd::process::{MAX_PRESENTATIONS, decode::Decoder, extract::Extractor, parse::Parser};
 
 fn create_path_with_extension(base_path: &Path, expected_ext: &str) -> PathBuf {
@@ -190,16 +190,18 @@ pub fn cmd_decode(args: &DecodeArgs, cli: &Cli, multi: Option<&MultiProgress>) -
     parser.set_fail_level(fail_level);
     decoder.set_fail_level(fail_level);
 
+    struct WriterState {
+        fail_level: Level,
+    }
+
+    let state = WriterState { fail_level };
+
     let mut required_presentations = [false; MAX_PRESENTATIONS];
     required_presentations[..=presentation as usize]
         .iter_mut()
         .for_each(|p| *p = true);
 
-    // Track audio file path for potential renaming if Atmos is detected later
-    let mut original_audio_path: Option<PathBuf> = None;
-    let mut audio_created_without_atmos = false;
-    let mut original_format_used: Option<AudioFormat> = None;
-    let mut audio_params: Option<(u32, u32)> = None; // (sample_rate, channel_count)
+    let mut current_audio_path: Option<PathBuf> = None;
     parser.set_required_presentations(&required_presentations);
 
     let input_path = args.input.clone();
@@ -311,7 +313,79 @@ pub fn cmd_decode(args: &DecodeArgs, cli: &Cli, multi: Option<&MultiProgress>) -
                 final_sample_rate = sample_rate;
 
                 for oamd in decoded.oamd {
+                    let was_atmos = has_atmos;
                     has_atmos = true;
+
+                    // If this is the first time we detect Atmos, rename the current audio file immediately
+                    if !was_atmos && audio_writer.is_some() {
+                        if let (Some(base_path), Some(current_path)) =
+                            (&base_path, &current_audio_path)
+                        {
+                            // Rename to .atmos.audio while keeping the writer active
+                            let (new_audio_path, _) =
+                                create_output_paths(base_path, args.format, true);
+                            if current_path != &new_audio_path {
+                                log::info!(
+                                    "Atmos detected - renaming audio file to: {}",
+                                    new_audio_path.display()
+                                );
+
+                                // For PCM files, we need to close, wrap, and reopen
+                                if let Some(AudioWriter::Pcm(mut pcm_writer)) = audio_writer.take()
+                                {
+                                    pcm_writer.flush()?;
+                                    drop(pcm_writer);
+
+                                    // Wrap PCM with CAF header
+                                    if let Err(e) = wrap_pcm_file_with_caf_header(
+                                        current_path,
+                                        sample_rate as f64,
+                                        channel_count as u32,
+                                        24,
+                                    ) {
+                                        log_or_err!(
+                                            state,
+                                            Level::Error,
+                                            anyhow!("Failed to wrap PCM file with CAF header: {e}")
+                                        );
+                                    }
+                                }
+
+                                // Rename the file (this works for both CAF and wrapped PCM)
+                                if let Err(e) = std::fs::rename(current_path, &new_audio_path) {
+                                    log_or_err!(
+                                        state,
+                                        Level::Error,
+                                        anyhow!("Failed to rename audio file: {e}")
+                                    );
+                                } else {
+                                    current_audio_path = Some(new_audio_path.clone());
+                                }
+
+                                // For PCM files that were wrapped, create a new CAF writer that resumes from the existing file
+                                if audio_writer.is_none() {
+                                    log::info!(
+                                        "Audio file converted to CAF format - resuming with new CAF writer"
+                                    );
+                                    let file = std::fs::OpenOptions::new()
+                                        .read(true)
+                                        .write(true)
+                                        .open(current_audio_path.as_ref().unwrap())?;
+                                    // We need to parse first with just the file, then wrap with BufWriter
+                                    let caf_writer = {
+                                        let mut temp_file = file.try_clone()?;
+                                        let file_info = crate::caf::parse_caf_file(&mut temp_file)?;
+                                        temp_file.seek(std::io::SeekFrom::End(0))?;
+                                        CAFWriter::from_parsed_info(
+                                            BufWriter::new(file),
+                                            file_info,
+                                        )?
+                                    };
+                                    audio_writer = Some(AudioWriter::Caf(caf_writer));
+                                }
+                            }
+                        }
+                    }
 
                     if temp_oamd.is_none() {
                         temp_oamd = Some(oamd.clone());
@@ -361,11 +435,8 @@ pub fn cmd_decode(args: &DecodeArgs, cli: &Cli, multi: Option<&MultiProgress>) -
                             create_output_paths(base_path, effective_format, has_atmos);
                         log::info!("Creating audio file: {}", audio_path.display());
 
-                        // Track the original path and whether it was created without Atmos detection
-                        original_audio_path = Some(audio_path.clone());
-                        audio_created_without_atmos = !has_atmos;
-                        original_format_used = Some(effective_format);
-                        audio_params = Some((sample_rate, channel_count as u32));
+                        // Track the current audio file path
+                        current_audio_path = Some(audio_path.clone());
 
                         match effective_format {
                             AudioFormat::Caf => {
@@ -468,46 +539,6 @@ pub fn cmd_decode(args: &DecodeArgs, cli: &Cli, multi: Option<&MultiProgress>) -
                 let header_str = &damf_data.serialize_damf();
                 write!(header_writer, "{header_str}")?;
                 header_writer.flush()?;
-            }
-        }
-
-        // Handle audio file conversion/renaming if Atmos was detected after initial creation
-        if audio_created_without_atmos && has_atmos {
-            if let (
-                Some(original_path),
-                Some(original_format),
-                Some((sample_rate, channel_count)),
-            ) = (&original_audio_path, &original_format_used, &audio_params)
-            {
-                // If original format was PCM, wrap it with CAF header first
-                if *original_format == AudioFormat::Pcm {
-                    log::info!(
-                        "Wrapping PCM file with CAF header for Atmos: {}",
-                        original_path.display()
-                    );
-
-                    if let Err(e) = wrap_pcm_file_with_caf_header(
-                        original_path,
-                        *sample_rate as f64,
-                        *channel_count,
-                        24, // TrueHD is always 24-bit
-                    ) {
-                        log::warn!("Failed to wrap PCM file with CAF header: {e}");
-                    } else {
-                        log::info!("Successfully converted PCM to CAF format");
-                    }
-                }
-
-                // Now rename to .atmos.audio regardless of original format
-                let (new_audio_path, _) = create_output_paths(base_path, *original_format, true);
-
-                if original_path != &new_audio_path {
-                    log::info!("Renaming audio file to: {}", new_audio_path.display());
-
-                    if let Err(e) = std::fs::rename(original_path, &new_audio_path) {
-                        log::warn!("Failed to rename audio file: {e}");
-                    }
-                }
             }
         }
     }

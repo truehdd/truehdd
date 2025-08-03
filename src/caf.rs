@@ -29,7 +29,7 @@ pub trait CAFChunk {
     }
 }
 
-#[derive(ToBytes)]
+#[derive(Debug, ToBytes)]
 #[caf_chunk_type(b"desc")]
 pub struct AudioFormat {
     pub sample_rate: f64,
@@ -342,6 +342,144 @@ pub struct CAFWriter<W: Write + Seek> {
     data_size_position: Option<u64>,
     data_written: u64,
     finished: bool,
+    endianness: Endianness,
+}
+
+/// Information extracted from parsing an existing CAF file
+#[derive(Debug)]
+pub struct CAFFileInfo {
+    pub data_size_position: u64,
+    pub data_chunk_start: u64,
+    pub audio_format: Option<AudioFormat>,
+    pub channel_layout: Option<ChannelLayout>,
+    pub endianness: Endianness,
+}
+
+/// Parse an existing CAF file to extract header positions and metadata
+pub fn parse_caf_file<R: Read + Seek>(mut reader: R) -> io::Result<CAFFileInfo> {
+    // Read and verify CAF file header
+    let mut header = [0u8; 8];
+    reader.read_exact(&mut header)?;
+
+    if &header[0..4] != b"caff" {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Not a valid CAF file - missing 'caff' signature",
+        ));
+    }
+
+    let mut audio_format = None;
+    let channel_layout = None;
+    let mut data_size_position = None;
+    let mut data_chunk_start = None;
+    let mut endianness = Endianness::BigEndian; // Default CAF endianness
+
+    // Parse chunks until we find the data chunk
+    loop {
+        let current_pos = reader.stream_position()?;
+
+        // Read chunk type (4 bytes)
+        let mut chunk_type = [0u8; 4];
+        match reader.read_exact(&mut chunk_type) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(e),
+        }
+
+        // Read chunk size (8 bytes, big-endian)
+        let mut size_bytes = [0u8; 8];
+        reader.read_exact(&mut size_bytes)?;
+        let chunk_size = u64::from_be_bytes(size_bytes);
+
+        match &chunk_type {
+            b"desc" => {
+                // Audio description chunk
+                let mut f64_bytes = [0u8; 8];
+                reader.read_exact(&mut f64_bytes)?;
+                let sample_rate = f64::from_be_bytes(f64_bytes);
+
+                let mut u32_bytes = [0u8; 4];
+                reader.read_exact(&mut u32_bytes)?;
+                let format_id = u32::from_be_bytes(u32_bytes);
+
+                reader.read_exact(&mut u32_bytes)?;
+                let format_flags = u32::from_be_bytes(u32_bytes);
+
+                reader.read_exact(&mut u32_bytes)?;
+                let bytes_per_packet = u32::from_be_bytes(u32_bytes);
+
+                reader.read_exact(&mut u32_bytes)?;
+                let frames_per_packet = u32::from_be_bytes(u32_bytes);
+
+                reader.read_exact(&mut u32_bytes)?;
+                let channels_per_frame = u32::from_be_bytes(u32_bytes);
+
+                reader.read_exact(&mut u32_bytes)?;
+                let bits_per_channel = u32::from_be_bytes(u32_bytes);
+
+                // Extract endianness from format flags
+                // Bit 1: kLinearPCMFormatFlagIsLittleEndian
+                endianness = if format_flags & (1 << 1) != 0 {
+                    Endianness::LittleEndian
+                } else {
+                    Endianness::BigEndian
+                };
+
+                audio_format = Some(AudioFormat {
+                    sample_rate,
+                    format_id,
+                    format_flags,
+                    bytes_per_packet,
+                    frames_per_packet,
+                    channels_per_frame,
+                    bits_per_channel,
+                });
+            }
+            b"chan" => {
+                // Channel layout chunk - skip for now since it's complex to parse
+                reader.seek(SeekFrom::Current(chunk_size as i64))?;
+            }
+            b"data" => {
+                // Data chunk found!
+                data_size_position = Some(current_pos + 4); // Position after chunk type
+
+                // Skip the chunk size (already read) and edit count (4 bytes)
+                let mut u32_bytes = [0u8; 4];
+                reader.read_exact(&mut u32_bytes)?;
+                let _edit_count = u32::from_be_bytes(u32_bytes);
+                data_chunk_start = Some(reader.stream_position()?);
+
+                // We found the data chunk, we can stop parsing
+                break;
+            }
+            _ => {
+                // Skip unknown chunks
+                reader.seek(SeekFrom::Current(chunk_size as i64))?;
+            }
+        }
+    }
+
+    let data_size_position = data_size_position.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "CAF file does not contain a data chunk",
+        )
+    })?;
+
+    let data_chunk_start = data_chunk_start.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "CAF file data chunk is malformed",
+        )
+    })?;
+
+    Ok(CAFFileInfo {
+        data_size_position,
+        data_chunk_start,
+        audio_format,
+        channel_layout,
+        endianness,
+    })
 }
 
 impl<W: Write + Seek> CAFWriter<W> {
@@ -355,7 +493,54 @@ impl<W: Write + Seek> CAFWriter<W> {
             data_size_position: None,
             data_written: 0,
             finished: false,
+            endianness: Endianness::BigEndian, // Default CAF endianness
         }
+    }
+
+    /// Create a CAF writer from an existing CAF file, resuming at the end
+    pub fn from_existing_file(mut writer: W) -> io::Result<Self>
+    where
+        W: Read,
+    {
+        // Parse the existing CAF file to get positions
+        let file_info = {
+            let current_pos = writer.stream_position()?;
+            writer.seek(SeekFrom::Start(0))?;
+            let info = parse_caf_file(&mut writer)?;
+            writer.seek(SeekFrom::Start(current_pos))?;
+            info
+        };
+
+        // Seek to the end of the file to resume writing
+        writer.seek(SeekFrom::End(0))?;
+
+        Ok(Self {
+            writer,
+            audio_format: file_info.audio_format,
+            channel_layout: file_info.channel_layout,
+            data_chunk_start: Some(file_info.data_chunk_start),
+            data_size_position: Some(file_info.data_size_position),
+            data_written: 0, // Will be calculated dynamically in finish()
+            finished: false,
+            endianness: file_info.endianness,
+        })
+    }
+
+    /// Create a CAF writer from parsed file info and a writer positioned at the end
+    pub fn from_parsed_info(mut writer: W, file_info: CAFFileInfo) -> io::Result<Self> {
+        // Seek to the end of the file to resume writing
+        writer.seek(SeekFrom::End(0))?;
+
+        Ok(Self {
+            writer,
+            audio_format: file_info.audio_format,
+            channel_layout: file_info.channel_layout,
+            data_chunk_start: Some(file_info.data_chunk_start),
+            data_size_position: Some(file_info.data_size_position),
+            data_written: 0, // Will be calculated dynamically in finish()
+            finished: false,
+            endianness: file_info.endianness,
+        })
     }
 
     /// Helper method to check if writer is already finished
@@ -436,6 +621,9 @@ impl<W: Write + Seek> CAFWriter<W> {
             channels_per_frame: channels,
             bits_per_channel,
         });
+
+        // Store the endianness for use in data writing
+        self.endianness = endianness;
         Ok(())
     }
 
@@ -512,11 +700,19 @@ impl<W: Write + Seek> CAFWriter<W> {
         }
 
         let data_size_pos = self.get_data_size_position()?;
+        let data_start = self.data_chunk_start.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Must call write_header() before finish()",
+            )
+        })?;
 
         let current_pos = self.writer.stream_position()?;
 
-        // Calculate the data chunk size (data written + 4 bytes for edit count)
-        let chunk_size = self.data_written + 4;
+        // Calculate the actual data size from file positions
+        // This works even when resuming from an existing file
+        let actual_data_size = current_pos - data_start;
+        let chunk_size = actual_data_size + 4; // + 4 bytes for edit count
 
         // Seek back to data size position and update it
         self.writer.seek(SeekFrom::Start(data_size_pos))?;
@@ -585,9 +781,18 @@ impl<W: Write + Seek> CAFWriter<W> {
         let mut buffer = Vec::with_capacity(samples.len() * 3);
 
         for &sample in samples {
-            // Convert i32 to 24-bit big-endian (CAF standard)
-            let bytes = sample.to_be_bytes();
-            buffer.extend_from_slice(&bytes[1..4]); // Skip the most significant byte for 24-bit
+            match self.endianness {
+                Endianness::BigEndian => {
+                    // Convert i32 to 24-bit big-endian
+                    let bytes = sample.to_be_bytes();
+                    buffer.extend_from_slice(&bytes[1..4]); // Skip the most significant byte for 24-bit
+                }
+                Endianness::LittleEndian => {
+                    // Convert i32 to 24-bit little-endian
+                    let bytes = sample.to_le_bytes();
+                    buffer.extend_from_slice(&bytes[0..3]); // Take the 3 least significant bytes
+                }
+            }
         }
 
         self.write_data(&buffer)
@@ -704,6 +909,200 @@ mod tests {
         assert_eq!(stats.data_written, 6); // 2 samples × 3 bytes each
 
         writer.finish()?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_endianness_detection_big_endian() -> io::Result<()> {
+        let buffer = Vec::new();
+        let cursor = Cursor::new(buffer);
+        let mut writer = CAFWriter::new(cursor);
+
+        // Configure for big-endian (default CAF)
+        writer.set_audio_format_with_options(
+            48000.0,
+            2,
+            24,
+            PCMDataType::SignedInteger,
+            Endianness::BigEndian,
+        )?;
+        writer.write_header()?;
+        writer.finish()?;
+
+        // Get the buffer back and parse it
+        let cursor = writer.into_inner()?;
+        let buffer = cursor.into_inner();
+        let cursor = Cursor::new(buffer);
+
+        let file_info = parse_caf_file(cursor)?;
+        assert_eq!(file_info.endianness, Endianness::BigEndian);
+        assert!(file_info.audio_format.is_some());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_endianness_detection_little_endian() -> io::Result<()> {
+        let buffer = Vec::new();
+        let cursor = Cursor::new(buffer);
+        let mut writer = CAFWriter::new(cursor);
+
+        // Configure for little-endian (like wrapped PCM)
+        writer.set_audio_format_with_options(
+            48000.0,
+            2,
+            24,
+            PCMDataType::SignedInteger,
+            Endianness::LittleEndian,
+        )?;
+        writer.write_header()?;
+        writer.finish()?;
+
+        // Get the buffer back and parse it
+        let cursor = writer.into_inner()?;
+        let buffer = cursor.into_inner();
+        let cursor = Cursor::new(buffer);
+
+        let file_info = parse_caf_file(cursor)?;
+        assert_eq!(file_info.endianness, Endianness::LittleEndian);
+        assert!(file_info.audio_format.is_some());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_caf_writer_from_existing_file() -> io::Result<()> {
+        // First, create a CAF file with little-endian format
+        let buffer = Vec::new();
+        let cursor = Cursor::new(buffer);
+        let mut writer = CAFWriter::new(cursor);
+
+        writer.set_audio_format_with_options(
+            48000.0,
+            2,
+            24,
+            PCMDataType::SignedInteger,
+            Endianness::LittleEndian,
+        )?;
+        writer.write_header()?;
+
+        // Write some initial data
+        let initial_samples = vec![0x123456i32, 0x789ABCi32];
+        writer.write_pcm_24bit_as_packed(&initial_samples)?;
+        writer.finish()?;
+
+        // Get the buffer
+        let cursor = writer.into_inner()?;
+        let buffer = cursor.into_inner();
+
+        // Now create a new writer from the existing file
+        let cursor = Cursor::new(buffer);
+        let mut resumed_writer = CAFWriter::from_existing_file(cursor)?;
+
+        // Verify it detected the correct endianness
+        assert_eq!(resumed_writer.endianness, Endianness::LittleEndian);
+
+        // Write additional data
+        let additional_samples = vec![0xABCDEFi32, 0x111222i32];
+        resumed_writer.write_pcm_24bit_as_packed(&additional_samples)?;
+        resumed_writer.finish()?;
+
+        // Get the final buffer and verify the data size is correct
+        let cursor = resumed_writer.into_inner()?;
+        let final_buffer = cursor.into_inner();
+        let cursor = Cursor::new(final_buffer);
+
+        let file_info = parse_caf_file(cursor)?;
+        assert_eq!(file_info.endianness, Endianness::LittleEndian);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_pcm_endianness_conversion() -> io::Result<()> {
+        // Test big-endian sample conversion
+        let buffer = Vec::new();
+        let cursor = Cursor::new(buffer);
+        let mut be_writer = CAFWriter::new(cursor);
+        be_writer.set_audio_format_with_options(
+            48000.0,
+            1,
+            24,
+            PCMDataType::SignedInteger,
+            Endianness::BigEndian,
+        )?;
+        be_writer.write_header()?;
+
+        let sample = 0x123456i32;
+        be_writer.write_pcm_24bit_as_packed(&[sample])?;
+        be_writer.finish()?;
+
+        let cursor = be_writer.into_inner()?;
+        let be_buffer = cursor.into_inner();
+
+        // Test little-endian sample conversion
+        let buffer = Vec::new();
+        let cursor = Cursor::new(buffer);
+        let mut le_writer = CAFWriter::new(cursor);
+        le_writer.set_audio_format_with_options(
+            48000.0,
+            1,
+            24,
+            PCMDataType::SignedInteger,
+            Endianness::LittleEndian,
+        )?;
+        le_writer.write_header()?;
+
+        le_writer.write_pcm_24bit_as_packed(&[sample])?;
+        le_writer.finish()?;
+
+        let cursor = le_writer.into_inner()?;
+        let le_buffer = cursor.into_inner();
+
+        // The PCM data should be different due to endianness
+        assert_ne!(be_buffer, le_buffer);
+
+        // Parse both and verify endianness
+        let be_info = parse_caf_file(Cursor::new(&be_buffer))?;
+        let le_info = parse_caf_file(Cursor::new(&le_buffer))?;
+
+        assert_eq!(be_info.endianness, Endianness::BigEndian);
+        assert_eq!(le_info.endianness, Endianness::LittleEndian);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_caf_parsing_positions() -> io::Result<()> {
+        let buffer = Vec::new();
+        let cursor = Cursor::new(buffer);
+        let mut writer = CAFWriter::new(cursor);
+
+        writer.configure_audio_format(48000, 2, 24)?;
+        writer.write_header()?;
+
+        // Write some data
+        let samples = vec![0x123456i32; 100]; // 100 samples
+        writer.write_pcm_24bit_as_packed(&samples)?;
+        writer.finish()?;
+
+        // Parse the file and verify positions
+        let cursor = writer.into_inner()?;
+        let buffer = cursor.into_inner();
+        let cursor = Cursor::new(buffer.clone());
+
+        let file_info = parse_caf_file(cursor)?;
+
+        // Verify that positions are reasonable
+        assert!(file_info.data_size_position > 8); // After CAF header
+        assert!(file_info.data_chunk_start > file_info.data_size_position + 8); // After data chunk header
+
+        // Verify that the calculated data size matches what we wrote
+        let expected_data_size = 100 * 3; // 100 samples × 3 bytes each
+        let file_size = buffer.len() as u64;
+        let actual_data_size = file_size - file_info.data_chunk_start;
+        assert_eq!(actual_data_size, expected_data_size as u64);
 
         Ok(())
     }
