@@ -241,8 +241,8 @@ impl RestartHeader {
                             & 0xFFFF;
 
                         info!(
-                            "Valid seamless branch. Latency in access unit before branch is {} samples, \
-                        latency at branch is {} samples",
+                            "AU {}: Valid seamless branch. Latency {} -> {}",
+                            state.au_counter,
                             state.substream_state()?.prev_latency,
                             state.output_timing.wrapping_sub(state.input_timing) & 0xFFFF,
                         );
@@ -252,28 +252,34 @@ impl RestartHeader {
 
                     if !c1 {
                         warn!(
-                            "advance[n]>advance[n-1]+3*samples_per_au/4, \
+                            "AU {}: advance[n]>advance[n-1]+3*samples_per_au/4, \
                             ({advance} > {prev_advance} + {})",
+                            state.au_counter,
                             3 * (samples_per_au >> 2)
                         );
                     }
 
                     if !c2 {
                         warn!(
-                            "advance[n]>advance[n-1]+samples_per_au-duration[n-1], \
-                            ({advance} > {prev_advance} + {samples_per_au} - {prev_fifo_duration})"
+                            "AU {}: advance[n]>advance[n-1]+samples_per_au-duration[n-1], \
+                            ({advance} > {prev_advance} + {samples_per_au} - {prev_fifo_duration})",
+                            state.au_counter
                         );
                     }
 
                     if !c3 {
                         warn!(
-                            "advance[n]>samples_per_75ms-samples_per_au, \
-                            ({advance} > {samples_per_75ms} - {samples_per_au})"
+                            "AU {}: advance[n]>samples_per_75ms-samples_per_au, \
+                            ({advance} > {samples_per_75ms} - {samples_per_au})",
+                            state.au_counter
                         );
                     }
 
                     if !c4 {
-                        warn!("data_rate exceeds peak_data_rate after adjusting timing for jump");
+                        warn!(
+                            "AU {}: data_rate exceeds peak_data_rate after adjusting timing for jump",
+                            state.au_counter
+                        );
                     }
 
                     log_or_err!(
@@ -430,7 +436,9 @@ impl RestartHeader {
     }
 
     pub fn update_decoder_state(&self, state: &mut DecoderState) -> Result<()> {
-        if state.valid && state.substream_index == state.presentation {
+        let valid = state.valid;
+
+        if valid && state.substream_index == state.presentation {
             let substream_info = state.substream_info;
             if match state.substream_index {
                 0 => true,
@@ -439,7 +447,7 @@ impl RestartHeader {
                 3 => substream_info >> 7 != 0,
                 _ => bail!(RestartHeaderError::InvalidStream),
             } {
-                let mut lossless_check_i32 = state.substream_state()?.lossless_check_i32;
+                let mut lossless_check_i32 = state.substream_state()?.lossless_check_i32_accum;
                 lossless_check_i32 ^= lossless_check_i32 >> 16;
                 lossless_check_i32 ^= lossless_check_i32 >> 8;
                 lossless_check_i32 &= 0xFF;
@@ -464,11 +472,19 @@ impl RestartHeader {
             }
         }
 
+        if valid
+            && !state.has_duplicate_timing
+            && state.substream_state()?.output_timing == self.output_timing
+        {
+            state.has_duplicate_timing = true;
+        }
+
         state.reset_decoder_substream_state();
 
         let ss_state = state.substream_state_mut()?;
 
         ss_state.restart_sync_word = self.restart_sync_word as u16;
+        ss_state.output_timing = self.output_timing;
         ss_state.min_chan = self.min_chan as usize;
         ss_state.max_chan = self.max_chan as usize;
         ss_state.max_matrix_chan = self.max_matrix_chan as usize;
