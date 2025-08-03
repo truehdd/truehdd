@@ -1,4 +1,6 @@
 use anyhow::Result;
+use chrono::TimeZone;
+use std::env;
 use std::fs;
 use std::process::Command;
 use vergen_gitcl::{Emitter, GitclBuilder};
@@ -21,9 +23,14 @@ fn main() -> Result<()> {
     }
 
     // Add build timestamp
+    let now = match env::var("SOURCE_DATE_EPOCH") {
+        Ok(val) => { chrono::Utc.timestamp_opt(val.parse::<i64>().unwrap(), 0).unwrap() }
+        Err(_) => chrono::Utc::now(),
+    };
+
     println!(
         "cargo:rustc-env=BUILD_TIMESTAMP={}",
-        chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+        now.format("%Y-%m-%d %H:%M:%S UTC")
     );
 
     // Get truehd library version using cargo metadata
