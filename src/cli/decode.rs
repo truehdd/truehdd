@@ -293,7 +293,6 @@ pub fn cmd_decode(args: &DecodeArgs, cli: &Cli, multi: Option<&MultiProgress>) -
     let mut damf_metadata_file_writer: Option<BufWriter<File>> = None;
 
     let mut has_atmos = false;
-    let mut temp_oamd: Option<truehd::structs::oamd::ObjectAudioMetadataPayload> = None; // Store one temp OAMD for header generation
 
     let mut prev_events = Vec::new();
     let mut decoded_frames = 0;
@@ -391,8 +390,27 @@ pub fn cmd_decode(args: &DecodeArgs, cli: &Cli, multi: Option<&MultiProgress>) -
                         }
                     }
 
-                    if temp_oamd.is_none() {
-                        temp_oamd = Some(oamd.clone());
+                    // Create DAMF header file when we first detect Atmos
+                    if !was_atmos {
+                        if let Some(ref base_path) = base_path {
+                            let header_path = {
+                                let mut path = base_path.clone();
+                                let new_name = format!(
+                                    "{}.atmos",
+                                    base_path.file_name().unwrap().to_string_lossy()
+                                );
+                                path.set_file_name(new_name);
+                                path
+                            };
+
+                            log::info!("Creating DAMF header file: {}", header_path.display());
+                            let mut header_writer = BufWriter::new(File::create(header_path)?);
+
+                            let damf_data = Data::with_oamd_payload(&oamd, base_path);
+                            let header_str = &damf_data.serialize_damf();
+                            write!(header_writer, "{header_str}")?;
+                            header_writer.flush()?;
+                        }
                     }
 
                     let mut conf = Configuration::with_oamd_payload(&oamd, sample_rate, sample_pos);
@@ -525,27 +543,6 @@ pub fn cmd_decode(args: &DecodeArgs, cli: &Cli, multi: Option<&MultiProgress>) -
         writer.flush()?;
     }
 
-    if let Some(ref base_path) = base_path {
-        if has_atmos {
-            if let Some(temp_oamd_data) = temp_oamd {
-                let header_path = {
-                    let mut path = base_path.clone();
-                    let new_name =
-                        format!("{}.atmos", base_path.file_name().unwrap().to_string_lossy());
-                    path.set_file_name(new_name);
-                    path
-                };
-
-                log::info!("Creating DAMF header file: {}", header_path.display());
-                let mut header_writer = BufWriter::new(File::create(header_path)?);
-
-                let damf_data = Data::with_oamd_payload(&temp_oamd_data, base_path);
-                let header_str = &damf_data.serialize_damf();
-                write!(header_writer, "{header_str}")?;
-                header_writer.flush()?;
-            }
-        }
-    }
 
     // Wait for decode thread to complete
     match decode_thread.join() {
