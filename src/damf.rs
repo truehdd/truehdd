@@ -234,15 +234,14 @@ impl Data {
                 channels: bed
                     .to_index_vec()
                     .iter()
-                    .map(|&i| {
-                        Channel {
-                            channel: format!("{:?}", SpeakerLabels::from_u8(i as u8).unwrap()),
-                            id: if i < 10 {
-                                i
-                            } else {
-                                i + 128 // unusual bed objects are assigned to the end
-                            } as u32,
-                        }
+                    .map(|&i| Channel {
+                        channel: format!("{:?}", SpeakerLabels::from_u8(i as u8).unwrap()),
+                        id: match i {
+                            0..8 => i,
+                            8..10 => i + 122,
+                            10..12 => i - 2,
+                            _ => i + 120,
+                        } as u32,
                     })
                     .collect(),
             })
@@ -384,8 +383,13 @@ impl Configuration {
             let id = if object_data.b_object_in_bed_or_isf {
                 let index = bed_index_vec[i];
 
-                // assign unusual bed objects to the end
-                if index >= 10 { index + 128 } else { index }
+                // assign unusual bed objects to the end (skip 128 & 129)
+                match index {
+                    0..8 => index,
+                    8..10 => index + 122,
+                    10..12 => index - 2,
+                    _ => index + 120,
+                }
             } else {
                 i + 10 - bed_index_vec.len()
             };
