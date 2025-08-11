@@ -24,9 +24,7 @@ fn main() -> Result<()> {
 
     // Add build timestamp
     let now = match env::var("SOURCE_DATE_EPOCH") {
-        Ok(val) => chrono::Utc
-            .timestamp_opt(val.parse::<i64>().unwrap(), 0)
-            .unwrap(),
+        Ok(val) => chrono::Utc.timestamp_opt(val.parse::<i64>()?, 0).unwrap(),
         Err(_) => chrono::Utc::now(),
     };
 

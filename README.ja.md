@@ -89,9 +89,11 @@ TrueHD ストリームを PCM 音声にデコードする。
 
 オプション:
       --output-path <PATH>       音声およびメタデータファイルの出力パス
-      --format <FORMAT>          音声出力形式 [デフォルト: caf] [可能な値: caf, pcm]
+      --format <FORMAT>          音声出力形式（プレゼンテーション3では常にCAFが使用され、このオプションは無視される）
+                             [デフォルト: caf] [可能な値: caf, pcm, w64]
       --presentation <INDEX>     プレゼンテーションインデックス (0-3) [デフォルト: 3]
-      --no-estimate-progress     進捗推定を無効化   
+      --no-estimate-progress     進捗推定を無効化
+  --bed-conform              Atmosコンテンツのベッド適合を有効化
 ...
 ```
 
@@ -103,12 +105,15 @@ TrueHD ストリームを PCM 音声にデコードする。
 - **チャンネルプレゼンテーション：** プレゼンテーションインデックス 0、1、または 2 の以下のファイルのいずれか
   - `output.caf` - Core Audio Format での PCM データ
   - `output.pcm` - Raw の PCM データ（`--format pcm` を使用した場合）
+  - `output.wav` - Wave64 形式（`--format w64` を使用した場合）
 
 
 - **オブジェクトプレゼンテーション：** プレゼンテーションインデックス 3 の Dolby Atmos マスターファイルセット（存在する場合）
   1. `output.atmos` - プレゼンテーションに関する基本情報
   2. `output.atmos.audio` - すべてのベッド信号とオブジェクトのオーディオ、Core Audio Format で
   3. `output.atmos.metadata` - 静的および動的信号の 3D 位置座標
+
+  **注意：** プレゼンテーション3では `--format` オプションに関係なく常にCAF形式が使用される。`--bed-conform` を使用してベッドチャンネルを7.1.2レイアウトに変換する。
 
 **使用例:**
 ```bash

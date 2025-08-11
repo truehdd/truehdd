@@ -15,6 +15,7 @@ mod cli;
 mod damf;
 mod input;
 pub(crate) mod timestamp;
+mod wav;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();

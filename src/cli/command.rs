@@ -59,7 +59,7 @@ pub struct DecodeArgs {
     #[arg(long, value_name = "PATH")]
     pub output_path: Option<PathBuf>,
 
-    /// Audio format for output.
+    /// Audio format for output (ignored for presentation 3 which always uses CAF).
     #[arg(long, value_enum, default_value_t = AudioFormat::Caf)]
     pub format: AudioFormat,
 
@@ -70,6 +70,10 @@ pub struct DecodeArgs {
     /// Disable progress estimation
     #[arg(long)]
     pub no_estimate_progress: bool,
+
+    /// Enable bed conformance for Atmos content
+    #[arg(long)]
+    pub bed_conform: bool,
 }
 
 #[derive(Debug, Args)]
@@ -123,4 +127,6 @@ pub enum AudioFormat {
     Caf,
     /// Raw PCM format (24-bit little-endian).
     Pcm,
+    /// Wave64 format (.wav extension).
+    W64,
 }

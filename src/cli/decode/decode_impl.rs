@@ -1,7 +1,7 @@
 use super::decoder_thread::{DecoderThreadConfig, spawn_decoder_thread};
 use super::handler::{DecodeHandler, FrameHandlerContext, WriterState};
 use super::progress::{create_progress_bar, estimate_total_frames};
-use crate::cli::command::{Cli, DecodeArgs};
+use crate::cli::command::{AudioFormat, Cli, DecodeArgs};
 use anyhow::Result;
 use indicatif::{MultiProgress, ProgressStyle};
 use log::Level;
@@ -94,15 +94,28 @@ pub fn cmd_decode(args: &DecodeArgs, cli: &Cli, multi: Option<&MultiProgress>) -
     let mut handler = DecodeHandler::default();
     let start_time = std::time::Instant::now();
 
+    let effective_format = if args.presentation == 3 {
+        if args.format != AudioFormat::Caf {
+            log::info!(
+                "Forcing CAF format for presentation 3, ignoring --format {:?}",
+                args.format
+            );
+        }
+        AudioFormat::Caf
+    } else {
+        args.format
+    };
+
     while let Ok(result) = rx.recv() {
         match result {
             Ok(decoded) => {
                 let ctx = FrameHandlerContext {
                     base_path: &base_path,
-                    format: args.format,
+                    format: effective_format,
                     pb: &pb,
                     state: &state,
                     start_time,
+                    bed_conform: args.bed_conform,
                 };
                 handler.handle_decoded_frame(decoded, &ctx)?;
             }

@@ -7,8 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Wave64 (w64) format support for audio output with `.wav` extension
+- `--bed-conform` flag for Dolby Atmos content to conform bed channels to 7.1.2 layout
+
 ### Changed
+- **BREAKING**: `--format` option is now ignored for presentation 3, which always uses CAF format
 - DAMF header files are now created immediately when Atmos is detected rather than at the end of processing
+- Build timestamps now respect SOURCE_DATE_EPOCH for reproducible builds (thanks @alextjam)
+
+### Fixed
+- Corrected bed channel assignments for 7.1.2 configuration in Atmos content
 
 ## [0.1.3] - 2025-08-03
 

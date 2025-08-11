@@ -203,7 +203,7 @@ struct Object {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct BedInstance {
+pub struct BedInstance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -211,21 +211,13 @@ struct BedInstance {
     channels: Vec<Channel>,
 }
 
-impl Data {
-    pub fn serialize_damf(&self) -> String {
-        format_yaml_string(serde_yaml_ng::to_string(self).unwrap())
+impl BedInstance {
+    pub fn to_index_vec(&self) -> Vec<usize> {
+        self.channels.iter().map(|x| x.id as usize).collect()
     }
-    pub fn with_oamd_payload(oamd: &ObjectAudioMetadataPayload, base_path: &Path) -> Self {
-        let presentation_type = PresentationType::Home;
 
-        let base_name = base_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap();
-
-        // TODO: move elsewhere?
-        let bed_instances = oamd
-            .program_assignment
+    pub fn with_oamd_payload(oamd: &ObjectAudioMetadataPayload) -> Vec<Self> {
+        oamd.program_assignment
             .bed_assignment
             .iter()
             .map(|bed| BedInstance {
@@ -245,7 +237,55 @@ impl Data {
                     })
                     .collect(),
             })
-            .collect();
+            .collect()
+    }
+}
+
+impl Data {
+    pub fn serialize_damf(&self) -> String {
+        format_yaml_string(serde_yaml_ng::to_string(self).unwrap())
+    }
+
+    pub fn with_oamd_payload_bed_conform(
+        oamd: &ObjectAudioMetadataPayload,
+        base_path: &Path,
+    ) -> Self {
+        let mut data = Self::with_oamd_payload(oamd, base_path);
+
+        if let Some(presentation) = data.presentations.first_mut() {
+            presentation.bed_instances = vec![BedInstance {
+                description: None,
+                group_name: None,
+                channels: (0..10)
+                    .map(|i| Channel {
+                        channel: format!(
+                            "{:?}",
+                            SpeakerLabels::from_u8(match i {
+                                0..8 => i,
+                                8..10 => i + 2,
+                                _ => unreachable!(),
+                            })
+                            .unwrap()
+                        ),
+                        id: i as u32,
+                    })
+                    .collect(),
+            }];
+        }
+
+        data
+    }
+
+    pub fn with_oamd_payload(oamd: &ObjectAudioMetadataPayload, base_path: &Path) -> Self {
+        let presentation_type = PresentationType::Home;
+
+        let base_name = base_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap();
+
+        // TODO: move elsewhere?
+        let bed_instances = BedInstance::with_oamd_payload(oamd);
 
         let objects = (0..oamd.program_assignment.num_dynamic_objects)
             .map(|i| Object {

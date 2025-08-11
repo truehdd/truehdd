@@ -88,9 +88,11 @@ truehdd info movie.thd
 
 选项:
       --output-path <PATH>       音频和元数据文件的输出路径
-      --format <FORMAT>          音频输出格式 [默认: caf] [可选值: caf, pcm]
+      --format <FORMAT>          音频输出格式（表现索引3忽略此选项，始终使用CAF格式）
+                             [默认: caf] [可选值: caf, pcm, w64]
       --presentation <INDEX>     表现索引 (0-3) [默认: 3]
       --no-estimate-progress     禁用进度估计
+  --bed-conform              启用Atmos内容的声床适配
 ...
 ```
 
@@ -102,12 +104,15 @@ truehdd info movie.thd
 - **通道表现：** 以下文件之一，表现索引为 0、1 或 2
   - `output.caf` - Core Audio 格式封装的 PCM 数据
   - `output.pcm` - 原始 PCM 数据（需指定 `--format pcm`）
+  - `output.wav` - Wave64 格式（需指定 `--format w64`）
 
 
 - **对象表现：** Dolby Atmos 母版文件，表现索引为 3 （如果存在）
   1. `output.atmos` - 表现的基本信息
   2. `output.atmos.audio` - 所有声床和对象的 PCM 数据，采用 Core Audio 格式
   3. `output.atmos.metadata` - 静态和动态信号的 3D 位置坐标
+
+  **注意：** 表现索引3无视 `--format` 选项，始终使用CAF格式。使用 `--bed-conform` 将声床通道转换为7.1.2布局。
 
 **使用示例：**
 ```bash

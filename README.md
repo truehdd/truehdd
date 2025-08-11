@@ -90,9 +90,11 @@ Arguments:
 
 Options:
       --output-path <PATH>       Output path for audio and metadata files
-      --format <FORMAT>          Audio format for output [default: caf] [possible values: caf, pcm]
+      --format <FORMAT>          Audio format for output (ignored for presentation 3 which always uses CAF)
+                             [default: caf] [possible values: caf, pcm, w64]
       --presentation <INDEX>     Presentation index (0-3) [default: 3]
       --no-estimate-progress     Disable progress estimation
+  --bed-conform              Enable bed conformance for Atmos content
 ...
 ```
 
@@ -104,12 +106,15 @@ When `--output-path` is specified, the tool generates appropriate output files:
 - **Channel presentation:** One of the following files, with presentation index 0, 1, or 2
   - `output.caf` - PCM data in Core Audio Format
   - `output.pcm` - Raw PCM (if `--format pcm`)
+  - `output.wav` - Wave64 format (if `--format w64`)
 
 
 - **Object presentation:** Dolby Atmos master file set, with presentation index 3 (if available)
   1. `output.atmos` - Essential information about the presentation
   2. `output.atmos.audio` - Audio for all bed signals and objects in Core Audio format
   3. `output.atmos.metadata` - 3D positional coordinates for static and dynamic signals
+
+  **Note:** Presentation 3 always uses CAF format regardless of `--format` option. Use `--bed-conform` to convert bed channels to 7.1.2 layout.
 
 **Examples:**
 ```bash
