@@ -89,10 +89,12 @@ truehdd info movie.thd
 选项:
       --output-path <PATH>       音频和元数据文件的输出路径
       --format <FORMAT>          音频输出格式（表现索引3忽略此选项，始终使用CAF格式）
-                             [默认: caf] [可选值: caf, pcm, w64]
+                                 [默认: caf] [可选值: caf, pcm, w64]
       --presentation <INDEX>     表现索引 (0-3) [默认: 3]
       --no-estimate-progress     禁用进度估计
-  --bed-conform              启用Atmos内容的声床适配
+      --bed-conform              启用Atmos内容的声床适配
+      --warp-mode <WARP_MODE>    指定元数据中不存在时的环绕声像延展 (warp) 模式
+                                 [可选值: normal, warping, prologiciix, loro]
 ...
 ```
 
@@ -114,10 +116,24 @@ truehdd info movie.thd
 
   **注意：** 表现索引3无视 `--format` 选项，始终使用CAF格式。使用 `--bed-conform` 将声床通道转换为7.1.2布局。
 
+**声像延展模式选项：**
+
+`--warp-mode` 选项控制当 Dolby Atmos 内容的元数据中不包含声像延展模式信息时的降混处理方式：
+
+- `normal` - 直接渲染
+- `warping` - 带房间平衡的直接渲染
+- `prologiciix` - Dolby Pro Logic IIx
+- `loro` - 标准（Lo/Ro）
+
+此选项仅在原始 OAMD 元数据缺少声像延展模式信息时生效。如果元数据中已包含声像延展模式，此选项将被忽略。
+
 **使用示例：**
 ```bash
 # 解码 TrueHD 流并显示进度
 truehdd decode --progress audio.thd --output-path decoded_audio
+
+# 为缺少声像延展模式元数据的内容指定特定模式进行解码
+truehdd decode --warp-mode prologiciix audio.thd --output-path decoded_audio
 
 # 从 ffmpeg 管道解码
 ffmpeg -i movie.mkv -c copy -f truehd - | truehdd decode - --output-path audio

@@ -17,9 +17,20 @@ fn write_damf_header_to_file(header_path: &Path, damf_data: &Data) -> Result<()>
 pub fn create_damf_header_file(
     base_path: &Path,
     oamd: &truehd::structs::oamd::ObjectAudioMetadataPayload,
+    warp_mode: Option<crate::cli::command::WarpMode>,
 ) -> Result<()> {
     let header_path = create_path_with_suffix(base_path, "atmos");
-    let damf_data = Data::with_oamd_payload(oamd, base_path);
+    let mut damf_data = Data::with_oamd_payload(oamd, base_path);
+
+    // Override warp_mode if specified and not present in metadata
+    if let Some(cli_warp_mode) = warp_mode {
+        if let Some(presentation) = damf_data.presentations_mut().first_mut() {
+            if presentation.warp_mode.is_none() {
+                presentation.warp_mode = Some(cli_warp_mode.into());
+            }
+        }
+    }
+
     write_damf_header_to_file(&header_path, &damf_data)
 }
 
@@ -30,8 +41,19 @@ pub fn create_atmos_header_path(base_path: &Path) -> PathBuf {
 pub fn rewrite_damf_header_for_bed_conform(
     base_path: &Path,
     oamd: &truehd::structs::oamd::ObjectAudioMetadataPayload,
+    warp_mode: Option<crate::cli::command::WarpMode>,
 ) -> Result<()> {
     let header_path = create_atmos_header_path(base_path);
-    let damf_data = Data::with_oamd_payload_bed_conform(oamd, base_path);
+    let mut damf_data = Data::with_oamd_payload_bed_conform(oamd, base_path);
+
+    // Override warp_mode if specified and not present in metadata
+    if let Some(cli_warp_mode) = warp_mode {
+        if let Some(presentation) = damf_data.presentations_mut().first_mut() {
+            if presentation.warp_mode.is_none() {
+                presentation.warp_mode = Some(cli_warp_mode.into());
+            }
+        }
+    }
+
     write_damf_header_to_file(&header_path, &damf_data)
 }

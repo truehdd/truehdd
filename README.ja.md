@@ -90,10 +90,12 @@ TrueHD ストリームを PCM 音声にデコードする。
 オプション:
       --output-path <PATH>       音声およびメタデータファイルの出力パス
       --format <FORMAT>          音声出力形式（プレゼンテーション3では常にCAFが使用され、このオプションは無視される）
-                             [デフォルト: caf] [可能な値: caf, pcm, w64]
+                                 [デフォルト: caf] [可能な値: caf, pcm, w64]
       --presentation <INDEX>     プレゼンテーションインデックス (0-3) [デフォルト: 3]
       --no-estimate-progress     進捗推定を無効化
-  --bed-conform              Atmosコンテンツのベッド適合を有効化
+      --bed-conform              Atmosコンテンツのベッド適合を有効化
+      --warp-mode <WARP_MODE>    メタデータにない場合のワープモードを指定
+                                 [可能な値: normal, warping, prologiciix, loro]
 ...
 ```
 
@@ -115,10 +117,24 @@ TrueHD ストリームを PCM 音声にデコードする。
 
   **注意：** プレゼンテーション3では `--format` オプションに関係なく常にCAF形式が使用される。`--bed-conform` を使用してベッドチャンネルを7.1.2レイアウトに変換する。
 
+**ワープモードオプション:**
+
+`--warp-mode` オプションは、メタデータにワープモード情報がない場合の Dolby Atmos コンテンツのダウンミックス処理方法を制御する：
+
+- `normal` - 直接レンダリング
+- `warping` - ルームバランス付きの直接レンダリング
+- `prologiciix` - Dolby Pro Logic IIx
+- `loro` - 標準（Lo/Ro）
+
+このオプションは、元の OAMD メタデータにワープモード情報がない場合のみ適用される。メタデータに既にワープモードが含まれている場合、このオプションは無視される。
+
 **使用例:**
 ```bash
 # 進捗バー付きで TrueHD ファイルをデコード
 truehdd decode --progress audio.thd --output-path decoded_audio
+
+# メタデータにワープモード情報がないコンテンツに特定のワープモードを指定してデコード
+truehdd decode --warp-mode prologiciix audio.thd --output-path decoded_audio
 
 # ffmpeg パイプからデコード
 ffmpeg -i movie.mkv -c copy -f truehd - | truehdd decode - --output-path audio

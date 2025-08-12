@@ -116,6 +116,7 @@ pub fn cmd_decode(args: &DecodeArgs, cli: &Cli, multi: Option<&MultiProgress>) -
                     state: &state,
                     start_time,
                     bed_conform: args.bed_conform,
+                    warp_mode: args.warp_mode,
                 };
                 handler.handle_decoded_frame(decoded, &ctx)?;
             }

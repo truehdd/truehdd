@@ -74,6 +74,10 @@ pub struct DecodeArgs {
     /// Enable bed conformance for Atmos content
     #[arg(long)]
     pub bed_conform: bool,
+
+    /// Specify warp mode when not present in metadata
+    #[arg(long, value_enum)]
+    pub warp_mode: Option<WarpMode>,
 }
 
 #[derive(Debug, Args)]
@@ -129,4 +133,29 @@ pub enum AudioFormat {
     Pcm,
     /// Wave64 format (.wav extension).
     W64,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum WarpMode {
+    /// Direct render
+    Normal,
+    /// Direct render with room balance
+    Warping,
+    /// Dolby Pro Logic IIx
+    #[value(name = "prologiciix")]
+    ProLogicIIx,
+    /// Standard (Lo/Ro)
+    #[value(name = "loro")]
+    LoRo,
+}
+
+impl From<WarpMode> for crate::damf::WarpMode {
+    fn from(warp_mode: WarpMode) -> Self {
+        match warp_mode {
+            WarpMode::Normal => Self::Normal,
+            WarpMode::Warping => Self::Warping,
+            WarpMode::ProLogicIIx => Self::ProLogicIIx,
+            WarpMode::LoRo => Self::LoRo,
+        }
+    }
 }

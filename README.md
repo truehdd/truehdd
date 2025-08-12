@@ -91,10 +91,12 @@ Arguments:
 Options:
       --output-path <PATH>       Output path for audio and metadata files
       --format <FORMAT>          Audio format for output (ignored for presentation 3 which always uses CAF)
-                             [default: caf] [possible values: caf, pcm, w64]
+                                 [default: caf] [possible values: caf, pcm, w64]
       --presentation <INDEX>     Presentation index (0-3) [default: 3]
       --no-estimate-progress     Disable progress estimation
-  --bed-conform              Enable bed conformance for Atmos content
+      --bed-conform              Enable bed conformance for Atmos content
+      --warp-mode <WARP_MODE>    Specify warp mode when not present in metadata
+                                 [possible values: normal, warping, prologiciix, loro]
 ...
 ```
 
@@ -116,10 +118,24 @@ When `--output-path` is specified, the tool generates appropriate output files:
 
   **Note:** Presentation 3 always uses CAF format regardless of `--format` option. Use `--bed-conform` to convert bed channels to 7.1.2 layout.
 
+**Warp Mode Options:**
+
+The `--warp-mode` option controls how Dolby Atmos content handles downmix rendering when the metadata doesn't specify a warp mode:
+
+- `normal` - Direct render
+- `warping` - Direct render with room balance  
+- `prologiciix` - Dolby Pro Logic IIx
+- `loro` - Standard (Lo/Ro)
+
+This option only applies when the original OAMD metadata lacks warp mode information. If warp mode is already present in the metadata, this option is ignored.
+
 **Examples:**
 ```bash
 # Decode a TrueHD file with progress
 truehdd decode --progress audio.thd --output-path decoded_audio
+
+# Decode with specific warp mode for content missing this metadata
+truehdd decode --warp-mode prologiciix audio.thd --output-path decoded_audio
 
 # Decode from ffmpeg pipe
 ffmpeg -i movie.mkv -c copy -f truehd - | truehdd decode - --output-path audio

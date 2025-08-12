@@ -307,6 +307,7 @@ pub struct FrameHandlerContext<'a> {
     pub state: &'a WriterState,
     pub start_time: std::time::Instant,
     pub bed_conform: bool,
+    pub warp_mode: Option<crate::cli::command::WarpMode>,
 }
 
 impl DecodeHandler {
@@ -332,6 +333,7 @@ impl DecodeHandler {
             ctx.format,
             ctx.state,
             ctx.bed_conform,
+            ctx.warp_mode,
         )?;
 
         let effective_channel_count = if ctx.bed_conform && self.has_atmos {
@@ -367,6 +369,7 @@ impl DecodeHandler {
         format: AudioFormat,
         state: &WriterState,
         bed_conform: bool,
+        warp_mode: Option<crate::cli::command::WarpMode>,
     ) -> Result<()> {
         for oamd in &decoded.oamd {
             let was_atmos = self.has_atmos;
@@ -383,18 +386,20 @@ impl DecodeHandler {
 
                         // Create bed-conformed DAMF header
                         if self.bed_indices.is_some() {
-                            if let Err(e) = rewrite_damf_header_for_bed_conform(base_path, oamd) {
+                            if let Err(e) =
+                                rewrite_damf_header_for_bed_conform(base_path, oamd, warp_mode)
+                            {
                                 log_or_err!(state, Level::Error, e);
                             }
                         } else {
                             // Fallback to regular header if no bed indices
-                            if let Err(e) = create_damf_header_file(base_path, oamd) {
+                            if let Err(e) = create_damf_header_file(base_path, oamd, warp_mode) {
                                 log_or_err!(state, Level::Error, e);
                             }
                         }
                     } else {
                         // Create regular DAMF header
-                        if let Err(e) = create_damf_header_file(base_path, oamd) {
+                        if let Err(e) = create_damf_header_file(base_path, oamd, warp_mode) {
                             log_or_err!(state, Level::Error, e);
                         }
                     }

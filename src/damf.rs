@@ -13,7 +13,7 @@ pub struct Data {
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Presentation {
+pub struct Presentation {
     #[serde(rename = "type")]
     presentation_type: PresentationType,
     simplified: bool,
@@ -45,7 +45,7 @@ struct Presentation {
     )]
     ls_rs_90_deg_phase_shift: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    warp_mode: Option<WarpMode>,
+    pub warp_mode: Option<WarpMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     trim_mode: Option<TrimMode>,
     #[serde(default)]
@@ -87,8 +87,8 @@ enum DownmixMode {
     LtRtPLII,
 }
 
-#[derive(Debug, Deserialize, Serialize, Default)]
-enum WarpMode {
+#[derive(Debug, Deserialize, Serialize, Default, Clone, Copy)]
+pub enum WarpMode {
     #[default]
     #[serde(rename = "normal")]
     Normal,
@@ -244,6 +244,10 @@ impl BedInstance {
 impl Data {
     pub fn serialize_damf(&self) -> String {
         format_yaml_string(serde_yaml_ng::to_string(self).unwrap())
+    }
+
+    pub fn presentations_mut(&mut self) -> &mut Vec<Presentation> {
+        &mut self.presentations
     }
 
     pub fn with_oamd_payload_bed_conform(
