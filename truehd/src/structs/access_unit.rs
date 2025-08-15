@@ -76,6 +76,7 @@ impl AccessUnit {
         state.input_timing_jump = false;
         state.output_timing_jump = false;
         state.peak_data_rate_jump = false;
+        state.has_substream_info_changed = false;
 
         let mut au = Self {
             check_nibble: reader.get_n(4)?,
@@ -226,7 +227,7 @@ impl AccessUnit {
 
         state.au_counter += 1; // TODO: migrate to gap check, should reset on sync check
 
-        au.has_valid_branch = state.has_valid_branch;
+        au.has_valid_branch = state.has_valid_branch || state.has_substream_info_changed;
 
         Ok(au)
     }

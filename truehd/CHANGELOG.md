@@ -5,6 +5,15 @@ All notable changes to the truehd library crate will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `substream_info_changed` field to `DecodedAccessUnit` and `DecoderState` to track substream info changes
+- `has_substream_info_changed` field to `ParserState` to track substream info changes
+
+### Changed
+- `SubstreamInfoMismatch` and `ExtendedSubstreamInfoMismatch` error level from Error to Warn
+
 ## [0.3.1] - 2025-08-12
 
 ### Fixed
@@ -15,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - AccessUnit struct now includes `has_valid_branch` field to indicate valid branch points
 - Duplicate sample detection at TrueHD stream branch points. DecodedAccessUnit struct now includes `is_duplicate` field. Such access units should be discarded
+
 ### Fixed
 - Lossless check failures are now allowed at valid branch points to prevent false positive warnings
 - Fix iterator borrowing issue in `ParserState::reset_for_branch()` method

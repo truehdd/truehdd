@@ -219,6 +219,7 @@ pub struct ParserState {
     /// 1452
     pub peak_data_rate_jump: bool,
     pub has_valid_branch: bool,
+    pub has_substream_info_changed: bool,
 
     pub variable_rate: bool,
     pub peak_data_rate: usize,
@@ -304,6 +305,7 @@ impl Default for ParserState {
             output_timing_jump: false,
             peak_data_rate_jump: false,
             has_valid_branch: false,
+            has_substream_info_changed: false,
 
             variable_rate: false,
             peak_data_rate: 0,

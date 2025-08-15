@@ -35,7 +35,11 @@ impl Decoder {
             pcm_data: self.state.output_buffer,
             oamd: self.state.oamd.iter().cloned().collect::<Vec<_>>(),
             is_duplicate: self.state.has_duplicate_timing && self.state.has_duplicate_sample,
+            substream_info_changed: self.state.substream_info_changed,
         };
+
+        // Reset the flag after reading it
+        self.state.substream_info_changed = false;
 
         Ok(decoded)
     }
@@ -97,6 +101,12 @@ pub struct DecodedAccessUnit {
     /// checksum match the previous access unit.
     /// Downstream applications may safely discard this frame.
     pub is_duplicate: bool,
+
+    /// Indicates whether this access unit triggered a substream info change.
+    ///
+    /// This is `true` when substream_info or extended_substream_info changed,
+    /// indicating that channel layout may have changed requiring new output files.
+    pub substream_info_changed: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -212,6 +222,7 @@ pub struct DecoderState {
     pub output_buffer: [[i32; 16]; 160],
     pub zero_samples: usize,
     pub oamd: VecDeque<ObjectAudioMetadataPayload>,
+    pub substream_info_changed: bool,
 }
 
 impl Default for DecoderState {
@@ -238,6 +249,7 @@ impl Default for DecoderState {
             output_buffer: [[0; 16]; 160],
             zero_samples: 0,
             oamd: VecDeque::with_capacity(4),
+            substream_info_changed: false,
         }
     }
 }

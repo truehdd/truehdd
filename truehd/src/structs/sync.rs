@@ -307,10 +307,21 @@ impl MajorSyncInfo {
             }
 
             if state.has_parsed_au {
-                if ms.substream_info != state.substream_info {
+                let c1 = ms.substream_info == state.substream_info;
+                let c2 = ms.extended_substream_info == state.extended_substream_info;
+
+                if c1 && c2 {
+                    break 'check_substream_info;
+                }
+
+                state.has_parsed_au = false;
+                state.has_substream_info_changed = true;
+                state.reset_for_branch();
+
+                if !c1 {
                     log_or_err!(
                         state,
-                        Error,
+                        Warn,
                         anyhow!(SyncError::SubstreamInfoMismatch {
                             read: ms.substream_info,
                             expected: state.substream_info
@@ -318,18 +329,16 @@ impl MajorSyncInfo {
                     )
                 }
 
-                if ms.extended_substream_info != state.extended_substream_info {
+                if !c2 {
                     log_or_err!(
                         state,
-                        Error,
+                        Warn,
                         anyhow!(SyncError::ExtendedSubstreamInfoMismatch {
                             read: ms.extended_substream_info,
                             expected: state.extended_substream_info
                         })
                     )
                 }
-
-                break 'check_substream_info;
             }
 
             let extended_substream_info = ms.extended_substream_info & 3;
@@ -477,6 +486,21 @@ impl MajorSyncInfo {
                 "Substream count must be constant: expected {}, found {}",
                 state.substreams, self.substreams
             )
+        }
+
+        // Check for substream info changes that would require new output files
+        if state.valid
+            && (state.substream_info != self.substream_info
+                || state.extended_substream_info != self.extended_substream_info)
+        {
+            log::debug!(
+                "substream_info changed in decoder: {} -> {}, extended_substream_info: {} -> {}",
+                state.substream_info,
+                self.substream_info,
+                state.extended_substream_info,
+                self.extended_substream_info
+            );
+            state.substream_info_changed = true;
         }
 
         state.substreams = self.substreams;
