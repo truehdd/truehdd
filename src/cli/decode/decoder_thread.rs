@@ -4,17 +4,13 @@ use anyhow::Result;
 use indicatif::ProgressBar;
 use std::sync::mpsc;
 use std::thread;
-use truehd::process::{
-    decode::{DecodedAccessUnit, Decoder},
-    extract::Extractor,
-    parse::Parser,
-};
+use truehd::process::{decode::Decoder, extract::Extractor, parse::Parser};
 
 pub struct DecoderThreadConfig {
     pub input_path: std::path::PathBuf,
     pub presentation: u8,
     pub strict_mode: bool,
-    pub tx: mpsc::Sender<Result<DecodedAccessUnit>>,
+    pub tx: mpsc::Sender<Result<truehd::process::decode::DecodedAccessUnit>>,
     pub pb_clone: Option<ProgressBar>,
     pub extractor: Extractor,
     pub parser: Parser,
@@ -37,6 +33,8 @@ pub fn spawn_decoder_thread(config: DecoderThreadConfig) -> thread::JoinHandle<R
         let mut frame_count: u64 = 0;
         let mut total_samples = 0u64;
         let mut frames_processed = 0;
+        let mut current_substream_info: Option<u8> = None;
+        let mut current_extended_substream_info: Option<u8> = None;
 
         let mut input_reader = InputReader::new(&input_path)?;
 
@@ -54,6 +52,8 @@ pub fn spawn_decoder_thread(config: DecoderThreadConfig) -> thread::JoinHandle<R
                 strict_mode,
                 tx: &tx,
                 pb_clone: &pb_clone,
+                current_substream_info: &mut current_substream_info,
+                current_extended_substream_info: &mut current_extended_substream_info,
             };
 
             let should_exit = process_frames(&mut ctx)?;

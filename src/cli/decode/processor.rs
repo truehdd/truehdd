@@ -14,6 +14,8 @@ pub struct ProcessFramesContext<'a> {
     pub strict_mode: bool,
     pub tx: &'a mpsc::Sender<Result<truehd::process::decode::DecodedAccessUnit>>,
     pub pb_clone: &'a Option<ProgressBar>,
+    pub current_substream_info: &'a mut Option<u8>,
+    pub current_extended_substream_info: &'a mut Option<u8>,
 }
 
 pub fn process_frames(ctx: &mut ProcessFramesContext) -> Result<bool> {
@@ -28,11 +30,60 @@ pub fn process_frames(ctx: &mut ProcessFramesContext) -> Result<bool> {
 
                 match ctx.parser.parse(&frame) {
                     Ok(access_unit) => {
+                        // Check for substream_info changes after parsing
+                        let mut substream_info_changed = false;
+                        if let Some(major_sync) = &access_unit.major_sync_info {
+                            // Check if substream_info has changed
+                            match *ctx.current_substream_info {
+                                Some(current) if current != major_sync.substream_info => {
+                                    log::info!(
+                                        "substream_info changed: {:#02X} -> {:#02X}",
+                                        current,
+                                        major_sync.substream_info
+                                    );
+                                    substream_info_changed = true;
+                                }
+                                None => {
+                                    // First time seeing substream_info
+                                    *ctx.current_substream_info = Some(major_sync.substream_info);
+                                }
+                                _ => {} // No change
+                            }
+
+                            // Check if extended_substream_info has changed
+                            match *ctx.current_extended_substream_info {
+                                Some(current) if current != major_sync.extended_substream_info => {
+                                    log::info!(
+                                        "extended_substream_info changed: {:#02X} -> {:#02X}",
+                                        current,
+                                        major_sync.extended_substream_info
+                                    );
+                                    substream_info_changed = true;
+                                }
+                                None => {
+                                    // First time seeing extended_substream_info
+                                    *ctx.current_extended_substream_info =
+                                        Some(major_sync.extended_substream_info);
+                                }
+                                _ => {} // No change
+                            }
+
+                            // Update stored values
+                            *ctx.current_substream_info = Some(major_sync.substream_info);
+                            *ctx.current_extended_substream_info =
+                                Some(major_sync.extended_substream_info);
+                        }
+
                         match ctx
                             .decoder
                             .decode_presentation(&access_unit, ctx.presentation as usize)
                         {
-                            Ok(decoded) => {
+                            Ok(mut decoded) => {
+                                // Set the substream_info_changed flag if we detected a change
+                                if substream_info_changed {
+                                    decoded.substream_info_changed = true;
+                                }
+
                                 *ctx.total_samples += decoded.sample_length as u64;
                                 if ctx.tx.send(Ok(decoded)).is_err() {
                                     return Ok(true);

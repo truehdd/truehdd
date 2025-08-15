@@ -282,6 +282,10 @@ pub struct DecodeHandler {
     pub decoded_samples: u64,
     pub final_sample_rate: u32,
     pub bed_indices: Option<Vec<usize>>,
+    pub au_index: u64,
+    pub segment_index: u32,
+    pub is_segmented: bool,         // Track if we're in segmented mode
+    pub segment_start_samples: u64, // Sample position when current segment started
 }
 
 impl Default for DecodeHandler {
@@ -296,6 +300,10 @@ impl Default for DecodeHandler {
             decoded_samples: 0,
             final_sample_rate: 48000,
             bed_indices: None,
+            au_index: 0,
+            segment_index: 0,
+            is_segmented: false,
+            segment_start_samples: 0,
         }
     }
 }
@@ -324,8 +332,8 @@ impl DecodeHandler {
         }
 
         self.decoded_frames += 1u64;
-        self.decoded_samples += decoded.sample_length as u64;
         self.final_sample_rate = sample_rate;
+        self.au_index += 1;
 
         self.handle_atmos_metadata(
             &decoded,
@@ -335,6 +343,8 @@ impl DecodeHandler {
             ctx.bed_conform,
             ctx.warp_mode,
         )?;
+
+        self.decoded_samples += decoded.sample_length as u64;
 
         let effective_channel_count = if ctx.bed_conform && self.has_atmos {
             let empty_vec = Vec::new();
@@ -378,6 +388,29 @@ impl DecodeHandler {
             // Create DAMF header file when we first detect Atmos
             if !was_atmos {
                 if let Some(base_path) = base_path {
+                    // Use segmented base path if we're in segmented mode
+                    let effective_base_path = if self.is_segmented {
+                        // Derive base path from current audio path by removing the audio extension
+                        if let Some(ref current_path) = self.current_audio_path {
+                            let mut segmented_base = current_path.clone();
+                            // Remove .atmos.audio or other extensions to get base path
+                            if current_path.extension() == Some(std::ffi::OsStr::new("audio")) {
+                                segmented_base.set_extension(""); // Remove .audio
+                                if segmented_base.extension() == Some(std::ffi::OsStr::new("atmos"))
+                                {
+                                    segmented_base.set_extension(""); // Remove .atmos
+                                }
+                            } else {
+                                segmented_base.set_extension(""); // Remove whatever extension
+                            }
+                            segmented_base
+                        } else {
+                            base_path.to_path_buf()
+                        }
+                    } else {
+                        base_path.to_path_buf()
+                    };
+
                     if bed_conform {
                         // Store bed indices first for conformance
                         self.bed_indices = BedInstance::with_oamd_payload(oamd)
@@ -386,28 +419,34 @@ impl DecodeHandler {
 
                         // Create bed-conformed DAMF header
                         if self.bed_indices.is_some() {
-                            if let Err(e) =
-                                rewrite_damf_header_for_bed_conform(base_path, oamd, warp_mode)
-                            {
+                            if let Err(e) = rewrite_damf_header_for_bed_conform(
+                                &effective_base_path,
+                                oamd,
+                                warp_mode,
+                            ) {
                                 log_or_err!(state, Level::Error, e);
                             }
                         } else {
                             // Fallback to regular header if no bed indices
-                            if let Err(e) = create_damf_header_file(base_path, oamd, warp_mode) {
+                            if let Err(e) =
+                                create_damf_header_file(&effective_base_path, oamd, warp_mode)
+                            {
                                 log_or_err!(state, Level::Error, e);
                             }
                         }
                     } else {
                         // Create regular DAMF header
-                        if let Err(e) = create_damf_header_file(base_path, oamd, warp_mode) {
+                        if let Err(e) =
+                            create_damf_header_file(&effective_base_path, oamd, warp_mode)
+                        {
                             log_or_err!(state, Level::Error, e);
                         }
                     }
                 }
             }
 
-            // Handle file renaming for first Atmos detection
-            if !was_atmos && self.audio_writer.is_some() {
+            // Handle file renaming for first Atmos detection (but not if we're in segmented mode)
+            if !was_atmos && self.audio_writer.is_some() && !self.is_segmented {
                 if bed_conform {
                     self.handle_atmos_file_rename_with_bed_conform(
                         base_path,
@@ -604,7 +643,22 @@ impl DecodeHandler {
         base_path: &Option<PathBuf>,
         format: AudioFormat,
     ) -> Result<()> {
-        let mut conf = Configuration::with_oamd_payload(oamd, sample_rate, sample_pos);
+        // Calculate the relative sample position within the current segment
+        let segment_relative_sample_pos = if self.is_segmented {
+            let relative_pos = sample_pos.saturating_sub(self.segment_start_samples);
+            log::trace!(
+                "Adjusting OAMD sample position: absolute={}, segment_start={}, relative={}",
+                sample_pos,
+                self.segment_start_samples,
+                relative_pos
+            );
+            relative_pos
+        } else {
+            sample_pos
+        };
+
+        let mut conf =
+            Configuration::with_oamd_payload(oamd, sample_rate, segment_relative_sample_pos);
 
         let (events_diff, remove_header) = if !self.prev_events.is_empty() {
             (
@@ -760,5 +814,127 @@ impl DecodeHandler {
         }
 
         Ok(())
+    }
+
+    pub fn handle_stream_restart(
+        &mut self,
+        base_path: &Option<PathBuf>,
+        format: AudioFormat,
+        sample_rate: u32,
+        channel_count: usize,
+        bed_conform: bool,
+    ) -> Result<()> {
+        if let Some(base_path) = base_path {
+            log::info!(
+                "Stream restart detected at AU {}, creating new segment {}",
+                self.au_index,
+                self.segment_index + 1
+            );
+
+            // Close current audio writer
+            if let Some(writer) = self.audio_writer.take() {
+                match writer {
+                    AudioWriter::Caf(mut w) => {
+                        w.finish()?;
+                    }
+                    AudioWriter::Pcm(mut w) => {
+                        w.flush()?;
+                    }
+                    AudioWriter::W64(mut w) => {
+                        w.finish()?;
+                    }
+                }
+            }
+
+            // Close metadata writer if exists
+            if let Some(mut writer) = self.damf_metadata_file_writer.take() {
+                writer.flush()?;
+            }
+
+            // Create new file paths with segment index
+            self.segment_index += 1;
+            let segment_suffix = format!("_{}", self.au_index);
+            let segmented_base_path = self.add_segment_suffix(base_path, &segment_suffix);
+            let (new_audio_path, new_metadata_path) =
+                create_output_paths(&segmented_base_path, format, self.has_atmos);
+
+            log::info!("Creating output file: {}", new_audio_path.display());
+
+            // Calculate effective channel count for bed conformance
+            let effective_channel_count = if bed_conform && self.has_atmos {
+                let empty_vec = Vec::new();
+                let bed_indices = self.bed_indices.as_ref().unwrap_or(&empty_vec);
+                ChannelCountCalculator::calculate_conformed_channel_count(
+                    channel_count,
+                    bed_indices,
+                )
+            } else {
+                channel_count
+            };
+
+            // Create new audio writer based on format
+            let audio_writer = match format {
+                AudioFormat::Pcm => AudioWriter::create_pcm(new_audio_path.clone())?,
+                AudioFormat::Caf => AudioWriter::create_caf(
+                    new_audio_path.clone(),
+                    sample_rate,
+                    effective_channel_count as u32,
+                )?,
+                AudioFormat::W64 => AudioWriter::create_w64(
+                    new_audio_path.clone(),
+                    sample_rate,
+                    effective_channel_count as u32,
+                )?,
+            };
+            self.audio_writer = Some(audio_writer);
+            self.current_audio_path = Some(new_audio_path);
+
+            // Create new metadata writer if needed - DAMF header will be written when next OAMD arrives
+            if self.has_atmos && !new_metadata_path.as_os_str().is_empty() {
+                // Create the .atmos.metadata file for future OAMD data
+                let metadata_file = File::create(&new_metadata_path)?;
+                self.damf_metadata_file_writer = Some(BufWriter::new(metadata_file));
+
+                log::info!("Creating metadata file: {}", new_metadata_path.display());
+            }
+
+            self.prev_events = Vec::new(); // Clear previous events for new segment
+
+            // Reset Atmos detection state - treat this segment like a fresh decode start
+            // The next OAMD data will trigger DAMF header creation for the new segment
+            self.reset_atmos_state_for_segment();
+        }
+        Ok(())
+    }
+
+    fn add_segment_suffix(&self, base_path: &Path, suffix: &str) -> PathBuf {
+        let stem = base_path.file_stem().unwrap().to_str().unwrap();
+        let extension = base_path
+            .extension()
+            .map(|e| e.to_str().unwrap())
+            .unwrap_or("");
+
+        let new_name = if extension.is_empty() {
+            format!("{stem}{suffix}")
+        } else {
+            format!("{stem}{suffix}.{extension}")
+        };
+
+        base_path.with_file_name(new_name)
+    }
+
+    fn reset_atmos_state_for_segment(&mut self) {
+        // Reset state so the next OAMD data is treated as "first-time Atmos detection"
+        // This ensures DAMF header gets created for the new segment when OAMD arrives
+
+        if self.has_atmos {
+            // Temporarily reset has_atmos so next OAMD triggers DAMF header creation
+            self.has_atmos = false;
+            self.bed_indices = None; // Will be recalculated from new OAMD
+
+            log::debug!(
+                "Reset Atmos detection state for new segment - next OAMD will trigger DAMF header creation"
+            );
+        }
     }
 }

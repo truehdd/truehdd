@@ -109,6 +109,22 @@ pub fn cmd_decode(args: &DecodeArgs, cli: &Cli, multi: Option<&MultiProgress>) -
     while let Ok(result) = rx.recv() {
         match result {
             Ok(decoded) => {
+                // Check if substream info changed and handle it before processing the frame
+                if decoded.substream_info_changed {
+                    // Store the current sample position as the start of the new segment
+                    handler.segment_start_samples = handler.decoded_samples;
+
+                    // Handle stream restart with actual sample rate and channel count from decoded frame
+                    handler.handle_stream_restart(
+                        &base_path,
+                        effective_format,
+                        decoded.sampling_frequency,
+                        decoded.channel_count,
+                        args.bed_conform,
+                    )?;
+                    handler.is_segmented = true; // Mark that we're now in segmented mode
+                }
+
                 let ctx = FrameHandlerContext {
                     base_path: &base_path,
                     format: effective_format,
