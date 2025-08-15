@@ -461,7 +461,9 @@ impl Block {
                             "Channel {chi}: LSB + Huffman bits ({}) exceed 32-bit limit",
                             huff_size + bypassed_lsb_bits
                         )
-                    } else if huff_size > 29 {
+                    }
+
+                    if huff_size > 29 {
                         bail!(BlockError::HuffmanSampleTooLong);
                     }
                 }
