@@ -1,6 +1,6 @@
 [package]
 name = "truehd"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2024"
 license = "Apache-2.0"
 description = "Research implementation of Dolby TrueHD parser/decoder"
@@ -13,9 +13,9 @@ name = "truehd"
 crate-type = ["lib"]
 
 [dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.99"
 bitstream-io = "4.3.0"
-thiserror = "2.0.12"
+thiserror = "2.0.14"
 log = "0.4.27"
 
 [package.metadata.release]
