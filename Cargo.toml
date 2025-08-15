@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "truehdd"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 license = "Apache-2.0"
 description = "Tools for inspecting and decoding Dolby TrueHD bitstreams"
@@ -19,10 +19,10 @@ path = "src/main.rs"
 
 [dependencies]
 truehdd-macros = { version = "0.1.0", path = "truehdd-macros" }
-truehd = { version = "0.3.1", path = "truehd" }
+truehd = { version = "0.4.0", path = "truehd" }
 
-anyhow = "1.0.98"
-clap = { version = "4.5.44", features = ["derive"] }
+anyhow = "1.0.99"
+clap = { version = "4.5.45", features = ["derive"] }
 env_logger = "0.11.8"
 indicatif = "0.18.0"
 indicatif-log-bridge = "0.2.3"
@@ -31,7 +31,7 @@ serde = { version = "1.0.219", features = ["derive"] }
 serde_yaml_ng = "0.10.0"
 
 [build-dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.99"
 vergen-gitcl = { version = "1.0.8", default-features = false, features = ["build"] }
 chrono = "0.4.41"
 serde_json = "1.0.142"
