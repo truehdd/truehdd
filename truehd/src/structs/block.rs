@@ -310,13 +310,12 @@ impl Block {
 
                 state.substream_state_mut()?.output_timing_history[i] = output_timing;
 
-                let substream_size = if state.substream_index == 0 {
-                    state.substream_state()?.substream_end_ptr
-                        - (state.substream_segment_start_pos >> 4) as u16
-                } else {
-                    state.substream_state()?.substream_end_ptr
-                        - state.substream_state[state.substream_index - 1].substream_end_ptr
-                };
+                let substream_size = state.substream_state()?.substream_end_ptr
+                    - if state.substream_index == 0 {
+                        0
+                    } else {
+                        state.substream_state[state.substream_index - 1].substream_end_ptr
+                    };
 
                 state.substream_state_mut()?.substream_size_history[i] =
                     (substream_size as usize) << 1;
