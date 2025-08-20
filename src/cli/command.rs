@@ -50,37 +50,6 @@ pub enum Commands {
 }
 
 #[derive(Debug, Args)]
-pub struct DecodeArgs {
-    /// Input TrueHD bitstream (use "-" for stdin).
-    #[arg(value_name = "INPUT")]
-    pub input: PathBuf,
-
-    /// Output path for audio and metadata files.
-    #[arg(long, value_name = "PATH")]
-    pub output_path: Option<PathBuf>,
-
-    /// Audio format for output (ignored for presentation 3 which always uses CAF).
-    #[arg(long, value_enum, default_value_t = AudioFormat::Caf)]
-    pub format: AudioFormat,
-
-    /// Presentation index (0-3).
-    #[arg(long, value_name = "INDEX", default_value_t = 3)]
-    pub presentation: u8,
-
-    /// Disable progress estimation
-    #[arg(long)]
-    pub no_estimate_progress: bool,
-
-    /// Enable bed conformance for Atmos content
-    #[arg(long)]
-    pub bed_conform: bool,
-
-    /// Specify warp mode when not present in metadata
-    #[arg(long, value_enum)]
-    pub warp_mode: Option<WarpMode>,
-}
-
-#[derive(Debug, Args)]
 pub struct InfoArgs {
     /// Input TrueHD bitstream.
     #[arg(value_name = "INPUT")]
@@ -158,4 +127,39 @@ impl From<WarpMode> for crate::damf::WarpMode {
             WarpMode::LoRo => Self::LoRo,
         }
     }
+}
+
+#[derive(Debug, Args)]
+pub struct DecodeArgs {
+    /// Input TrueHD bitstream (use "-" for stdin).
+    #[arg(value_name = "INPUT")]
+    pub input: PathBuf,
+
+    /// Output path for audio and metadata files.
+    #[arg(long, value_name = "PATH")]
+    pub output_path: Option<PathBuf>,
+
+    /// Audio format for output (ignored for presentation 3 which always uses CAF).
+    #[arg(long, value_enum, default_value_t = AudioFormat::Caf)]
+    pub format: AudioFormat,
+
+    /// Presentation index (0-3).
+    #[arg(long, value_name = "INDEX", default_value_t = 3)]
+    pub presentation: u8,
+
+    /// Disable progress estimation
+    #[arg(long)]
+    pub no_estimate_progress: bool,
+
+    /// Enable bed conformance for Atmos content
+    #[arg(long)]
+    pub bed_conform: bool,
+
+    /// Specify warp mode when not present in metadata
+    #[arg(long, value_enum)]
+    pub warp_mode: Option<WarpMode>,
+
+    /// Maximum access units to probe for Atmos metadata with bed_conform (default: 12000, ~10s at 48kHz)
+    #[arg(long, default_value_t = 12000)]
+    pub probe_range: u64,
 }
