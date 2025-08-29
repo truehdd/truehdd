@@ -13,11 +13,10 @@
 //! Filter coefficients use configurable precision with quantization parameters
 //! and filter state management.
 
-use anyhow::{Result, bail};
-
 use crate::process::decode::DecoderState;
 use crate::utils::bitstream_io::BsIoSliceReader;
 use crate::utils::errors::FilterError;
+use anyhow::{Result, bail};
 
 /// FIR filter coefficients for one channel.
 ///

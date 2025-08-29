@@ -510,8 +510,8 @@ impl Block {
         }
 
         let ss_state = state.substream_state_mut()?;
-        ss_state.bypassed_lsb = self.bypassed_lsb;
-        ss_state.block_data = self.block_data;
+        *ss_state.bypassed_lsb = self.bypassed_lsb;
+        *ss_state.block_data = self.block_data;
 
         Ok(())
     }

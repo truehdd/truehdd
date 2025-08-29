@@ -4,7 +4,7 @@ use crate::structs::channel::ChannelLabel;
 use crate::structs::oamd::ObjectAudioMetadataPayload;
 use crate::utils::dither::dither_31eb;
 use crate::utils::errors::DecodeError;
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use log::{info, trace};
 use std::collections::VecDeque;
 
@@ -21,27 +21,41 @@ impl Decoder {
     ///
     /// Returns a [`DecodedAccessUnit`] containing 24-bit PCM samples organized
     /// as `[sample_index][channel_index]` with up to 160 samples and 16 channels.
+    ///
+    /// This method now internally uses the multi-presentation decode path.
     pub fn decode_presentation(
         &mut self,
         access_unit: &AccessUnit,
         presentation: usize,
     ) -> Result<DecodedAccessUnit> {
-        self.state.decode_access_unit(access_unit, presentation)?;
-        let decoded = DecodedAccessUnit {
-            channel_labels: self.state.channel_labels.clone(),
-            sampling_frequency: self.state.sampling_frequency,
-            sample_length: self.state.samples_per_au - self.state.zero_samples,
-            channel_count: self.state.substream_state[self.state.presentation].max_matrix_chan + 1,
-            pcm_data: self.state.output_buffer,
-            oamd: self.state.oamd.iter().cloned().collect::<Vec<_>>(),
-            is_duplicate: self.state.has_duplicate_timing && self.state.has_duplicate_sample,
-            substream_info_changed: self.state.substream_info_changed,
-        };
+        // Create presentation array with only the requested presentation
+        let mut required_presentations = [false; MAX_PRESENTATIONS];
+        required_presentations[presentation] = true;
+
+        self.decode_presentations(access_unit, &required_presentations)?
+            .iter()
+            .find_map(|decoded| decoded.clone())
+            .ok_or_else(|| anyhow!("Failed to get presentation {presentation}"))
+    }
+
+    /// Decodes multiple presentations from an access unit.
+    ///
+    /// Takes a boolean array indicating which presentations are required
+    /// and returns an array of optional decoded access units.
+    pub fn decode_presentations(
+        &mut self,
+        access_unit: &AccessUnit,
+        required_presentations: &[bool; MAX_PRESENTATIONS],
+    ) -> Result<Box<[Option<DecodedAccessUnit>; MAX_PRESENTATIONS]>> {
+        // Use the optimized shared decode method
+        let result = self
+            .state
+            .decode_access_unit_presentations(access_unit, required_presentations)?;
 
         // Reset the flag after reading it
         self.state.substream_info_changed = false;
 
-        Ok(decoded)
+        Ok(Box::new(result))
     }
 
     /// Sets the failure level for validation errors.
@@ -57,7 +71,7 @@ impl Decoder {
 ///
 /// Contains 24-bit signed integer samples in sample-major ordering
 /// (`pcm_data[sample_index][channel_index]`) with associated metadata.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DecodedAccessUnit {
     /// Sampling frequency in Hz.
     ///
@@ -109,7 +123,7 @@ pub struct DecodedAccessUnit {
     pub substream_info_changed: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 #[repr(C)]
 pub struct DecoderSubstreamState {
     pub restart_sync_word: u16,
@@ -143,10 +157,15 @@ pub struct DecoderSubstreamState {
     pub coeff: [[[i32; 8]; 16]; 2],
     pub coeff_state: [[[i32; 8]; 16]; 2],
 
-    pub bypassed_lsb: [[i32; 16]; 160],
-    pub block_data: [[i32; 16]; 160],
+    pub bypassed_lsb: Box<[[i32; 16]; 160]>,
+    pub block_data: Box<[[i32; 16]; 160]>,
     pub dither_table: [i32; 256],
     pub decoded_sample_len: usize,
+
+    pub rematrix_buffer: Box<[[i32; 16]; 160]>,
+    pub output_buffer: Box<[[i32; 16]; 160]>,
+    pub zero_samples: usize,
+    pub channel_labels: Vec<ChannelLabel>,
 }
 
 impl Default for DecoderSubstreamState {
@@ -183,10 +202,15 @@ impl Default for DecoderSubstreamState {
             coeff: [[[0; 8]; 16]; 2],
             coeff_state: [[[0; 8]; 16]; 2],
 
-            bypassed_lsb: [[0; 16]; 160],
-            block_data: [[0; 16]; 160],
+            bypassed_lsb: Box::new([[0; 16]; 160]),
+            block_data: Box::new([[0; 16]; 160]),
             dither_table: [0; 256],
             decoded_sample_len: 0,
+
+            rematrix_buffer: Box::new([[0; 16]; 160]),
+            output_buffer: Box::new([[0; 16]; 160]),
+            zero_samples: 0,
+            channel_labels: vec![],
         }
     }
 }
@@ -207,6 +231,7 @@ pub struct DecoderState {
 
     pub presentation_map: Option<PresentationMap>,
     pub presentation: usize,
+    pub effective_presentations: [bool; MAX_PRESENTATIONS],
 
     pub channel_labels: Vec<ChannelLabel>,
 
@@ -238,13 +263,14 @@ impl Default for DecoderState {
             samples_per_au: 0,
             presentation_map: None,
             presentation: 0,
+            effective_presentations: core::array::from_fn(|_| false),
             channel_labels: vec![],
             substreams: 0,
             substream_mask: 0,
             substream_info: 0,
             extended_substream_info: 0,
             substream_index: 0,
-            substream_state: [DecoderSubstreamState::default(); MAX_PRESENTATIONS],
+            substream_state: core::array::from_fn(|_| DecoderSubstreamState::default()),
             rematrix_buffer: [[0; 16]; 160],
             output_buffer: [[0; 16]; 160],
             zero_samples: 0,
@@ -262,23 +288,42 @@ impl DecoderState {
     pub fn substream_state(&self) -> Result<&DecoderSubstreamState> {
         Ok(&self.substream_state[self.substream_index])
     }
-    pub fn decode_access_unit(
+
+    pub fn decode_access_unit_presentations(
         &mut self,
         access_unit: &AccessUnit,
-        presentation: usize,
-    ) -> Result<()> {
+        required_presentations: &[bool; MAX_PRESENTATIONS],
+    ) -> Result<[Option<DecodedAccessUnit>; MAX_PRESENTATIONS]> {
         access_unit.update_decoder_state(self)?;
 
         if !self.valid {
-            self.update_presentation(presentation)?;
-            self.channel_labels = access_unit
-                .get_channel_labels(self.presentation)
-                .unwrap_or_default();
+            self.update_presentations(required_presentations)?;
+
+            for (i, &required) in self.effective_presentations.iter().enumerate() {
+                if required {
+                    self.substream_state[i].channel_labels =
+                        access_unit.get_channel_labels(i).unwrap_or_default();
+                }
+            }
         }
 
         self.has_duplicate_timing = false;
         self.has_duplicate_sample = false;
         self.oamd.clear();
+
+        if let Some(extra_data) = &access_unit.extra_data
+            && let Some(evo_frame) = &extra_data.evo_frame
+        {
+            for evo_payload in &evo_frame.evo_payloads {
+                if evo_payload.evo_payload_id == 11 {
+                    let smploffst =
+                        evo_payload.evo_payload_config.smploffst.unwrap_or_default() as u64;
+                    let mut oamd = ObjectAudioMetadataPayload::read(&evo_payload.evo_payload_byte)?;
+                    oamd.evo_sample_offset = smploffst;
+                    self.oamd.push_back(oamd);
+                }
+            }
+        }
 
         for i in 0..=self.presentation {
             if (self.substream_mask >> i) & 1 == 0 {
@@ -286,27 +331,12 @@ impl DecoderState {
             }
 
             let substream_segment = &access_unit.substream_segment[i];
-            if i == presentation
-                && let Some(terminator) = &substream_segment.terminator
+
+            // Handle zero samples for required presentations
+            if let Some(terminator) = &substream_segment.terminator
                 && terminator.zero_samples_indicated
             {
-                self.zero_samples = terminator.zero_samples as usize;
-            }
-
-            if i == 3
-                && let Some(extra_data) = &access_unit.extra_data
-                && let Some(evo_frame) = &extra_data.evo_frame
-            {
-                for evo_payload in &evo_frame.evo_payloads {
-                    if evo_payload.evo_payload_id == 11 {
-                        let smploffst =
-                            evo_payload.evo_payload_config.smploffst.unwrap_or_default() as u64;
-                        let mut oamd =
-                            ObjectAudioMetadataPayload::read(&evo_payload.evo_payload_byte)?;
-                        oamd.evo_sample_offset = smploffst;
-                        self.oamd.push_back(oamd);
-                    }
-                }
+                self.substream_state[i].zero_samples = terminator.zero_samples as usize;
             }
 
             self.substream_index = i;
@@ -315,29 +345,49 @@ impl DecoderState {
 
             for block in substream_segment.block.iter() {
                 block.update_decoder_state(self)?;
-                self.decode()?;
+                self.decode_multi()?;
+            }
+        }
+
+        let mut result: [Option<DecodedAccessUnit>; MAX_PRESENTATIONS] =
+            core::array::from_fn(|_| None);
+
+        for i in 0..MAX_PRESENTATIONS {
+            if self.effective_presentations[i] {
+                result[i] = Some(self.create_decoded_result(i)?);
             }
         }
 
         self.valid = true;
         self.counter += 1;
 
-        Ok(())
+        Ok(result)
     }
 
-    fn update_presentation(&mut self, presentation: usize) -> Result<()> {
+    fn update_presentations(
+        &mut self,
+        required_presentations: &[bool; MAX_PRESENTATIONS],
+    ) -> Result<()> {
         let Some(presentation_map) = self.presentation_map else {
             bail!("Presentation map not initialized");
         };
 
-        let mut presentations = [false; MAX_PRESENTATIONS];
-        presentations[..=presentation]
-            .iter_mut()
-            .for_each(|p| *p = true);
-
         self.substream_mask =
-            presentation_map.substream_mask_by_required_presentations(&presentations);
-        match presentation_map.presentation_type_by_index(presentation) {
+            presentation_map.substream_mask_by_required_presentations(required_presentations);
+
+        self.effective_presentations =
+            presentation_map.effective_presentations(required_presentations)?;
+
+        // Find the highest required presentation for fallback logic
+        let highest_required = required_presentations
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(i, &required)| if required { Some(i) } else { None })
+            .unwrap_or(3);
+
+        // Set presentation field for compatibility (using highest required)
+        match presentation_map.presentation_type_by_index(highest_required) {
             PresentationType::Invalid => {
                 if !self.valid {
                     let Some(max_independent) = presentation_map.max_independent_presentation()
@@ -345,19 +395,19 @@ impl DecoderState {
                         bail!("No presentation is available");
                     };
                     info!(
-                        "Presentation {presentation} is not available, using presentation {max_independent}"
+                        "Presentation {highest_required} is not available, using presentation {max_independent}"
                     );
                     self.presentation = max_independent;
                 }
             }
             PresentationType::CopyOf(copy_index) => {
                 if !self.valid {
-                    info!("Presentation {presentation} is a copy of presentation {copy_index}")
+                    info!("Presentation {highest_required} is a copy of presentation {copy_index}")
                 }
                 self.presentation = copy_index;
             }
             _ => {
-                self.presentation = presentation;
+                self.presentation = highest_required;
             }
         };
 
@@ -372,7 +422,7 @@ impl DecoderState {
         }
     }
 
-    fn decode(&mut self) -> Result<()> {
+    fn decode_multi(&mut self) -> Result<()> {
         let DecoderSubstreamState {
             restart_sync_word,
             min_chan,
@@ -399,14 +449,7 @@ impl DecoderState {
         } = *self.substream_state()?;
 
         let samples_per_au = self.samples_per_au;
-
-        let ss_state = &mut self.substream_state[self.substream_index];
-
-        let decoded_sample_len = &mut ss_state.decoded_sample_len;
-        let dither_seed = &mut ss_state.dither_seed;
-        let bypassed_lsb = &mut ss_state.bypassed_lsb;
-        let coeff_state = &mut ss_state.coeff_state;
-        let m_coeff = &mut ss_state.m_coeff;
+        let current_substream_index = self.substream_index;
 
         let (max_val, min_val) = if restart_sync_word == 0x31EC {
             (1 << 31, -(1 << 31))
@@ -416,8 +459,11 @@ impl DecoderState {
 
         // recorrelation
         {
+            let ss_state = &mut self.substream_state[current_substream_index];
+            let decoded_sample_len = ss_state.decoded_sample_len;
+            let coeff_state = &mut ss_state.coeff_state;
+            let rematrix_buffer = &mut ss_state.rematrix_buffer[decoded_sample_len..];
             let block_data = &ss_state.block_data;
-            let rematrix_buffer = &mut self.rematrix_buffer[*decoded_sample_len..];
 
             #[allow(clippy::needless_range_loop)]
             for chi in min_chan..=max_chan {
@@ -477,7 +523,36 @@ impl DecoderState {
         }
 
         // lossless matrix
-        if self.substream_index == self.presentation {
+        if self.effective_presentations[current_substream_index] {
+            if let Some(presentation_map) = self.presentation_map {
+                let substream_mask =
+                    presentation_map.substream_mask_by_index(current_substream_index);
+                let decoded_sample_len =
+                    self.substream_state[current_substream_index].decoded_sample_len;
+
+                for i in 0..=current_substream_index {
+                    if (substream_mask >> i) & 1 == 0 {
+                        continue;
+                    }
+
+                    let min_chan = self.substream_state[i].min_chan;
+                    let max_chan = self.substream_state[i].max_chan;
+
+                    for blki in 0..block_size {
+                        for ch in min_chan..=max_chan {
+                            self.rematrix_buffer[decoded_sample_len + blki][ch] = self
+                                .substream_state[i]
+                                .rematrix_buffer[decoded_sample_len + blki][ch];
+                        }
+                    }
+                }
+            }
+
+            let ss_state = &mut self.substream_state[current_substream_index];
+            let decoded_sample_len = &mut ss_state.decoded_sample_len;
+            let dither_seed = &mut ss_state.dither_seed;
+            let bypassed_lsb = &mut ss_state.bypassed_lsb;
+            let m_coeff = &mut ss_state.m_coeff;
             let dither_table = &mut ss_state.dither_table;
             let rematrix_buffer = &mut self.rematrix_buffer[*decoded_sample_len..];
 
@@ -609,7 +684,7 @@ impl DecoderState {
 
             // remap
             {
-                let output_buffer = &mut self.output_buffer[*decoded_sample_len..];
+                let output_buffer = &mut ss_state.output_buffer[*decoded_sample_len..];
 
                 if *decoded_sample_len == 0 {
                     ss_state.lossless_check_i32 = 0;
@@ -666,8 +741,30 @@ impl DecoderState {
             }
         }
 
-        *decoded_sample_len += block_size;
+        self.substream_state_mut()?.decoded_sample_len += block_size;
 
         Ok(())
+    }
+
+    fn create_decoded_result(&self, presentation_idx: usize) -> Result<DecodedAccessUnit> {
+        let decoded = DecodedAccessUnit {
+            channel_labels: self.substream_state[presentation_idx]
+                .channel_labels
+                .clone(),
+            sampling_frequency: self.sampling_frequency,
+            sample_length: self.samples_per_au
+                - self.substream_state[presentation_idx].zero_samples,
+            channel_count: self.substream_state[presentation_idx].max_matrix_chan + 1,
+            pcm_data: *self.substream_state[presentation_idx].output_buffer,
+            oamd: if self.effective_presentations[3] {
+                self.oamd.iter().cloned().collect::<Vec<_>>()
+            } else {
+                vec![]
+            },
+            is_duplicate: self.has_duplicate_timing && self.has_duplicate_sample,
+            substream_info_changed: self.substream_info_changed,
+        };
+
+        Ok(decoded)
     }
 }

@@ -1,3 +1,4 @@
+use anyhow::Result;
 use std::fmt::Display;
 
 /// Frame extraction from audio bitstreams.
@@ -79,6 +80,14 @@ impl PresentationMap {
             .map(|(i, _)| i)
     }
 
+    pub fn substream_mask_by_index(&self, index: usize) -> u8 {
+        if index >= MAX_PRESENTATIONS {
+            0
+        } else {
+            self.masks[index]
+        }
+    }
+
     pub fn substream_mask_by_required_presentations(
         &self,
         required_presentations: &[bool; MAX_PRESENTATIONS],
@@ -86,10 +95,32 @@ impl PresentationMap {
         required_presentations
             .iter()
             .enumerate()
-            .fold(
-                0,
-                |mask, (i, &required)| if required { mask | self.masks[i] } else { mask },
-            )
+            .fold(0, |mask, (i, &required)| {
+                if required {
+                    mask | self.substream_mask_by_index(i)
+                } else {
+                    mask
+                }
+            })
+    }
+
+    pub fn effective_presentations(
+        &self,
+        required_presentations: &[bool; MAX_PRESENTATIONS],
+    ) -> Result<[bool; MAX_PRESENTATIONS]> {
+        let mut presentations = [false; MAX_PRESENTATIONS];
+
+        required_presentations
+            .iter()
+            .enumerate()
+            .filter(|&(_, &required)| required)
+            .for_each(|(i, _)| match self.presentation_type_by_index(i) {
+                PresentationType::Invalid => {}
+                PresentationType::CopyOf(copy_i) => presentations[copy_i] = true,
+                _ => presentations[i] = true,
+            });
+
+        Ok(presentations)
     }
 }
 
