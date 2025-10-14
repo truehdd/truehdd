@@ -24,6 +24,7 @@ truehd = { version = "0.4.0", path = "truehd" }
 anyhow = "1.0.99"
 clap = { version = "4.5.45", features = ["derive"] }
 env_logger = "0.11.8"
+fancy-regex = "0.16.2"
 indicatif = "0.18.0"
 indicatif-log-bridge = "0.2.3"
 log = "0.4.27"
