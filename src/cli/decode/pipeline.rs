@@ -1,21 +1,28 @@
 use super::handler::DecodeHandler;
 use crate::cli::command::{AudioFormat, DecodeArgs};
 use crate::input::InputReader;
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use crossbeam::channel::{Receiver, Sender, bounded};
 use crossbeam::thread::scope;
 use indicatif::ProgressBar;
-use log::{Level, error, info, warn};
-use std::collections::BTreeMap;
+use log::{Level, debug, info, warn};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use truehd::process::MAX_PRESENTATIONS;
-use truehd::process::decode::Decoder;
+use truehd::process::decode::{DecodedAccessUnit, Decoder};
 use truehd::process::extract::{Extractor, Frame};
 use truehd::process::parse::Parser;
 use truehd::structs::access_unit::AccessUnit;
+
+#[derive(Debug)]
+pub enum PipelineError {
+    Input(anyhow::Error),
+    Parse(anyhow::Error),
+    Decode(anyhow::Error),
+    Write(anyhow::Error),
+}
 
 impl std::fmt::Display for PipelineError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -35,13 +42,24 @@ pub struct WriterState {
     fail_level: Level,
 }
 
-// Shared error type for cross-thread communication
-#[derive(Debug)]
-pub enum PipelineError {
-    Input(anyhow::Error),
-    Parse(anyhow::Error),
-    Decode(anyhow::Error),
-    Write(anyhow::Error),
+// Control messages travel in-band on the data channels, in order with the
+// frames they relate to. A stage that hits a fatal error forwards it
+// downstream and exits; the writer finalizes output files before reporting.
+enum ExtractMsg {
+    Frame(u64, Frame),
+    Fatal(PipelineError),
+}
+
+enum ParseMsg {
+    Au(u64, Box<AccessUnit>, bool),
+    // Parser lost stream state; the decoder must reset in lockstep.
+    Resync,
+    Fatal(PipelineError),
+}
+
+enum DecodeMsg {
+    Decoded(Box<DecodedAccessUnit>),
+    Fatal(PipelineError),
 }
 
 pub fn run_threaded_pipeline(
@@ -52,11 +70,10 @@ pub fn run_threaded_pipeline(
     pb: Option<&ProgressBar>,
     progress_counter: Arc<AtomicU64>,
 ) -> Result<DecodeHandler, PipelineError> {
-    // Bounded channels with appropriate buffer sizes for backpressure
-    let (tx_extract, rx_extract) = bounded::<(u64, Frame)>(32);
-    let (tx_parse, rx_parse) = bounded::<(u64, AccessUnit, bool)>(32);
-    let (tx_decode, rx_decode) = bounded::<(u64, truehd::process::decode::DecodedAccessUnit)>(1);
-    let (tx_error, rx_error) = bounded::<PipelineError>(1);
+    // Payloads are boxed, so capacity is a plain backpressure knob.
+    let (tx_extract, rx_extract) = bounded::<ExtractMsg>(32);
+    let (tx_parse, rx_parse) = bounded::<ParseMsg>(32);
+    let (tx_decode, rx_decode) = bounded::<DecodeMsg>(32);
 
     let mut required_presentations = [false; MAX_PRESENTATIONS];
     required_presentations[..=args.presentation as usize]
@@ -75,80 +92,53 @@ pub fn run_threaded_pipeline(
     handler.start_time = start_time;
 
     scope(|s| {
-        // Clone necessary data for threads
         let input_path = args.input.clone();
         let presentation = args.presentation;
-        let tx_error_extract = tx_error.clone();
-        let tx_error_parse = tx_error.clone();
-        let tx_error_decode = tx_error.clone();
 
-        // Extractor thread: Input reading and frame extraction
-        s.spawn(move |_| {
-            let result = run_extractor_thread(input_path, tx_extract, strict_mode);
-            if let Err(e) = result {
-                let _ = tx_error_extract.send(PipelineError::Input(e));
-            }
-        });
+        s.spawn(move |_| run_extractor_thread(input_path, tx_extract, strict_mode));
 
-        // Parser thread: Frame parsing and segment detection
         s.spawn(move |_| {
-            let result = run_parser_thread(
+            run_parser_thread(
                 rx_extract,
                 tx_parse,
                 fail_level,
                 required_presentations,
                 strict_mode,
-            );
-            if let Err(e) = result {
-                let _ = tx_error_parse.send(PipelineError::Parse(e));
-            }
+            )
         });
 
-        // Decoder thread: Access unit decoding
         s.spawn(move |_| {
-            let result =
-                run_decoder_thread(rx_parse, tx_decode, fail_level, presentation, strict_mode);
-            if let Err(e) = result {
-                let _ = tx_error_decode.send(PipelineError::Decode(e));
-            }
+            run_decoder_thread(rx_parse, tx_decode, fail_level, presentation, strict_mode)
         });
 
-        // Main thread: Writing and progress tracking with proper ordering
-        let write_result = run_writer_main(
-            rx_decode,
-            rx_error,
-            &mut handler,
-            &state,
-            pb,
-            progress_counter,
-            strict_mode,
-        );
-
-        match write_result {
-            Ok(_) => Ok(handler),
-            Err(e) => Err(PipelineError::Write(e)),
+        match run_writer_main(rx_decode, &mut handler, &state, pb, progress_counter) {
+            Ok(()) => Ok(handler),
+            Err(e) => Err(e),
         }
     })
     .unwrap() // scope().unwrap() is safe here as we handle errors internally
 }
 
-fn run_extractor_thread(
-    input_path: PathBuf,
-    tx_extract: Sender<(u64, Frame)>,
-    strict_mode: bool,
-) -> Result<()> {
+fn run_extractor_thread(input_path: PathBuf, tx: Sender<ExtractMsg>, strict_mode: bool) {
     let mut extractor = Extractor::default();
     let mut frame_index = 0u64;
-    let mut input_reader = InputReader::new(&input_path)?;
 
-    input_reader.process_chunks(64 * 1024, |chunk| {
+    let mut input_reader = match InputReader::new(&input_path) {
+        Ok(reader) => reader,
+        Err(e) => {
+            let _ = tx.send(ExtractMsg::Fatal(PipelineError::Input(e)));
+            return;
+        }
+    };
+
+    let result = input_reader.process_chunks(64 * 1024, |chunk| {
         extractor.push_bytes(chunk);
 
         for frame_result in extractor.by_ref() {
             match frame_result {
                 Ok(frame) => {
-                    if tx_extract.send((frame_index, frame)).is_err() {
-                        // Channel closed, exit gracefully
+                    if tx.send(ExtractMsg::Frame(frame_index, frame)).is_err() {
+                        // Downstream exited; stop reading
                         return Ok(false);
                     }
                     frame_index += 1;
@@ -156,174 +146,170 @@ fn run_extractor_thread(
                 Err(truehd::utils::errors::ExtractError::InsufficientData) => break,
                 Err(e) => {
                     if strict_mode {
-                        return Err(anyhow::anyhow!("Extract error: {}", e));
+                        return Err(anyhow!("Extract error: {e}"));
                     }
+                    // The extractor resyncs internally; the frame is lost
                     warn!("Extract error: {e}");
                 }
             }
         }
         Ok(true)
-    })?;
+    });
 
-    Ok(())
+    if let Err(e) = result {
+        let _ = tx.send(ExtractMsg::Fatal(PipelineError::Input(e)));
+    }
 }
 
 fn run_parser_thread(
-    rx_extract: Receiver<(u64, Frame)>,
-    tx_parse: Sender<(u64, AccessUnit, bool)>,
+    rx: Receiver<ExtractMsg>,
+    tx: Sender<ParseMsg>,
     fail_level: Level,
     required_presentations: [bool; MAX_PRESENTATIONS],
     strict_mode: bool,
-) -> Result<()> {
+) {
     let mut parser = Parser::default();
     parser.set_fail_level(fail_level);
     parser.set_required_presentations(&required_presentations);
     let mut segment_detector = SegmentDetector::new();
+    let mut resyncing = false;
 
-    for (index, frame_bytes) in rx_extract {
-        match parser.parse(&frame_bytes) {
-            Ok(au) => {
-                let stream_changed = segment_detector.check(&au);
-                if tx_parse.send((index, au, stream_changed)).is_err() {
-                    // Channel closed, exit gracefully
-                    break;
+    for msg in rx {
+        match msg {
+            ExtractMsg::Frame(index, frame) => match parser.parse(&frame) {
+                Ok(au) => {
+                    if resyncing {
+                        info!("Recovered parsing at frame {index}");
+                        resyncing = false;
+                    }
+                    let stream_changed = segment_detector.check(&au);
+                    if tx
+                        .send(ParseMsg::Au(index, Box::new(au), stream_changed))
+                        .is_err()
+                    {
+                        return;
+                    }
                 }
-            }
-            Err(e) => {
-                if strict_mode {
-                    return Err(anyhow::anyhow!("Parse error at frame {}: {}", index, e));
+                Err(e) => {
+                    if strict_mode {
+                        let _ = tx.send(ParseMsg::Fatal(PipelineError::Parse(anyhow!(
+                            "Parse error at frame {index}: {e}"
+                        ))));
+                        return;
+                    }
+                    if resyncing {
+                        debug!("Skipping frame {index} until next major sync: {e}");
+                    } else {
+                        warn!("Parse error at frame {index}: {e}; resuming at next major sync");
+                        parser.reset_for_next_major_sync();
+                        resyncing = true;
+                        if tx.send(ParseMsg::Resync).is_err() {
+                            return;
+                        }
+                    }
                 }
-                warn!("Parse error at frame {index}: {e}");
+            },
+            ExtractMsg::Fatal(e) => {
+                let _ = tx.send(ParseMsg::Fatal(e));
+                return;
             }
         }
     }
-
-    Ok(())
 }
 
 fn run_decoder_thread(
-    rx_parse: Receiver<(u64, AccessUnit, bool)>,
-    tx_decode: Sender<(u64, truehd::process::decode::DecodedAccessUnit)>,
+    rx: Receiver<ParseMsg>,
+    tx: Sender<DecodeMsg>,
     fail_level: Level,
     presentation: u8,
     strict_mode: bool,
-) -> Result<()> {
+) {
     let mut decoder = Decoder::default();
     decoder.set_fail_level(fail_level);
+    let mut resyncing = false;
 
-    for (index, au, stream_changed) in rx_parse {
-        match decoder.decode_presentation(&au, presentation as usize) {
-            Ok(mut decoded) => {
-                if stream_changed {
-                    decoded.substream_info_changed = true;
-                }
-                if tx_decode.send((index, decoded)).is_err() {
-                    // Channel closed, exit gracefully
-                    break;
+    for msg in rx {
+        match msg {
+            ParseMsg::Au(index, au, stream_changed) => {
+                match decoder.decode_presentation(&au, presentation as usize) {
+                    Ok(mut decoded) => {
+                        if resyncing {
+                            info!("Recovered decoding at frame {index}");
+                            resyncing = false;
+                        }
+                        if stream_changed {
+                            decoded.substream_info_changed = true;
+                        }
+                        if tx.send(DecodeMsg::Decoded(Box::new(decoded))).is_err() {
+                            return;
+                        }
+                    }
+                    Err(e) => {
+                        if strict_mode {
+                            let _ = tx.send(DecodeMsg::Fatal(PipelineError::Decode(anyhow!(
+                                "Decode error at frame {index}: {e}"
+                            ))));
+                            return;
+                        }
+                        if resyncing {
+                            debug!("Skipping frame {index} until next major sync: {e}");
+                        } else {
+                            warn!(
+                                "Decode error at frame {index}: {e}; resuming at next major sync"
+                            );
+                            decoder.reset_for_next_major_sync();
+                            resyncing = true;
+                        }
+                    }
                 }
             }
-            Err(e) => {
-                if strict_mode {
-                    return Err(anyhow::anyhow!("Decode error at frame {}: {}", index, e));
-                }
-                warn!("Decode error at frame {index}: {e}");
+            ParseMsg::Resync => {
+                decoder.reset_for_next_major_sync();
+                resyncing = true;
+            }
+            ParseMsg::Fatal(e) => {
+                let _ = tx.send(DecodeMsg::Fatal(e));
+                return;
             }
         }
     }
-
-    Ok(())
 }
 
 fn run_writer_main(
-    rx_decode: Receiver<(u64, truehd::process::decode::DecodedAccessUnit)>,
-    rx_error: Receiver<PipelineError>,
+    rx: Receiver<DecodeMsg>,
     handler: &mut DecodeHandler,
     state: &WriterState,
     pb: Option<&ProgressBar>,
     progress_counter: Arc<AtomicU64>,
-    strict_mode: bool,
-) -> Result<()> {
-    let mut next_index = 0u64;
-    let mut reorder_buffer = BTreeMap::new();
-    const MAX_REORDER_SIZE: usize = 64;
-
-    loop {
-        // Check for errors from other threads first
-        if let Ok(error) = rx_error.try_recv() {
-            if strict_mode {
-                return Err(anyhow::anyhow!("Pipeline error: {}", error));
-            } else {
-                error!("Pipeline error: {error}");
-                // Continue processing in non-strict mode
+) -> Result<(), PipelineError> {
+    for msg in rx {
+        match msg {
+            DecodeMsg::Decoded(decoded) => {
+                if let Err(e) = process_frame(handler, *decoded, state, pb, &progress_counter) {
+                    finalize_on_error(handler);
+                    return Err(PipelineError::Write(e));
+                }
+            }
+            DecodeMsg::Fatal(e) => {
+                finalize_on_error(handler);
+                return Err(e);
             }
         }
-
-        // Process incoming decoded frames
-        match rx_decode.try_recv() {
-            Ok((index, decoded)) => {
-                // Check reorder buffer size limit
-                if reorder_buffer.len() >= MAX_REORDER_SIZE {
-                    warn!("Reorder buffer limit reached, forcing drain");
-                    // Force processing of oldest frames
-                    while reorder_buffer.len() >= MAX_REORDER_SIZE / 2 {
-                        if let Some((_, frame)) = reorder_buffer.pop_first() {
-                            process_frame(handler, frame, state, pb, &progress_counter)?;
-                            next_index += 1;
-                        } else {
-                            break;
-                        }
-                    }
-                }
-
-                reorder_buffer.insert(index, decoded);
-
-                // Process frames in order
-                while let Some(frame) = reorder_buffer.remove(&next_index) {
-                    process_frame(handler, frame, state, pb, &progress_counter)?;
-                    next_index += 1;
-                }
-            }
-            Err(crossbeam::channel::TryRecvError::Empty) => {
-                // No data available, check if all senders are disconnected
-                if rx_decode.is_empty() && rx_decode.is_empty() {
-                    // Channel might be closed, try blocking receive with timeout
-                    match rx_decode.recv_timeout(std::time::Duration::from_millis(100)) {
-                        Ok((index, decoded)) => {
-                            reorder_buffer.insert(index, decoded);
-                            while let Some(frame) = reorder_buffer.remove(&next_index) {
-                                process_frame(handler, frame, state, pb, &progress_counter)?;
-                                next_index += 1;
-                            }
-                        }
-                        Err(crossbeam::channel::RecvTimeoutError::Disconnected) => {
-                            // All senders disconnected, drain remaining frames
-                            break;
-                        }
-                        Err(crossbeam::channel::RecvTimeoutError::Timeout) => {
-                            // Continue the loop to check for errors
-                            continue;
-                        }
-                    }
-                }
-            }
-            Err(crossbeam::channel::TryRecvError::Disconnected) => {
-                // All senders disconnected, drain remaining frames
-                break;
-            }
-        }
-    }
-
-    // Drain any remaining frames in order
-    for (_, frame) in reorder_buffer {
-        process_frame(handler, frame, state, pb, &progress_counter)?;
     }
 
     Ok(())
 }
 
+// Patch output headers so already-written audio stays playable
+fn finalize_on_error(handler: &mut DecodeHandler) {
+    if let Err(e) = handler.finalize() {
+        warn!("Failed to finalize output files after error: {e}");
+    }
+}
+
 fn process_frame(
     handler: &mut DecodeHandler,
-    decoded: truehd::process::decode::DecodedAccessUnit,
+    decoded: DecodedAccessUnit,
     state: &WriterState,
     pb: Option<&ProgressBar>,
     progress_counter: &Arc<AtomicU64>,

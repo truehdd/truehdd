@@ -7,9 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Decode now recovers from mid-stream corruption: after a parse or decode failure, both stages reset in lockstep and resume at the next major sync instead of continuing on damaged state
+
 ### Changed
 - Minimum supported Rust version for building the CLI is now 1.95.0
 - Updated dependencies (clap 4.6, vergen-gitcl 10)
+- Decode pipeline errors now travel in-band with the data: failures report the originating stage (input/parse/decode/write) instead of always "Write error", and output file headers are finalized even when decoding fails, keeping partial output playable
+
+### Fixed
+- Removed a shutdown race that could report success after an unreported pipeline error
 
 ## [0.4.0] - 2025-08-15
 
