@@ -7,7 +7,6 @@ use anyhow::Result;
 /// Unified input reader that handles both file and pipe input with buffered reading
 pub struct InputReader {
     reader: Box<dyn Read>,
-    is_pipe: bool,
 }
 
 impl InputReader {
@@ -24,7 +23,7 @@ impl InputReader {
             Box::new(BufReader::new(file))
         };
 
-        Ok(Self { reader, is_pipe })
+        Ok(Self { reader })
     }
 
     /// Read a chunk of data into the provided buffer
@@ -32,19 +31,6 @@ impl InputReader {
     pub fn read_chunk(&mut self, buffer: &mut [u8]) -> Result<usize> {
         let bytes_read = self.reader.read(buffer)?;
         Ok(bytes_read)
-    }
-
-    /// Check if this is pipe input
-    pub fn is_pipe(&self) -> bool {
-        self.is_pipe
-    }
-
-    /// Read all remaining data for non-streaming use cases
-    /// Note: This should only be used for small files or when you need all data at once
-    pub fn read_all(&mut self) -> Result<Vec<u8>> {
-        let mut data = Vec::new();
-        self.reader.read_to_end(&mut data)?;
-        Ok(data)
     }
 
     /// Process data in chunks using a callback function

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use anyhow::Result;
 use clap::Parser as ClapParser;
 use cli::command::{Cli, Commands, LogFormat};
@@ -9,12 +7,17 @@ use indicatif::MultiProgress;
 use indicatif_log_bridge::LogWrapper;
 use log::info;
 
+// The format writers model more of CAF, Wave64 and their integer encodings
+// than the CLI currently emits.
+#[allow(dead_code)]
 mod byteorder;
+#[allow(dead_code)]
 mod caf;
 mod cli;
 mod damf;
 mod input;
 pub(crate) mod timestamp;
+#[allow(dead_code)]
 mod wav;
 
 fn main() -> Result<()> {

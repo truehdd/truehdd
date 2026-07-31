@@ -1,5 +1,4 @@
 use super::output::AudioWriter;
-use super::pipeline::WriterState;
 use crate::caf::{CAFWriter, parse_caf_file};
 use crate::cli::command::{AudioFormat, WarpMode};
 use crate::damf::{BedInstance, Configuration, Data, Event};
@@ -285,11 +284,7 @@ impl DecodeHandler {
         Ok(())
     }
 
-    pub(crate) fn handle_stream_restart(
-        &mut self,
-        _decoded: &truehd::process::decode::DecodedAccessUnit,
-        _state: &WriterState,
-    ) -> Result<()> {
+    pub(crate) fn handle_stream_restart(&mut self) -> Result<()> {
         info!(
             "Stream restart detected at AU {}, creating new segment {}",
             self.au_index,
@@ -533,40 +528,6 @@ impl DecodeHandler {
             self.cached_bed_indices = Some(bed_indices);
             self.cached_bed_channel_map = Some(channel_map);
         }
-    }
-
-    fn apply_bed_conformance_cached(
-        &self,
-        samples: &[i32],
-        original_channel_count: usize,
-    ) -> Vec<i32> {
-        let channel_map = self.cached_bed_channel_map.as_ref().unwrap();
-        let bed_indices_len = self.cached_bed_indices.as_ref().unwrap().len();
-        let sample_frames = samples.len() / original_channel_count;
-        let total_output_channels = TARGET_BED_CHANNELS + self.cached_num_object_channels;
-
-        let mut conformed_samples = Vec::with_capacity(sample_frames * total_output_channels);
-
-        for sample_idx in 0..sample_frames {
-            let base_offset = sample_idx * original_channel_count;
-
-            // Handle bed channels using pre-computed mapping
-            for &source_pos in channel_map.iter().take(TARGET_BED_CHANNELS) {
-                if let Some(source_pos) = source_pos {
-                    conformed_samples.push(samples[base_offset + source_pos]);
-                } else {
-                    conformed_samples.push(0i32);
-                }
-            }
-
-            // Handle object channels
-            for obj_ch in 0..self.cached_num_object_channels {
-                let source_ch = bed_indices_len + obj_ch;
-                conformed_samples.push(samples[base_offset + source_ch]);
-            }
-        }
-
-        conformed_samples
     }
 
     fn apply_bed_conformance_direct(

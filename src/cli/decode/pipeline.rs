@@ -37,11 +37,6 @@ impl std::fmt::Display for PipelineError {
 
 impl std::error::Error for PipelineError {}
 
-#[derive(Clone)]
-pub struct WriterState {
-    fail_level: Level,
-}
-
 /// Aggregated results for the final report.
 pub struct DecodeSummary {
     pub decoded_frames: u64,
@@ -85,7 +80,6 @@ pub fn run_threaded_pipeline(
 
     let required_presentations = args.presentation.to_required_presentations();
 
-    let state = WriterState { fail_level };
     let mut outputs = PresentationOutputs {
         handlers: core::array::from_fn(|_| None),
         base_path: args.output_path.clone(),
@@ -122,7 +116,7 @@ pub fn run_threaded_pipeline(
             )
         });
 
-        match run_writer_main(rx_decode, &mut outputs, &state, pb, progress_counter) {
+        match run_writer_main(rx_decode, &mut outputs, pb, progress_counter) {
             Ok(()) => Ok(outputs.summary()),
             Err(e) => Err(e),
         }
@@ -383,7 +377,6 @@ fn path_with_presentation_suffix(base: &Path, slot: usize) -> PathBuf {
 fn run_writer_main(
     rx: Receiver<DecodeMsg>,
     outputs: &mut PresentationOutputs,
-    state: &WriterState,
     pb: Option<&ProgressBar>,
     progress_counter: Arc<AtomicU64>,
 ) -> Result<(), PipelineError> {
@@ -396,7 +389,7 @@ fn run_writer_main(
                     };
 
                     let handler = outputs.handler_for(slot);
-                    if let Err(e) = process_frame(handler, decoded, state, pb) {
+                    if let Err(e) = process_frame(handler, decoded, pb) {
                         outputs.finalize_best_effort();
                         return Err(PipelineError::Write(e));
                     }
@@ -422,11 +415,10 @@ fn run_writer_main(
 fn process_frame(
     handler: &mut DecodeHandler,
     decoded: DecodedAccessUnit,
-    state: &WriterState,
     pb: Option<&ProgressBar>,
 ) -> Result<()> {
     if decoded.substream_info_changed {
-        handler.handle_stream_restart(&decoded, state)?;
+        handler.handle_stream_restart()?;
     }
 
     handler.handle_decoded_frame(decoded, &pb.cloned(), handler.start_time)?;
