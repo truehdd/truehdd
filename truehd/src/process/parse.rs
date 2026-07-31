@@ -47,6 +47,15 @@ impl Parser {
         self.state.hires_output_timing
     }
 
+    /// Read-only view of the parser state for substream `i`.
+    ///
+    /// Gives realtime consumers access to per-substream DRC state
+    /// (`drc_*`, `heavy_drc_*`) without exposing the parser internals
+    /// mutably. Returns `None` for an out-of-range index.
+    pub fn substream_state(&self, i: usize) -> Option<&ParserSubstreamState> {
+        self.state.substream_i_state(i).ok()
+    }
+
     /// Sets the failure level for validation errors.
     ///
     /// - `log::Level::Error`: Only fail on Error level messages (default)
