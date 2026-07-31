@@ -173,11 +173,72 @@ jobs:
       attestations: write
 
     steps:
+      - uses: actions/checkout@v4
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
 
       - name: Display structure of downloaded files
         run: ls -R
+
+      # Asset names are part of the download contract for tools that fetch
+      # releases automatically; do not rename them between releases.
+      - name: Compose release notes
+        shell: bash
+        run: |
+          VERSION=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          PREFIX="${{ env.RELEASE_BIN }}-${VERSION}"
+
+          # Section for this version, falling back to Unreleased
+          section() {
+            awk -v heading="## [$1]" '
+              index($0, heading) == 1 { found = 1; next }
+              found && /^## \[/ { exit }
+              found { print }
+            ' "$2"
+          }
+
+          notes() {
+            local text
+            text=$(section "$VERSION" "$1")
+            if [ -z "$(echo "$text" | tr -d '[:space:]')" ]; then
+              text=$(section "Unreleased" "$1")
+            fi
+            # Trim surrounding blank lines
+            echo "$text" | sed '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}'
+          }
+
+          {
+            echo "## Downloads"
+            echo
+            echo "Pick one file. If unsure which CPU you have, choose Intel or AMD."
+            echo
+            echo "| Platform | CPU | File |"
+            echo "| --- | --- | --- |"
+            echo "| Windows | Intel or AMD (almost all PCs) | \`${PREFIX}-x86_64-pc-windows-msvc.zip\` |"
+            echo "| Windows | ARM (Snapdragon, Windows on ARM) | \`${PREFIX}-aarch64-pc-windows-msvc.zip\` |"
+            echo "| macOS | Intel and Apple Silicon (universal) | \`${PREFIX}-universal-macOS.zip\` |"
+            echo "| Linux | Intel or AMD | \`${PREFIX}-x86_64-unknown-linux-gnu.tar.gz\` |"
+            echo "| Linux | Intel or AMD, static build | \`${PREFIX}-x86_64-unknown-linux-musl.tar.gz\` |"
+            echo "| Linux | ARM | \`${PREFIX}-aarch64-unknown-linux-gnu.tar.gz\` |"
+            echo "| Linux | ARM, static build | \`${PREFIX}-aarch64-unknown-linux-musl.tar.gz\` |"
+            echo
+            echo "The static Linux builds run on distributions with an older or different C library."
+            echo "Each archive ships a matching \`.sha256\` file for verification."
+            echo
+            echo "## Changes"
+            echo
+            notes CHANGELOG.md
+            LIB=$(notes truehd/CHANGELOG.md)
+            if [ -n "$(echo "$LIB" | tr -d '[:space:]')" ]; then
+              echo
+              echo "## Library (truehd crate)"
+              echo
+              echo "$LIB"
+            fi
+          } > release-notes.md
+
+          cat release-notes.md
 
       - name: Attest
         uses: actions/attest-build-provenance@v1
@@ -192,6 +253,7 @@ jobs:
         with:
           tag_name: ${{ env.RELEASE_PKG_VERSION }}
           draft: true
+          body_path: release-notes.md
           files: |
             Linux artifacts/*
             Windows artifacts/*
