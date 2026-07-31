@@ -10,15 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `Parser::reset_for_next_major_sync()` and `Decoder::reset_for_next_major_sync()` to recover from fatal parse/decode failures at the next major sync
 - `Extractor::error_count()` exposing the number of corrupt-frame events
+- `Parser::substream_state()` read-only accessor for per-substream state (DRC gain/time values)
+- OAMD object distance parsing: `ObjectRenderInfo::distance_factor` resolved via the new `DISTANCE_FACTORS` table
+- `PartialEq`, `Eq`, `Hash` derives on `SpeakerLabels`
 
 ### Changed
 - Minimum supported Rust version is now 1.88.0 (let chains; was already required, now declared correctly)
 - Updated dependency floors (bitstream-io 4.10)
+- **BREAKING**: `ObjectRenderInfo` fields `b_object_at_infinity` and `distance_factor_idx` replaced by `distance_factor: Option<f64>`
+- `Extractor` internal buffer reworked (Vec + cursor with amortized compaction) removing per-resync allocations
 
 ### Fixed
 - Correct substream 0 size calculation for substream size history
 - Correct `TRIM_LUT[14]` value (-16.0 -> -15.0)
 - No longer panic on corrupt bitstreams: invalid `restart_sync_word`, division by zero in seamless-branch timing, and substream size/length underflows now return typed errors (#15, #16)
+- Persist heavy DRC gain/time updates in parser substream state; heavy DRC validation previously compared against zeroed values
 
 ## [0.4.0] - 2025-08-15
 
