@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `Decoder::decode_presentations()` decoding several presentations from one access unit in a single pass, and `PresentationMap` for resolving which substreams a presentation needs
 - `Parser::invalid_branches()` counting seamless branch points that fail the buffer-model checks; the decoded samples are unaffected, so callers can treat it as a conformance signal
 ### Added
 - `Parser::reset_for_next_major_sync()` and `Decoder::reset_for_next_major_sync()` to recover from fatal parse/decode failures at the next major sync
@@ -17,8 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `PartialEq`, `Eq`, `Hash` derives on `SpeakerLabels`
 
 ### Changed
+- **BREAKING**: `DecoderState::decode_access_unit()` is replaced by `decode_access_unit_presentations()`; use `Decoder::decode_presentation()` or `Decoder::decode_presentations()` instead
 - Minimum supported Rust version is now 1.88.0 (let chains; was already required, now declared correctly)
-- Updated dependency floors (bitstream-io 4.10)
+- Updated dependency floors (anyhow, bitstream-io 4.10, log, thiserror)
 - **BREAKING**: `ObjectRenderInfo` fields `b_object_at_infinity` and `distance_factor_idx` replaced by `distance_factor: Option<f64>`
 - `Extractor` internal buffer reworked (Vec + cursor with amortized compaction) removing per-resync allocations
 
