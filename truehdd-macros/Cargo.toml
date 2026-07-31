@@ -6,12 +6,12 @@ license = "Apache-2.0"
 description = "Procedural macros for the truehdd project"
 repository = "https://github.com/truehdd/truehdd/tree/main/truehdd-macros"
 authors = ["Rainbaby"]
-rust-version = "1.87.0"
+rust-version = "1.88.0"
 
 [lib]
 proc-macro = true
 
 [dependencies]
-darling = "0.20.10"
+darling = "0.24.0"
 quote = "1.0"
-syn = { version = "2.0", features = ["full"] }
+syn = { version = "3.0", features = ["full"] }

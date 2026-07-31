@@ -11,7 +11,7 @@ description = "Tools for inspecting and decoding Dolby TrueHD bitstreams"
 repository = "https://github.com/truehdd/truehdd"
 build = "build.rs"
 authors = ["Rainbaby"]
-rust-version = "1.87.0"
+rust-version = "1.95.0"
 
 [[bin]]
 name = "truehdd"
@@ -21,22 +21,25 @@ path = "src/main.rs"
 truehdd-macros = { version = "0.1.0", path = "truehdd-macros" }
 truehd = { version = "0.4.0", path = "truehd" }
 
-anyhow = "1.0.99"
-clap = { version = "4.5.45", features = ["derive"] }
+anyhow = "1.0.104"
+clap = { version = "4.6.4", features = ["derive"] }
 crossbeam = "0.8.4"
-env_logger = "0.11.8"
+env_logger = "0.11.11"
 fancy-regex = "0.16.2"
-indicatif = "0.18.0"
+indicatif = "0.18.6"
 indicatif-log-bridge = "0.2.3"
-log = "0.4.27"
-serde = { version = "1.0.219", features = ["derive"] }
+log = "0.4.33"
+serde = { version = "1.0.229", features = ["derive"] }
 serde_yaml_ng = "0.10.0"
 
+[dev-dependencies]
+tempfile = "3.27.0"
+
 [build-dependencies]
-anyhow = "1.0.99"
-vergen-gitcl = { version = "1.0.8", default-features = false, features = ["build"] }
-chrono = "0.4.41"
-serde_json = "1.0.142"
+anyhow = "1.0.104"
+vergen-gitcl = { version = "10.0.1", default-features = false, features = ["build"] }
+chrono = "0.4.45"
+serde_json = "1.0.151"
 
 [profile.release-deploy]
 inherits = "release"

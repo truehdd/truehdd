@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Minimum supported Rust version is now 1.88.0 (let chains; was already required, now declared correctly)
+- Updated dependency floors (bitstream-io 4.10)
+
 ### Fixed
 - Correct substream 0 size calculation for substream size history
+- Correct `TRIM_LUT[14]` value (-16.0 -> -15.0)
 
 ## [0.4.0] - 2025-08-15
 

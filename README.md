@@ -25,7 +25,7 @@ A command-line tool for decoding Dolby TrueHD audio streams.
 
 ### From Source
 
-Requires Rust 1.87.0 or later:
+Requires Rust 1.95.0 or later:
 
 ```bash
 git clone https://github.com/truehdd/truehdd

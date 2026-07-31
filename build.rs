@@ -3,13 +3,13 @@ use chrono::TimeZone;
 use std::env;
 use std::fs;
 use std::process::Command;
-use vergen_gitcl::{Emitter, GitclBuilder};
+use vergen_gitcl::{Emitter, Gitcl};
 
 fn main() -> Result<()> {
     // Generate git information
-    let gitcl = GitclBuilder::default()
+    let gitcl = Gitcl::builder()
         .describe(true, true, Some("[0-9]*"))
-        .build()?;
+        .build();
 
     let gitcl_res = Emitter::default()
         .idempotent()
@@ -60,32 +60,27 @@ fn get_truehd_version_from_metadata() -> Result<String> {
     // Method 1: Look for truehd in workspace members first (local development)
     if let Some(packages) = metadata["packages"].as_array() {
         for package in packages {
-            if let Some(name) = package["name"].as_str() {
-                if name == "truehd" {
-                    if let Some(version) = package["version"].as_str() {
-                        return Ok(version.to_string());
-                    }
-                }
+            if package["name"].as_str() == Some("truehd")
+                && let Some(version) = package["version"].as_str()
+            {
+                return Ok(version.to_string());
             }
         }
     }
 
     // Method 2: Look in dependency graph for published truehd package
-    if let Some(resolve) = metadata.get("resolve") {
-        if let Some(nodes) = resolve["nodes"].as_array() {
-            for node in nodes {
-                if let Some(id) = node["id"].as_str() {
-                    if id.starts_with("truehd ") {
-                        // Extract version from "truehd 0.2.1 (registry+...)" format
-                        if let Some(version_start) = id.find(' ') {
-                            if let Some(version_end) = id[version_start + 1..].find(' ') {
-                                let version =
-                                    &id[version_start + 1..version_start + 1 + version_end];
-                                return Ok(version.to_string());
-                            }
-                        }
-                    }
-                }
+    if let Some(resolve) = metadata.get("resolve")
+        && let Some(nodes) = resolve["nodes"].as_array()
+    {
+        for node in nodes {
+            if let Some(id) = node["id"].as_str()
+                && id.starts_with("truehd ")
+                // Extract version from "truehd 0.2.1 (registry+...)" format
+                && let Some(version_start) = id.find(' ')
+                && let Some(version_end) = id[version_start + 1..].find(' ')
+            {
+                let version = &id[version_start + 1..version_start + 1 + version_end];
+                return Ok(version.to_string());
             }
         }
     }
@@ -99,12 +94,12 @@ fn read_truehd_version_fallback() -> Result<String> {
 
     for line in toml_content.lines() {
         let line = line.trim();
-        if line.starts_with("version") && line.contains("=") {
-            if let Some(equals_pos) = line.find('=') {
-                let version_part = line[equals_pos + 1..].trim();
-                let version = version_part.trim_matches('"').trim_matches('\'');
-                return Ok(version.to_string());
-            }
+        if line.starts_with("version")
+            && let Some(equals_pos) = line.find('=')
+        {
+            let version_part = line[equals_pos + 1..].trim();
+            let version = version_part.trim_matches('"').trim_matches('\'');
+            return Ok(version.to_string());
         }
     }
 
