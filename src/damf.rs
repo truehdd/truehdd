@@ -1,3 +1,4 @@
+use fancy_regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::Display;
 use std::path::Path;
@@ -666,9 +667,20 @@ where
 }
 
 /// Helper function for common YAML string formatting
-fn format_yaml_string(mut yaml_str: String) -> String {
+fn format_yaml_string(yaml_str: String) -> String {
+    let mut yaml_str = yaml_str;
+
+    // Remove single quotes
     yaml_str.retain(|c| c != '\'');
-    yaml_str.replace("  ", "    ").replace("- ", "  - ")
+
+    // 2 leading spaces; before the property name ending in `:`
+    let leading_spaces_regex = Regex::new(r"[ ]{2}(?=.+:)").unwrap();
+
+    // A hyphen followed by a space; before the property name ending in `:`
+    let leading_hyphen_regex = Regex::new(r"-[ ](?=.+:)").unwrap();
+    
+    let filtered_str = leading_spaces_regex.replace_all(&yaml_str, "    ");
+    leading_hyphen_regex.replace_all(&filtered_str, "  - ").to_string()
 }
 
 #[test]
@@ -678,8 +690,8 @@ fn roundtrip() {
 presentations:
   - type: home
     simplified: false
-    metadata: NaturesFury.atmos.metadata
-    audio: NaturesFury.atmos.audio
+    metadata: Natures  -  Fury.atmos.metadata
+    audio: Natures  -  Fury.atmos.audio
     offset: 3598.0
     ffoa: 3600.0
     fps: 24
@@ -760,8 +772,8 @@ fn damf() {
 presentations:
   - type: home
     simplified: false
-    metadata: test.atmos.metadata
-    audio: test.atmos.audio
+    metadata: test  -  output.atmos.metadata
+    audio: test  -  output.atmos.audio
     offset: 0.0
     fps: 24
     scBedConfiguration: [3]
@@ -810,7 +822,7 @@ presentations:
     );
 
     let oamd = ObjectAudioMetadataPayload::read(TEST_DATA_TRIM).unwrap();
-    let data = Data::with_oamd_payload(&oamd, Path::new("test"));
+    let data = Data::with_oamd_payload(&oamd, Path::new("test  -  output"));
     let yaml_str = serde_yaml_ng::to_string(&data).unwrap();
 
     assert_eq!(test_str, format_yaml_string(yaml_str));
