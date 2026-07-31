@@ -360,7 +360,7 @@ impl SegmentDetector {
             let substream_changed = match self.current_substream_info {
                 Some(current) if current != major_sync.substream_info => {
                     info!(
-                        "substream_info changed: {:#02X} -> {:#02X}",
+                        "substream_info changed: {:#04X} -> {:#04X}",
                         current, major_sync.substream_info
                     );
                     true
@@ -375,7 +375,7 @@ impl SegmentDetector {
             let extended_changed = match self.current_extended_substream_info {
                 Some(current) if current != major_sync.extended_substream_info => {
                     info!(
-                        "extended_substream_info changed: {:#02X} -> {:#02X}",
+                        "extended_substream_info changed: {:#04X} -> {:#04X}",
                         current, major_sync.extended_substream_info
                     );
                     true

@@ -292,20 +292,14 @@ impl RestartHeader {
         }
 
         match rh.restart_sync_word {
-            RestartSyncWord::A => {
-                if state.substream_index == 1 && state.substream_info & 8 == 0 {
-                    bail!(RestartHeaderError::InvalidSyncBForSubstream1)
-                }
+            RestartSyncWord::A if state.substream_index == 1 && state.substream_info & 8 == 0 => {
+                bail!(RestartHeaderError::InvalidSyncBForSubstream1)
             }
-            RestartSyncWord::B => {
-                if state.substream_index == 0 {
-                    bail!(RestartHeaderError::InvalidSyncBForSubstream0)
-                }
+            RestartSyncWord::B if state.substream_index == 0 => {
+                bail!(RestartHeaderError::InvalidSyncBForSubstream0)
             }
-            rsw @ RestartSyncWord::C => {
-                if state.substream_index != 3 {
-                    bail!(RestartHeaderError::InvalidSyncC(rsw as u16))
-                }
+            rsw @ RestartSyncWord::C if state.substream_index != 3 => {
+                bail!(RestartHeaderError::InvalidSyncC(rsw as u16))
             }
             _ => {}
         }

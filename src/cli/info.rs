@@ -108,10 +108,10 @@ impl AnalysisContext {
         if self.analysis_result.is_none() || !self.hires_timing_displayed {
             match parser.parse(frame) {
                 Ok(access_unit) => {
-                    if let Some(ts) = &frame.timestamp {
-                        if self.timestamp.is_none() {
-                            self.timestamp = Some(ts.clone());
-                        }
+                    if let Some(ts) = &frame.timestamp
+                        && self.timestamp.is_none()
+                    {
+                        self.timestamp = Some(ts.clone());
                     }
 
                     if let Some(major_sync) = &access_unit.major_sync_info {
@@ -130,16 +130,17 @@ impl AnalysisContext {
                             }
                         }
 
-                        if !self.hires_timing_displayed {
-                            if let Some(timing) = parser.hires_output_timing() {
-                                if let Some(result) = &mut self.analysis_result {
-                                    result.hires_timing = Some(timing as u32);
-                                }
+                        if !self.hires_timing_displayed
+                            && let Some(timing) = parser.hires_output_timing()
+                        {
+                            if let Some(result) = &mut self.analysis_result {
+                                result.hires_timing = Some(timing as u32);
+                            }
 
-                                // Print trim detection immediately when available
-                                // Temporarily pause progress bar for clean output
-                                if let Some(ref pb) = self.pb {
-                                    pb.suspend(|| {
+                            // Print trim detection immediately when available
+                            // Temporarily pause progress bar for clean output
+                            if let Some(ref pb) = self.pb {
+                                pb.suspend(|| {
                                         print!("Trim detection              ");
                                         if timing != 0 {
                                             println!("{timing} samples are trimmed from the beginning of the stream");
@@ -148,20 +149,19 @@ impl AnalysisContext {
                                         }
                                         println!();
                                     });
+                            } else {
+                                print!("Trim detection              ");
+                                if timing != 0 {
+                                    println!(
+                                        "{timing} samples are trimmed from the beginning of the stream"
+                                    );
                                 } else {
-                                    print!("Trim detection              ");
-                                    if timing != 0 {
-                                        println!(
-                                            "{timing} samples are trimmed from the beginning of the stream"
-                                        );
-                                    } else {
-                                        println!("No trimmed samples detected");
-                                    }
-                                    println!();
+                                    println!("No trimmed samples detected");
                                 }
-
-                                self.hires_timing_displayed = true;
+                                println!();
                             }
+
+                            self.hires_timing_displayed = true;
                         }
                     }
                 }
@@ -176,11 +176,11 @@ impl AnalysisContext {
 
         self.frame_count += 1;
 
-        if self.frame_count.is_multiple_of(100) {
-            if let Some(ref pb) = self.pb {
-                pb.set_message(format!("Analyzing frames...       {}", self.frame_count));
-                pb.tick();
-            }
+        if self.frame_count.is_multiple_of(100)
+            && let Some(ref pb) = self.pb
+        {
+            pb.set_message(format!("Analyzing frames...       {}", self.frame_count));
+            pb.tick();
         }
 
         Ok(())

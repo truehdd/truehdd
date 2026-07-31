@@ -487,7 +487,7 @@ impl Block {
         if error_protect {
             b.block_header_crc = reader.get_n(8)?;
             info!(
-                "Block header CRC found: {:#02X} (error protection enabled)",
+                "Block header CRC found: {:#04X} (error protection enabled)",
                 b.block_header_crc
             );
         }

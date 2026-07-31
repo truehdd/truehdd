@@ -639,13 +639,13 @@ impl DecodeHandler {
             return Ok(());
         }
 
-        if self.metadata_writer.is_none() {
-            if let Some(ref base_path) = self.output_path {
-                let metadata_path = self.get_metadata_path(base_path);
-                if !metadata_path.as_os_str().is_empty() {
-                    info!("Creating metadata file: {}", metadata_path.display());
-                    self.metadata_writer = Some(BufWriter::new(File::create(metadata_path)?));
-                }
+        if self.metadata_writer.is_none()
+            && let Some(ref base_path) = self.output_path
+        {
+            let metadata_path = self.get_metadata_path(base_path);
+            if !metadata_path.as_os_str().is_empty() {
+                info!("Creating metadata file: {}", metadata_path.display());
+                self.metadata_writer = Some(BufWriter::new(File::create(metadata_path)?));
             }
         }
 
@@ -769,25 +769,25 @@ impl DecodeHandler {
     }
 
     fn update_progress(&mut self, pb: &Option<ProgressBar>, start_time: Instant) -> Result<()> {
-        if let Some(pb) = pb {
-            if self.decoded_frames.is_multiple_of(30) {
-                let elapsed = start_time.elapsed();
-                let audio_duration = self.total_samples as f64 / self.final_sample_rate as f64;
-                let speed = audio_duration / elapsed.as_secs_f64();
+        if let Some(pb) = pb
+            && self.decoded_frames.is_multiple_of(30)
+        {
+            let elapsed = start_time.elapsed();
+            let audio_duration = self.total_samples as f64 / self.final_sample_rate as f64;
+            let speed = audio_duration / elapsed.as_secs_f64();
 
-                // Use reusable buffer for progress message to avoid allocations
-                self.progress_buffer.clear();
-                use crate::timestamp::time_str;
-                use std::fmt::Write;
-                write!(
-                    &mut self.progress_buffer,
-                    "speed: {:.1}x | timestamp: {}",
-                    speed,
-                    time_str(audio_duration)
-                )
-                .expect("Writing to String should not fail");
-                pb.set_message(self.progress_buffer.clone());
-            }
+            // Use reusable buffer for progress message to avoid allocations
+            self.progress_buffer.clear();
+            use crate::timestamp::time_str;
+            use std::fmt::Write;
+            write!(
+                &mut self.progress_buffer,
+                "speed: {:.1}x | timestamp: {}",
+                speed,
+                time_str(audio_duration)
+            )
+            .expect("Writing to String should not fail");
+            pb.set_message(self.progress_buffer.clone());
         }
         Ok(())
     }
@@ -873,12 +873,11 @@ impl DecodeHandler {
 }
 
 fn apply_warp_mode_override(damf_data: &mut Data, warp_mode: Option<WarpMode>) {
-    if let Some(cli_warp_mode) = warp_mode {
-        if let Some(presentation) = damf_data.presentations_mut().first_mut() {
-            if presentation.warp_mode.is_none() {
-                presentation.warp_mode = Some(cli_warp_mode.into());
-            }
-        }
+    if let Some(cli_warp_mode) = warp_mode
+        && let Some(presentation) = damf_data.presentations_mut().first_mut()
+        && presentation.warp_mode.is_none()
+    {
+        presentation.warp_mode = Some(cli_warp_mode.into());
     }
 }
 

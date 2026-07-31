@@ -348,7 +348,7 @@ impl MajorSyncInfo {
                 && (76562297473007889u64 >> substream_info.wrapping_sub(20)) & 1 != 0
                 || (68987981841u64 >> substream_info.wrapping_sub(88)) & 1 != 0
             {
-                debug!("substream_info={substream_info:#02X}")
+                debug!("substream_info={substream_info:#04X}")
             } else {
                 log_or_err!(
                     state,

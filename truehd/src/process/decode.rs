@@ -352,9 +352,9 @@ impl DecoderState {
         let mut result: [Option<DecodedAccessUnit>; MAX_PRESENTATIONS] =
             core::array::from_fn(|_| None);
 
-        for i in 0..MAX_PRESENTATIONS {
+        for (i, decoded) in result.iter_mut().enumerate() {
             if self.effective_presentations[i] {
-                result[i] = Some(self.create_decoded_result(i)?);
+                *decoded = Some(self.create_decoded_result(i)?);
             }
         }
 
