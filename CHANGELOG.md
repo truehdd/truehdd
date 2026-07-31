@@ -8,12 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `--presentation` accepts a list (`0,1,3`), `all`, or `max` in addition to a single index; multiple presentations decode in a single pass with shared extraction and parsing, writing one output per presentation with `_p{index}` filename suffixes
 - Decode now recovers from mid-stream corruption: after a parse or decode failure, both stages reset in lockstep and resume at the next major sync instead of continuing on damaged state
 
 ### Changed
 - Minimum supported Rust version for building the CLI is now 1.95.0
 - Updated dependencies (clap 4.6, vergen-gitcl 10)
 - Decode pipeline errors now travel in-band with the data: failures report the originating stage (input/parse/decode/write) instead of always "Write error", and output file headers are finalized even when decoding fails, keeping partial output playable
+- **BREAKING**: the default `--presentation` is now `max` (highest available presentation); for streams where presentation 3 exists this matches the previous default of `3`
+- `--format` now applies to every selected presentation except presentation 3, which always uses CAF; previously the requested format was ignored whenever presentation 3 was involved
 
 ### Fixed
 - Removed a shutdown race that could report success after an unreported pipeline error

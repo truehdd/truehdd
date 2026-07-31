@@ -3,7 +3,7 @@ mod output;
 mod pipeline;
 mod progress;
 
-use super::command::{AudioFormat, Cli, DecodeArgs};
+use super::command::{Cli, DecodeArgs};
 use anyhow::Result;
 use indicatif::MultiProgress;
 use log::{Level, info};
@@ -14,13 +14,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 pub fn cmd_decode(args: &DecodeArgs, cli: &Cli, multi: Option<&MultiProgress>) -> Result<()> {
-    if args.presentation > 3 {
-        return Err(anyhow::anyhow!(
-            "Presentation index must be 0-3, got {}",
-            args.presentation
-        ));
-    }
-
     info!(
         "Decoding TrueHD stream: {} (strict mode: {}, presentation: {})",
         args.input.display(),
@@ -29,17 +22,6 @@ pub fn cmd_decode(args: &DecodeArgs, cli: &Cli, multi: Option<&MultiProgress>) -
     );
 
     let is_pipe = args.input.to_string_lossy() == "-";
-    let effective_format = if args.presentation == 3 {
-        if args.format != AudioFormat::Caf {
-            info!(
-                "Forcing CAF format for presentation 3, ignoring --format {:?}",
-                args.format
-            );
-        }
-        AudioFormat::Caf
-    } else {
-        args.format
-    };
 
     if let Some(ref path) = args.output_path {
         info!("Output path specified: {}", path.display());
@@ -73,30 +55,22 @@ pub fn cmd_decode(args: &DecodeArgs, cli: &Cli, multi: Option<&MultiProgress>) -
     // Shared progress counter for thread-safe updates
     let progress_counter = Arc::new(AtomicU64::new(0));
 
-    // Enhanced pipeline with proper error handling and bounded channels
-    let result = run_threaded_pipeline(
-        args,
-        effective_format,
-        fail_level,
-        strict_mode,
-        pb.as_ref(),
-        progress_counter,
-    );
+    let result =
+        run_threaded_pipeline(args, fail_level, strict_mode, pb.as_ref(), progress_counter);
 
     match result {
-        Ok(mut handler) => {
-            handler.finalize()?;
+        Ok(summary) => {
             finalize_progress_bar(
                 &pb,
                 total_frames,
-                handler.total_samples,
-                handler.final_sample_rate,
-                handler.start_time,
+                summary.total_samples,
+                summary.final_sample_rate,
+                summary.start_time,
             );
 
             info!(
                 "Processing complete: {} frames, {} samples",
-                handler.decoded_frames, handler.total_samples
+                summary.decoded_frames, summary.total_samples
             );
             info!("Decoding completed successfully");
             Ok(())

@@ -129,6 +129,88 @@ impl From<WarpMode> for crate::damf::WarpMode {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum PresentationSelection {
+    Single(u8),
+    Multiple(Vec<u8>),
+    All,
+    Max,
+}
+
+impl PresentationSelection {
+    /// Presentations to request from the decoder. Unavailable ones are
+    /// remapped or dropped by the decoder's presentation map.
+    pub fn to_required_presentations(&self) -> [bool; 4] {
+        let mut required = [false; 4];
+        match self {
+            PresentationSelection::Single(p) => required[*p as usize] = true,
+            PresentationSelection::Multiple(presentations) => {
+                for &p in presentations {
+                    required[p as usize] = true;
+                }
+            }
+            PresentationSelection::All => required = [true; 4],
+            PresentationSelection::Max => required[3] = true,
+        }
+        required
+    }
+
+    /// Whether at most one output file is produced (no filename suffixes).
+    pub fn is_single_output(&self) -> bool {
+        matches!(
+            self,
+            PresentationSelection::Single(_) | PresentationSelection::Max
+        ) || matches!(self, PresentationSelection::Multiple(p) if p.len() == 1)
+    }
+}
+
+impl std::fmt::Display for PresentationSelection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PresentationSelection::Single(p) => write!(f, "{p}"),
+            PresentationSelection::Multiple(presentations) => {
+                let list: Vec<String> = presentations.iter().map(|p| p.to_string()).collect();
+                write!(f, "{}", list.join(","))
+            }
+            PresentationSelection::All => write!(f, "all"),
+            PresentationSelection::Max => write!(f, "max"),
+        }
+    }
+}
+
+impl std::str::FromStr for PresentationSelection {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "all" => Ok(PresentationSelection::All),
+            "max" => Ok(PresentationSelection::Max),
+            _ if s.contains(',') => {
+                let presentations: Result<Vec<u8>, _> =
+                    s.split(',').map(str::trim).map(str::parse).collect();
+                match presentations {
+                    Ok(mut presentations) => {
+                        if presentations.iter().any(|&p| p > 3) {
+                            return Err("presentation indices must be 0-3".to_string());
+                        }
+                        presentations.sort_unstable();
+                        presentations.dedup();
+                        Ok(PresentationSelection::Multiple(presentations))
+                    }
+                    Err(_) => Err("invalid presentation list; use e.g. \"0,1,3\"".to_string()),
+                }
+            }
+            _ => match s.parse::<u8>() {
+                Ok(p) if p <= 3 => Ok(PresentationSelection::Single(p)),
+                Ok(_) => Err("presentation index must be 0-3".to_string()),
+                Err(_) => {
+                    Err("expected an index (0-3), a list (0,1,3), \"all\" or \"max\"".to_string())
+                }
+            },
+        }
+    }
+}
+
 #[derive(Debug, Args)]
 pub struct DecodeArgs {
     /// Input TrueHD bitstream (use "-" for stdin).
@@ -139,13 +221,14 @@ pub struct DecodeArgs {
     #[arg(long, value_name = "PATH")]
     pub output_path: Option<PathBuf>,
 
-    /// Audio format for output (ignored for presentation 3 which always uses CAF).
+    /// Audio format for output (presentation 3 always uses CAF).
     #[arg(long, value_enum, default_value_t = AudioFormat::Caf)]
     pub format: AudioFormat,
 
-    /// Presentation index (0-3).
-    #[arg(long, value_name = "INDEX", default_value_t = 3)]
-    pub presentation: u8,
+    /// Presentations to decode: an index (0-3), a list (0,1,3), "all",
+    /// or "max" for the highest available presentation.
+    #[arg(long, value_name = "SELECTION", default_value = "max")]
+    pub presentation: PresentationSelection,
 
     /// Disable progress estimation
     #[arg(long)]
