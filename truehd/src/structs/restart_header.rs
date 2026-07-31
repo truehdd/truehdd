@@ -373,12 +373,14 @@ impl RestartHeader {
             if state.format_sync == MAJOR_SYNC_FBB {
                 unimplemented!("{}", UNIMPLEMENTED_FBB_MSG)
             } else {
+                rh.heavy_drc_gain_update = reader.get_s(9)?;
+                rh.heavy_drc_time_update = reader.get_n(3)?;
+
                 let ss_state = state.substream_state_mut()?;
                 ss_state.heavy_drc_active = true;
                 ss_state.heavy_drc_count = 0;
-
-                rh.heavy_drc_gain_update = reader.get_s(9)?;
-                rh.heavy_drc_time_update = reader.get_n(3)?;
+                ss_state.heavy_drc_gain_update = rh.heavy_drc_gain_update;
+                ss_state.heavy_drc_time_update = rh.heavy_drc_time_update;
             }
         } else {
             reader.skip_n(12)?;
