@@ -1296,4 +1296,15 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn trim_lut_values() {
+        use crate::structs::oamd::TRIM_LUT;
+        // Reference decoder maps trim index 14 to -15.0 dB (Q12 0x02d8)
+        assert_eq!(TRIM_LUT[14], -15.0);
+        // -1.5 dB step progression from index 7 through 14
+        for i in 7..14 {
+            assert_eq!(TRIM_LUT[i] - TRIM_LUT[i + 1], 1.5);
+        }
+    }
 }

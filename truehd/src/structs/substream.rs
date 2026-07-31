@@ -176,7 +176,16 @@ impl SubstreamSegment {
             test_size += 16;
         }
 
-        if expected_end_pos - reader.position()? >= test_size {
+        let current_pos = reader.position()?;
+        let remaining_bits = expected_end_pos.checked_sub(current_pos).ok_or_else(|| {
+            anyhow!(SubstreamError::SubstreamSizeUnderflow {
+                substream: state.substream_index,
+                end_pos: expected_end_pos,
+                current_pos,
+            })
+        })?;
+
+        if remaining_bits >= test_size {
             let terminator_a = reader.get_n(18)?;
 
             if terminator_a == 0x348D3 {
@@ -233,7 +242,14 @@ impl SubstreamSegment {
             // TODO: check if decoded more than it should be
         }
 
-        let len = reader.position()? - start_pos;
+        let current_pos = reader.position()?;
+        let len = current_pos.checked_sub(start_pos).ok_or_else(|| {
+            anyhow!(SubstreamError::SubstreamLengthUnderflow {
+                substream: state.substream_index,
+                current_pos,
+                start_pos,
+            })
+        })?;
 
         if crc_present {
             let parity = reader.parity_check_for_last_n_bits(len)? ^ 0xa9;

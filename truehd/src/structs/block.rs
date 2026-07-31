@@ -310,12 +310,20 @@ impl Block {
 
                 state.substream_state_mut()?.output_timing_history[i] = output_timing;
 
-                let substream_size = state.substream_state()?.substream_end_ptr
-                    - if state.substream_index == 0 {
-                        0
-                    } else {
-                        state.substream_state[state.substream_index - 1].substream_end_ptr
-                    };
+                let substream_size = if state.substream_index == 0 {
+                    state.substream_state()?.substream_end_ptr
+                } else {
+                    let end_ptr = state.substream_state()?.substream_end_ptr;
+                    let start_ptr =
+                        state.substream_state[state.substream_index - 1].substream_end_ptr;
+                    end_ptr.checked_sub(start_ptr).ok_or_else(|| {
+                        anyhow!(BlockError::SubstreamSizeUnderflow {
+                            substream: state.substream_index,
+                            end_ptr,
+                            start_ptr,
+                        })
+                    })?
+                };
 
                 state.substream_state_mut()?.substream_size_history[i] =
                     (substream_size as usize) << 1;

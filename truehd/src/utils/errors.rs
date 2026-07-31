@@ -136,6 +136,15 @@ pub enum BlockError {
     #[error("latency[n] < samples_per_au ({latency} < {au})")]
     LatencyTooLow { latency: usize, au: usize },
 
+    #[error(
+        "substream size underflow for substream {substream}: end_ptr={end_ptr}, start_ptr={start_ptr}"
+    )]
+    SubstreamSizeUnderflow {
+        substream: usize,
+        end_ptr: u16,
+        start_ptr: u16,
+    },
+
     #[error("huff_lsbs[{channel}] = {actual} exceeds max_lsbs {max}")]
     HuffLsbsTooLarge {
         channel: usize,
@@ -259,6 +268,9 @@ pub enum MatrixError {
 
 #[derive(thiserror::Error, Debug)]
 pub enum RestartHeaderError {
+    #[error("restart_sync_word must be 0x31EA, 0x31EB or 0x31EC. Read {0:#06X}")]
+    InvalidRestartSyncWord(u16),
+
     #[error(
         "output_timing must match across all substreams. Read {read}, substream {substream}, expected {expected}"
     )]
@@ -273,6 +285,15 @@ pub enum RestartHeaderError {
 
     #[error("Invalid output_timing. Read {read}, expected {expected}")]
     InvalidOutputTiming { read: usize, expected: usize },
+
+    #[error(
+        "Invalid seamless-branch timing interval (division by zero): samples_per_au={samples_per_au}, prev_advance={prev_advance}, advance={advance}"
+    )]
+    ZeroInputTimingInterval {
+        samples_per_au: usize,
+        prev_advance: usize,
+        advance: usize,
+    },
 
     #[error("Invalid seamless branch")]
     InvalidSeamlessBranch,
@@ -342,6 +363,24 @@ pub enum SubstreamError {
         substream: usize,
         read: u64,
         expected: u64,
+    },
+
+    #[error(
+        "substream size underflow for substream {substream}: end_pos={end_pos}, current_pos={current_pos}"
+    )]
+    SubstreamSizeUnderflow {
+        substream: usize,
+        end_pos: u64,
+        current_pos: u64,
+    },
+
+    #[error(
+        "substream length underflow for substream {substream}: current_pos={current_pos}, start_pos={start_pos}"
+    )]
+    SubstreamLengthUnderflow {
+        substream: usize,
+        current_pos: u64,
+        start_pos: u64,
     },
 
     #[error(
