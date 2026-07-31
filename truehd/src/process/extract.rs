@@ -219,6 +219,15 @@ impl Extractor {
         self.timestamp.clone()
     }
 
+    /// Number of corrupt-frame events encountered so far.
+    ///
+    /// Incremented each time a frame candidate fails validation and the
+    /// extractor has to resync. Lets callers detect silently skipped
+    /// corruption in otherwise successful extractions.
+    pub fn error_count(&self) -> usize {
+        self.error_count
+    }
+
     fn consume_front(&mut self, cnt: usize) {
         self.buffer.drain(..cnt);
     }

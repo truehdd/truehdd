@@ -54,6 +54,21 @@ impl Parser {
     pub fn set_fail_level(&mut self, level: log::Level) {
         self.state.fail_level = level;
     }
+
+    /// Resets stream state after a fatal parse failure.
+    ///
+    /// After [`parse`](Self::parse) returns an error, internal state may be
+    /// partially updated and is not safe to continue from. Calling this drops
+    /// all stream state while preserving configuration (fail level, seamless
+    /// branch tolerance, FIFO checks, required presentations), so parsing can
+    /// resume at the next frame carrying a major sync.
+    ///
+    /// Any paired [`Decoder`](crate::process::decode::Decoder) must be reset
+    /// with its own `reset_for_next_major_sync` at the same point in the frame
+    /// sequence, or its state will silently diverge from the parser's.
+    pub fn reset_for_next_major_sync(&mut self) {
+        self.state.reset_for_next_major_sync();
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -342,6 +357,16 @@ impl Default for ParserState {
 }
 
 impl ParserState {
+    pub fn reset_for_next_major_sync(&mut self) {
+        *self = Self {
+            fail_level: self.fail_level,
+            allow_seamless_branch: self.allow_seamless_branch,
+            check_fifo: self.check_fifo,
+            required_presentations: self.required_presentations,
+            ..Default::default()
+        };
+    }
+
     pub fn expected_au_end_pos(&self) -> usize {
         self.au_start_pos + (self.access_unit_length << 4)
     }
@@ -406,5 +431,34 @@ impl ParserState {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Parser;
+    use log::Level;
+
+    #[test]
+    fn reset_preserves_configuration() {
+        let mut parser = Parser::default();
+        parser.set_fail_level(Level::Warn);
+        parser.set_required_presentations(&[true, false, true, false]);
+
+        // Simulate accumulated stream state
+        parser.state.has_parsed_au = true;
+        parser.state.au_counter = 42;
+        parser.state.input_timing = 1234;
+
+        parser.reset_for_next_major_sync();
+
+        assert_eq!(parser.state.fail_level, Level::Warn);
+        assert_eq!(
+            parser.state.required_presentations,
+            [true, false, true, false]
+        );
+        assert!(!parser.state.has_parsed_au);
+        assert_eq!(parser.state.au_counter, 0);
+        assert_eq!(parser.state.input_timing, 0);
     }
 }

@@ -60,10 +60,28 @@ impl Decoder {
 
     /// Sets the failure level for validation errors.
     ///
-    /// - `log::Level::Error`: Only fail on Error level messages (default)  
+    /// - `log::Level::Error`: Only fail on Error level messages (default)
     /// - `log::Level::Warn`: Fail on Warning level and above (strict mode)
     pub fn set_fail_level(&mut self, level: log::Level) {
         self.state.fail_level = level;
+    }
+
+    /// Resets stream state after a fatal decode failure.
+    ///
+    /// After a decode error, internal DSP state (filter memory, matrix
+    /// coefficients, dither state) may be partially updated; continuing would
+    /// produce corrupt audio. Calling this drops all stream state while
+    /// preserving the fail level, so decoding can resume at the next access
+    /// unit carrying a major sync.
+    ///
+    /// Must be called in lockstep with
+    /// [`Parser::reset_for_next_major_sync`](crate::process::parse::Parser::reset_for_next_major_sync)
+    /// at the same point in the frame sequence.
+    pub fn reset_for_next_major_sync(&mut self) {
+        self.state = DecoderState {
+            fail_level: self.state.fail_level,
+            ..Default::default()
+        };
     }
 }
 

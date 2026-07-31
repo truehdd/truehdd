@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `Parser::reset_for_next_major_sync()` and `Decoder::reset_for_next_major_sync()` to recover from fatal parse/decode failures at the next major sync
+- `Extractor::error_count()` exposing the number of corrupt-frame events
+
 ### Changed
 - Minimum supported Rust version is now 1.88.0 (let chains; was already required, now declared correctly)
 - Updated dependency floors (bitstream-io 4.10)
