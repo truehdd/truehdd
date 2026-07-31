@@ -45,6 +45,7 @@ impl std::error::Error for ExitError {}
 /// Code to exit with for an error, defaulting to [`FAILURE`].
 pub fn code_for(error: &anyhow::Error) -> i32 {
     error
-        .downcast_ref::<ExitError>()
+        .chain()
+        .find_map(|error| error.downcast_ref::<ExitError>())
         .map_or(FAILURE, |error| error.code)
 }

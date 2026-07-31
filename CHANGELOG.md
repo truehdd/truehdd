@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--strict` now fails when the extractor skips frames it cannot use; these were previously reported only in the log and left the exit code at 0
 
 ### Fixed
+- Errors are reported on stderr even when logging is turned off
 - DAMF YAML no longer corrupts file references containing double spaces, `- ` or single quotes, and keeps quoting for names that need it so the output stays valid YAML (#17, #18)
 - Fields in `--log-format json` output are escaped, so paths and messages containing quotes no longer break the JSON
 - Removed a shutdown race that could report success after an unreported pipeline error

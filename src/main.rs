@@ -26,7 +26,8 @@ fn main() -> std::process::ExitCode {
     match run() {
         Ok(()) => std::process::ExitCode::from(exit::SUCCESS as u8),
         Err(error) => {
-            log::error!("{error:#}");
+            // Not through the log, which the user may have turned off
+            eprintln!("Error: {error:#}");
             std::process::ExitCode::from(exit::code_for(&error) as u8)
         }
     }

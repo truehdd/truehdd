@@ -52,7 +52,7 @@ Options:
       --log-format <LOG_FORMAT>     Log output format [default: plain]
                                     [possible values: plain, json]
       --progress                    Show progress bars during operations
-  -h, --help                        Print help (see a summary with '-h')
+  -h, --help                        Print help (see more with '--help')
   -V, --version                     Print version
 ```
 
@@ -69,7 +69,12 @@ Arguments:
   <INPUT>  Input TrueHD bitstream
 
 Options:
-...
+      --loglevel <LOGLEVEL>      Set the log level [default: info]
+                                 [possible values: off, error, warn, info, debug, trace]
+      --strict                   Treat warnings as fatal errors (fail on first warning)
+      --log-format <LOG_FORMAT>  Log output format [default: plain] [possible values: plain, json]
+      --progress                 Show progress bars during operations
+  -h, --help                     Print help (see more with '--help')
 ```
 
 **Examples:**
@@ -100,9 +105,14 @@ Options:
       --json                     Print a machine-readable result summary on stdout
       --warp-mode <WARP_MODE>    Specify warp mode when not present in metadata
                                  [possible values: normal, warping, prologiciix, loro]
-      --probe-range <COUNT>      Access units to probe for Atmos metadata with --bed-conform
+      --probe-range <PROBE_RANGE>
+                                 Access units to probe for Atmos metadata with --bed-conform
                                  [default: 12000]
-...
+      --loglevel <LOGLEVEL>      Set the log level [default: info]
+      --strict                   Treat warnings as fatal errors (fail on first warning)
+      --log-format <LOG_FORMAT>  Log output format [default: plain]
+      --progress                 Show progress bars during operations
+  -h, --help                     Print help (see more with '--help')
 ```
 
 **Output Files:**
@@ -124,11 +134,11 @@ When `--output-path` is specified, the tool generates appropriate output files:
   **Note:** Presentation 3 always uses CAF format regardless of `--format` option. Use `--bed-conform` to convert bed channels to 7.1.2 layout.
 
 
-- **Multiple presentations:** each output carries its presentation index as a suffix, for example `output_p1.caf` and `output_p3.atmos`. Selected presentations are decoded in a single pass, sharing the work their substreams have in common.
+- **Multiple presentations:** selecting a list, `all`, or several presentations suffixes every output with its presentation index, for example `output_p1.caf` and `output_p3.atmos`, even when only one presentation turns out to exist. Selected presentations are decoded in a single pass, sharing the work their substreams have in common.
 
 **Metadata Only:**
 
-`--metadata-only` writes the `.atmos` header and `.atmos.metadata` for an object presentation and skips the audio file, which is useful for inspecting or collecting metadata without producing gigabytes of PCM. The metadata is identical to a full decode: audio is decoded only around seamless branch points, where duplicate access units have to be recognised, which leaves the pass using about 40% less CPU. A presentation without object audio metadata writes nothing.
+`--metadata-only` writes the `.atmos` header and `.atmos.metadata` for an object presentation and skips the audio file, which is useful for inspecting or collecting metadata without producing gigabytes of PCM. The metadata is identical to a full decode. The `.atmos` header still names the audio file it did not write, so the result is a metadata set rather than a loadable master. A presentation without object audio metadata writes nothing.
 
 **Machine-Readable Output:**
 
@@ -152,8 +162,8 @@ calling program does not have to guess which files were written:
 }
 ```
 
-`skippedFrames` counts frames the extractor could not use and resynchronised
-past. `branches` counts seamless branch points that satisfy the decoder buffer
+`channels` is `null` until the channel count is known. `skippedFrames` counts
+frames the extractor could not use and resynchronised past. `branches` counts seamless branch points that satisfy the decoder buffer
 model and `invalidBranches` those that do not; the latter is a conformance
 finding and does not change the decoded samples. Logs stay on stderr, so
 stdout carries only this object. Use `--log-format json` for machine-readable

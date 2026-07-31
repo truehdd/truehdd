@@ -67,7 +67,12 @@ truehdd [全局选项] <子命令>
   <输入文件>  TrueHD 比特流文件
 
 选项:
-...
+      --loglevel <LOGLEVEL>      设置日志级别 [默认: info]
+                                 [可选值: off, error, warn, info, debug, trace]
+      --strict                   将警告视为致命错误（遇到第一个警告即失败）
+      --log-format <LOG_FORMAT>  日志输出格式 [默认: plain] [可选值: plain, json]
+      --progress                 显示操作进度条
+  -h, --help                     显示帮助信息
 ```
 
 **使用示例：**
@@ -98,9 +103,14 @@ truehdd info movie.thd
       --json                     在标准输出打印机器可读的结果摘要
       --warp-mode <WARP_MODE>    指定元数据中不存在时的环绕声像延展 (warp) 模式
                                  [可选值: normal, warping, prologiciix, loro]
-      --probe-range <COUNT>      使用 --bed-conform 时探测 Atmos 元数据的存取单元上限
+      --probe-range <PROBE_RANGE>
+                                 使用 --bed-conform 时探测 Atmos 元数据的存取单元上限
                                  [默认: 12000]
-...
+      --loglevel <LOGLEVEL>      设置日志级别 [默认: info]
+      --strict                   将警告视为致命错误（遇到第一个警告即失败）
+      --log-format <LOG_FORMAT>  日志输出格式 [默认: plain]
+      --progress                 显示操作进度条
+  -h, --help                     显示帮助信息
 ```
 
 **输出文件结构：**
@@ -122,11 +132,11 @@ truehdd info movie.thd
   **注意：** 表现索引3无视 `--format` 选项，始终使用CAF格式。使用 `--bed-conform` 将声床通道转换为7.1.2布局。
 
 
-- **多个表现：** 每个输出文件都带有表现索引后缀，例如 `output_p1.caf` 与 `output_p3.atmos`。所选表现在一次解码中完成，共用各子流之间重叠的运算。
+- **多个表现：** 当选择列表、`all` 或多个表现时，每个输出文件都会带上表现索引后缀，例如 `output_p1.caf` 与 `output_p3.atmos`；即使实际只存在一个表现也是如此。所选表现在一次解码中完成，共用各子流之间重叠的运算。
 
 **仅输出元数据：**
 
-`--metadata-only` 仅为对象表现写出 `.atmos` 头文件与 `.atmos.metadata`，跳过音频文件，便于在不产生大量 PCM 数据的情况下查看或收集元数据。元数据与完整解码的结果完全一致：仅在无缝分支点附近解码音频（该处需要识别重复的存取单元），因此整体 CPU 占用约减少 40%。若某个表现不含对象音频元数据，则不会写出任何文件。
+`--metadata-only` 仅为对象表现写出 `.atmos` 头文件与 `.atmos.metadata`，跳过音频文件，便于在不产生大量 PCM 数据的情况下查看或收集元数据。元数据与完整解码的结果完全一致。`.atmos` 头文件中仍会写明其跳过的音频文件名，因此得到的是一组元数据，而非可直接加载的母版。若某个表现不含对象音频元数据，则不会写出任何文件。
 
 **机器可读输出：**
 
@@ -149,7 +159,7 @@ truehdd info movie.thd
 }
 ```
 
-`skippedFrames` 表示提取器无法使用并重新同步跳过的帧数。`branches` 表示符合解码器缓冲模型的无缝分支点数量，`invalidBranches` 表示不符合的数量；后者属于符合性问题，不会改变解码得到的采样。日志始终输出到标准错误，因此标准输出只包含该对象。如需机器可读的日志，请使用 `--log-format json`。
+`channels` 在通道数未知前为 `null`。`skippedFrames` 表示提取器无法使用并重新同步跳过的帧数。`branches` 表示符合解码器缓冲模型的无缝分支点数量，`invalidBranches` 表示不符合的数量；后者属于符合性问题，不会改变解码得到的采样。日志始终输出到标准错误，因此标准输出只包含该对象。如需机器可读的日志，请使用 `--log-format json`。
 
 退出码指明失败发生在哪一阶段：
 
@@ -187,6 +197,9 @@ truehdd decode --progress audio.thd --output-path decoded_audio
 
 # 为缺少声像延展模式元数据的内容指定特定模式进行解码
 truehdd decode --warp-mode prologiciix audio.thd --output-path decoded_audio
+
+# 一次解码所有可用表现
+truehdd decode --presentation all audio.thd --output-path decoded_audio
 
 # 从 ffmpeg 管道解码
 ffmpeg -i movie.mkv -c copy -f truehd - | truehdd decode - --output-path audio
