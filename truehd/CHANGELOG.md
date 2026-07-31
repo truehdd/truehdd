@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-01
+
 ### Added
 - `Decoder::decode_presentations()` decoding several presentations from one access unit in a single pass, and `PresentationMap` for resolving which substreams a presentation needs
 - `Parser::invalid_branches()` counting seamless branch points that fail the buffer-model checks; the decoded samples are unaffected, so callers can treat it as a conformance signal

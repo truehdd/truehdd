@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-01
+
 ### Added
 - `--presentation` accepts a list (`0,1,3`), `all`, or `max` in addition to a single index; multiple presentations decode in a single pass with shared extraction and parsing, writing one output per presentation with `_p{index}` filename suffixes
 - Extraction, parsing and decoding run on separate threads
@@ -20,9 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Minimum supported Rust version for building the CLI is now 1.95.0
 - Updated dependencies (clap 4.6, vergen-gitcl 10, darling 0.24 with syn 3 in truehdd-macros)
 - Decode pipeline errors now travel in-band with the data: failures report the originating stage (input/parse/decode/write) instead of always "Write error", and output file headers are finalized even when decoding fails, keeping partial output playable
-- **BREAKING**: the default `--presentation` is now `max` (highest available presentation); for streams where presentation 3 exists this matches the previous default of `3`
-- `--format` now applies to every selected presentation except presentation 3, which always uses CAF; previously the requested format was ignored whenever presentation 3 was involved
-- `--strict` now fails when the extractor skips frames it cannot use; these were previously reported only in the log and left the exit code at 0
+- The default `--presentation` is now spelled `max`; it requests the same presentation as the previous default of `3`, including the fallback used when a stream has no presentation 3
+- **BREAKING**: `--format` now applies to whichever presentation is written, except presentation 3 which always uses CAF; it was previously ignored whenever presentation 3 was requested, so a stream without presentation 3 produced CAF regardless of the option
+- **BREAKING**: `--strict` treats frames the extractor had to skip as a failure, so it now exits non-zero on input it previously accepted
 
 ### Fixed
 - Errors are reported on stderr even when logging is turned off
