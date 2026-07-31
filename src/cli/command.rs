@@ -238,6 +238,10 @@ pub struct DecodeArgs {
     #[arg(long)]
     pub bed_conform: bool,
 
+    /// Write only object audio metadata, skipping PCM output
+    #[arg(long)]
+    pub metadata_only: bool,
+
     /// Specify warp mode when not present in metadata
     #[arg(long, value_enum)]
     pub warp_mode: Option<WarpMode>,

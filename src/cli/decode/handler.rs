@@ -4,7 +4,7 @@ use crate::cli::command::{AudioFormat, WarpMode};
 use crate::damf::{BedInstance, Configuration, Data, Event};
 use anyhow::Result;
 use indicatif::ProgressBar;
-use log::info;
+use log::{info, warn};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -17,6 +17,7 @@ pub struct DecodeHandler {
     output_path: Option<PathBuf>,
     format: AudioFormat,
     bed_conform: bool,
+    metadata_only: bool,
     warp_mode: Option<WarpMode>,
     audio_writer: Option<AudioWriter>,
     metadata_writer: Option<BufWriter<File>>,
@@ -141,17 +142,20 @@ impl DecodeHandler {
         output_path: Option<PathBuf>,
         format: AudioFormat,
         bed_conform: bool,
+        metadata_only: bool,
         warp_mode: Option<WarpMode>,
         atmos_probe_range: u64,
     ) -> Self {
-        // For presentation 3 with bed conformance, we need to probe for Atmos
-        let atmos_probing = bed_conform && format == AudioFormat::Caf;
+        // Probing exists to name and conform the audio file, so it is only
+        // needed when audio is written
+        let atmos_probing = bed_conform && format == AudioFormat::Caf && !metadata_only;
         let atmos_probe_range = if atmos_probing { atmos_probe_range } else { 0 };
 
         Self {
             output_path,
             format,
             bed_conform,
+            metadata_only,
             warp_mode,
             audio_writer: None,
             metadata_writer: None,
@@ -268,11 +272,13 @@ impl DecodeHandler {
             self.write_metadata(oamd, decoded.sampling_frequency)?;
         }
 
-        self.ensure_audio_writer(&decoded)?;
+        if !self.metadata_only {
+            self.ensure_audio_writer(&decoded)?;
 
-        // Only write audio if it wasn't already processed during probing finalization
-        if !self.current_frame_processed {
-            self.write_audio(&decoded)?;
+            // Only write audio if it wasn't already processed during probing finalization
+            if !self.current_frame_processed {
+                self.write_audio(&decoded)?;
+            }
         }
 
         self.decoded_frames += 1;
@@ -310,7 +316,8 @@ impl DecodeHandler {
 
         // Reset buffering state for new segment
         self.atmos_probe_buffer.clear();
-        self.atmos_probing = self.bed_conform && self.format == AudioFormat::Caf;
+        self.atmos_probing =
+            self.bed_conform && self.format == AudioFormat::Caf && !self.metadata_only;
         self.buffered_channel_count = 0;
         self.buffered_sample_rate = 48000;
         self.effective_channel_count = None; // Reset cached channel count
@@ -823,6 +830,10 @@ impl DecodeHandler {
     }
 
     pub(crate) fn finalize(&mut self) -> Result<()> {
+        if self.metadata_only && !self.has_atmos && self.decoded_frames > 0 {
+            warn!("No object audio metadata in this presentation, nothing written");
+        }
+
         if let Some(ref mut writer) = self.audio_writer {
             writer.finish()?;
         }

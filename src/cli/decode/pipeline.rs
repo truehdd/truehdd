@@ -86,6 +86,7 @@ pub fn run_threaded_pipeline(
         requested_format: args.format,
         single_output: args.presentation.is_single_output(),
         bed_conform: args.bed_conform,
+        metadata_only: args.metadata_only,
         warp_mode: args.warp_mode,
         probe_range: args.probe_range,
         start_time: Instant::now(),
@@ -291,6 +292,7 @@ struct PresentationOutputs {
     requested_format: AudioFormat,
     single_output: bool,
     bed_conform: bool,
+    metadata_only: bool,
     warp_mode: Option<WarpMode>,
     probe_range: u64,
     start_time: Instant,
@@ -328,6 +330,7 @@ impl PresentationOutputs {
                 path,
                 format,
                 self.bed_conform && slot == 3,
+                self.metadata_only,
                 self.warp_mode,
                 self.probe_range,
             );
