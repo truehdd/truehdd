@@ -1196,7 +1196,7 @@ impl ExtendedPrecisionPositionBlock {
 }
 
 #[allow(clippy::upper_case_acronyms)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum SpeakerLabels {
     L,
