@@ -47,6 +47,14 @@ impl Parser {
         self.state.hires_output_timing
     }
 
+    /// Number of seamless branch points that failed the buffer-model checks.
+    ///
+    /// These are conformance failures: the decoded samples are unaffected,
+    /// but the stream is not a conformant splice.
+    pub fn invalid_branches(&self) -> usize {
+        self.state.invalid_branches
+    }
+
     /// Read-only view of the parser state for substream `i`.
     ///
     /// Gives realtime consumers access to per-substream DRC state
@@ -244,6 +252,7 @@ pub struct ParserState {
     pub peak_data_rate_jump: bool,
     pub has_valid_branch: bool,
     pub has_substream_info_changed: bool,
+    pub invalid_branches: usize,
 
     pub variable_rate: bool,
     pub peak_data_rate: usize,
@@ -330,6 +339,7 @@ impl Default for ParserState {
             peak_data_rate_jump: false,
             has_valid_branch: false,
             has_substream_info_changed: false,
+            invalid_branches: 0,
 
             variable_rate: false,
             peak_data_rate: 0,
@@ -372,6 +382,7 @@ impl ParserState {
             allow_seamless_branch: self.allow_seamless_branch,
             check_fifo: self.check_fifo,
             required_presentations: self.required_presentations,
+            invalid_branches: self.invalid_branches,
             ..Default::default()
         };
     }

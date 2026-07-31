@@ -52,6 +52,7 @@ impl PipelineError {
 pub struct DecodeSummary {
     pub skipped_frames: u64,
     pub branches: u64,
+    pub invalid_branches: u64,
     pub decoded_frames: u64,
     pub total_samples: u64,
     pub final_sample_rate: u32,
@@ -103,6 +104,7 @@ pub fn run_threaded_pipeline(
     let required_presentations = args.presentation.to_required_presentations();
     let skipped_frames = Arc::new(AtomicU64::new(0));
     let branches = Arc::new(AtomicU64::new(0));
+    let invalid_branches = Arc::new(AtomicU64::new(0));
 
     let mut outputs = PresentationOutputs {
         handlers: core::array::from_fn(|_| None),
@@ -123,6 +125,7 @@ pub fn run_threaded_pipeline(
         s.spawn(move |_| run_extractor_thread(input_path, tx_extract, strict_mode, skipped));
 
         let branch_counter = Arc::clone(&branches);
+        let invalid_branch_counter = Arc::clone(&invalid_branches);
         s.spawn(move |_| {
             run_parser_thread(
                 rx_extract,
@@ -131,6 +134,7 @@ pub fn run_threaded_pipeline(
                 required_presentations,
                 strict_mode,
                 branch_counter,
+                invalid_branch_counter,
             )
         });
 
@@ -148,6 +152,7 @@ pub fn run_threaded_pipeline(
             Ok(()) => Ok(DecodeSummary {
                 skipped_frames: skipped_frames.load(Ordering::Relaxed),
                 branches: branches.load(Ordering::Relaxed),
+                invalid_branches: invalid_branches.load(Ordering::Relaxed),
                 ..outputs.summary()
             }),
             Err(e) => Err(e),
@@ -217,6 +222,7 @@ fn run_parser_thread(
     required_presentations: [bool; MAX_PRESENTATIONS],
     strict_mode: bool,
     branches: Arc<AtomicU64>,
+    invalid_branches: Arc<AtomicU64>,
 ) {
     let mut parser = Parser::default();
     parser.set_fail_level(fail_level);
@@ -238,6 +244,7 @@ fn run_parser_thread(
                     if au.has_valid_branch && !stream_changed {
                         branches.fetch_add(1, Ordering::Relaxed);
                     }
+                    invalid_branches.store(parser.invalid_branches() as u64, Ordering::Relaxed);
                     if tx
                         .send(ParseMsg::Au(index, Box::new(au), stream_changed))
                         .is_err()
@@ -408,6 +415,7 @@ impl PresentationOutputs {
         let mut summary = DecodeSummary {
             skipped_frames: 0,
             branches: 0,
+            invalid_branches: 0,
             decoded_frames: 0,
             total_samples: 0,
             final_sample_rate: 48000,
@@ -584,12 +592,13 @@ impl DecodeSummary {
             .collect();
 
         format!(
-            r#"{{"version":{},"input":{},"frames":{},"skippedFrames":{},"branches":{},"samples":{},"sampleRate":{},"presentations":[{}]}}"#,
+            r#"{{"version":{},"input":{},"frames":{},"skippedFrames":{},"branches":{},"invalidBranches":{},"samples":{},"sampleRate":{},"presentations":[{}]}}"#,
             crate::json::escape(env!("CARGO_PKG_VERSION")),
             crate::json::escape(&input.to_string_lossy()),
             self.decoded_frames,
             self.skipped_frames,
             self.branches,
+            self.invalid_branches,
             self.total_samples,
             self.final_sample_rate,
             presentations.join(",")

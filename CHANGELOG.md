@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `--metadata-only` writes the Dolby Atmos master header and metadata without the audio file (#10)
-- `--json` prints a result summary on stdout listing the files written per presentation, along with frame, sample, skipped-frame and seamless-branch counts
+- `--json` prints a result summary on stdout listing the files written per presentation, along with frame, sample, skipped-frame and seamless-branch counts, including branch points that fail the buffer-model checks
 - Exit codes now identify the failing stage: 3 input, 4 parse, 5 decode, 6 write
 
 ### Changed

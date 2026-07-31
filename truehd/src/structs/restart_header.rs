@@ -304,6 +304,8 @@ impl RestartHeader {
                         );
                     }
 
+                    state.invalid_branches += 1;
+
                     log_or_err!(
                         state,
                         Warn,
