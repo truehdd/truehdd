@@ -4,6 +4,7 @@ mod pipeline;
 mod progress;
 
 use super::command::{Cli, DecodeArgs};
+use crate::exit::ExitError;
 use anyhow::Result;
 use indicatif::MultiProgress;
 use log::{Level, info};
@@ -29,7 +30,12 @@ pub fn cmd_decode(args: &DecodeArgs, cli: &Cli, multi: Option<&MultiProgress>) -
 
     // Estimate total frames once if needed
     let total_frames = if !args.no_estimate_progress && !is_pipe {
-        Some(estimate_total_frames(&args.input)?)
+        Some(
+            estimate_total_frames(&args.input).map_err(|source| ExitError {
+                code: crate::exit::INPUT,
+                source,
+            })?,
+        )
     } else {
         None
     };
@@ -73,6 +79,11 @@ pub fn cmd_decode(args: &DecodeArgs, cli: &Cli, multi: Option<&MultiProgress>) -
                 summary.decoded_frames, summary.total_samples
             );
             info!("Decoding completed successfully");
+
+            if args.json {
+                println!("{}", summary.to_json(&args.input));
+            }
+
             Ok(())
         }
         Err(e) => {
@@ -85,7 +96,11 @@ pub fn cmd_decode(args: &DecodeArgs, cli: &Cli, multi: Option<&MultiProgress>) -
                 };
                 pb.abandon_with_message(error_msg);
             }
-            Err(anyhow::anyhow!("Pipeline error: {}", e))
+            Err(ExitError {
+                code: e.exit_code(),
+                source: anyhow::anyhow!("{e}"),
+            }
+            .into())
         }
     }
 }

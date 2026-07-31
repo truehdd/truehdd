@@ -242,6 +242,10 @@ pub struct DecodeArgs {
     #[arg(long)]
     pub metadata_only: bool,
 
+    /// Print a machine-readable result summary on stdout
+    #[arg(long)]
+    pub json: bool,
+
     /// Specify warp mode when not present in metadata
     #[arg(long, value_enum)]
     pub warp_mode: Option<WarpMode>,

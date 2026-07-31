@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `--metadata-only` writes the Dolby Atmos master header and metadata without the audio file (#10)
+- `--json` prints a result summary on stdout listing the files written per presentation, along with frame, sample, skipped-frame and seamless-branch counts
+- Exit codes now identify the failing stage: 3 input, 4 parse, 5 decode, 6 write
+
+### Changed
+- `--strict` now fails when the extractor skips frames it cannot use; these were previously reported only in the log and left the exit code at 0
+
+### Fixed
+- Fields in `--log-format json` output are escaped, so paths and messages containing quotes no longer break the JSON
 - `--presentation` accepts a list (`0,1,3`), `all`, or `max` in addition to a single index; multiple presentations decode in a single pass with shared extraction and parsing, writing one output per presentation with `_p{index}` filename suffixes
 - Decode now recovers from mid-stream corruption: after a parse or decode failure, both stages reset in lockstep and resume at the next major sync instead of continuing on damaged state
 

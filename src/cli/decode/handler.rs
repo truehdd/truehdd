@@ -22,6 +22,7 @@ pub struct DecodeHandler {
     audio_writer: Option<AudioWriter>,
     metadata_writer: Option<BufWriter<File>>,
     current_audio_path: Option<PathBuf>,
+    produced_files: Vec<PathBuf>,
     segment_index: u32,
     sample_buffer: Vec<i32>,
     progress_buffer: String,
@@ -160,6 +161,7 @@ impl DecodeHandler {
             audio_writer: None,
             metadata_writer: None,
             current_audio_path: None,
+            produced_files: Vec::new(),
             segment_index: 0,
             sample_buffer: Vec::with_capacity(160 * 16), // TrueHD theoretical maximum
             progress_buffer: String::with_capacity(64),
@@ -261,6 +263,8 @@ impl DecodeHandler {
                     } else {
                         create_damf_header_file(&effective_base, oamd, self.warp_mode)?;
                     }
+
+                    self.record_file(&create_path_with_suffix(&effective_base, "atmos"));
                 }
 
                 // Handle first-time Atmos file rename (not for segmented mode and not if we were probing)
@@ -405,6 +409,7 @@ impl DecodeHandler {
                 self.buffered_sample_rate,
                 channel_info.total_channels,
             )?);
+            self.record_file(&audio_path);
             self.current_audio_path = Some(audio_path);
         }
 
@@ -613,7 +618,8 @@ impl DecodeHandler {
             let metadata_path = self.get_metadata_path(base_path);
             if !metadata_path.as_os_str().is_empty() {
                 info!("Creating metadata file: {}", metadata_path.display());
-                self.metadata_writer = Some(BufWriter::new(File::create(metadata_path)?));
+                self.metadata_writer = Some(BufWriter::new(File::create(&metadata_path)?));
+                self.record_file(&metadata_path);
             }
         }
 
@@ -680,6 +686,7 @@ impl DecodeHandler {
                     decoded.sampling_frequency,
                     channel_count,
                 )?);
+                self.record_file(&audio_path);
                 self.current_audio_path = Some(audio_path);
             }
         }
@@ -729,6 +736,9 @@ impl DecodeHandler {
                         }
                         _ => unreachable!("Presentation 3 should always use CAF format"),
                     });
+                    let renamed_from = current_path.clone();
+                    self.produced_files.retain(|path| path != &renamed_from);
+                    self.record_file(&new_path);
                     self.current_audio_path = Some(new_path);
                 }
             }
@@ -827,6 +837,27 @@ impl DecodeHandler {
         } else {
             PathBuf::new() // Empty path for non-Atmos
         }
+    }
+
+    fn record_file(&mut self, path: &Path) {
+        if !self.produced_files.iter().any(|known| known == path) {
+            self.produced_files.push(path.to_path_buf());
+        }
+    }
+
+    /// Files written for this presentation, in creation order.
+    pub(crate) fn produced_files(&self) -> &[PathBuf] {
+        &self.produced_files
+    }
+
+    /// Channels in the written audio, once known.
+    pub(crate) fn channel_count(&self) -> Option<usize> {
+        self.effective_channel_count
+    }
+
+    /// Whether this presentation carried object audio metadata.
+    pub(crate) fn has_atmos(&self) -> bool {
+        self.has_atmos
     }
 
     pub(crate) fn finalize(&mut self) -> Result<()> {

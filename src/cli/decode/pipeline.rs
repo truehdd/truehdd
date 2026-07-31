@@ -37,12 +37,34 @@ impl std::fmt::Display for PipelineError {
 
 impl std::error::Error for PipelineError {}
 
+impl PipelineError {
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            PipelineError::Input(_) => crate::exit::INPUT,
+            PipelineError::Parse(_) => crate::exit::PARSE,
+            PipelineError::Decode(_) => crate::exit::DECODE,
+            PipelineError::Write(_) => crate::exit::WRITE,
+        }
+    }
+}
+
 /// Aggregated results for the final report.
 pub struct DecodeSummary {
+    pub skipped_frames: u64,
+    pub branches: u64,
     pub decoded_frames: u64,
     pub total_samples: u64,
     pub final_sample_rate: u32,
     pub start_time: Instant,
+    pub presentations: Vec<PresentationSummary>,
+}
+
+/// What a single presentation wrote.
+pub struct PresentationSummary {
+    pub index: usize,
+    pub format: &'static str,
+    pub channels: Option<usize>,
+    pub files: Vec<PathBuf>,
 }
 
 // Control messages travel in-band on the data channels, in order with the
@@ -79,6 +101,8 @@ pub fn run_threaded_pipeline(
     let (tx_decode, rx_decode) = bounded::<DecodeMsg>(32);
 
     let required_presentations = args.presentation.to_required_presentations();
+    let skipped_frames = Arc::new(AtomicU64::new(0));
+    let branches = Arc::new(AtomicU64::new(0));
 
     let mut outputs = PresentationOutputs {
         handlers: core::array::from_fn(|_| None),
@@ -95,8 +119,10 @@ pub fn run_threaded_pipeline(
     scope(|s| {
         let input_path = args.input.clone();
 
-        s.spawn(move |_| run_extractor_thread(input_path, tx_extract, strict_mode));
+        let skipped = Arc::clone(&skipped_frames);
+        s.spawn(move |_| run_extractor_thread(input_path, tx_extract, strict_mode, skipped));
 
+        let branch_counter = Arc::clone(&branches);
         s.spawn(move |_| {
             run_parser_thread(
                 rx_extract,
@@ -104,6 +130,7 @@ pub fn run_threaded_pipeline(
                 fail_level,
                 required_presentations,
                 strict_mode,
+                branch_counter,
             )
         });
 
@@ -118,14 +145,23 @@ pub fn run_threaded_pipeline(
         });
 
         match run_writer_main(rx_decode, &mut outputs, pb, progress_counter) {
-            Ok(()) => Ok(outputs.summary()),
+            Ok(()) => Ok(DecodeSummary {
+                skipped_frames: skipped_frames.load(Ordering::Relaxed),
+                branches: branches.load(Ordering::Relaxed),
+                ..outputs.summary()
+            }),
             Err(e) => Err(e),
         }
     })
     .unwrap() // scope().unwrap() is safe here as we handle errors internally
 }
 
-fn run_extractor_thread(input_path: PathBuf, tx: Sender<ExtractMsg>, strict_mode: bool) {
+fn run_extractor_thread(
+    input_path: PathBuf,
+    tx: Sender<ExtractMsg>,
+    strict_mode: bool,
+    skipped_frames: Arc<AtomicU64>,
+) {
     let mut extractor = Extractor::default();
     let mut frame_index = 0u64;
 
@@ -159,6 +195,13 @@ fn run_extractor_thread(input_path: PathBuf, tx: Sender<ExtractMsg>, strict_mode
                 }
             }
         }
+        // The extractor resyncs over damaged frames on its own, so the count
+        // is the only trace they leave
+        let skipped = extractor.error_count() as u64;
+        if skipped > skipped_frames.swap(skipped, Ordering::Relaxed) && strict_mode {
+            return Err(anyhow!("{skipped} corrupt frame(s) skipped"));
+        }
+
         Ok(true)
     });
 
@@ -173,6 +216,7 @@ fn run_parser_thread(
     fail_level: Level,
     required_presentations: [bool; MAX_PRESENTATIONS],
     strict_mode: bool,
+    branches: Arc<AtomicU64>,
 ) {
     let mut parser = Parser::default();
     parser.set_fail_level(fail_level);
@@ -189,6 +233,11 @@ fn run_parser_thread(
                         resyncing = false;
                     }
                     let stream_changed = segment_detector.check(&au);
+                    // The flag also covers substream_info changes, which the
+                    // segment detector reports separately
+                    if au.has_valid_branch && !stream_changed {
+                        branches.fetch_add(1, Ordering::Relaxed);
+                    }
                     if tx
                         .send(ParseMsg::Au(index, Box::new(au), stream_changed))
                         .is_err()
@@ -357,16 +406,40 @@ impl PresentationOutputs {
 
     fn summary(&self) -> DecodeSummary {
         let mut summary = DecodeSummary {
+            skipped_frames: 0,
+            branches: 0,
             decoded_frames: 0,
             total_samples: 0,
             final_sample_rate: 48000,
             start_time: self.start_time,
+            presentations: Vec::new(),
         };
-        for handler in self.handlers.iter().flatten() {
+
+        for (index, handler) in self.handlers.iter().enumerate() {
+            let Some(handler) = handler else { continue };
+
             summary.decoded_frames = summary.decoded_frames.max(handler.decoded_frames);
             summary.total_samples = summary.total_samples.max(handler.total_samples);
             summary.final_sample_rate = handler.final_sample_rate;
+
+            let format = if handler.has_atmos() {
+                "damf"
+            } else {
+                match self.requested_format {
+                    AudioFormat::Caf => "caf",
+                    AudioFormat::Pcm => "pcm",
+                    AudioFormat::W64 => "w64",
+                }
+            };
+
+            summary.presentations.push(PresentationSummary {
+                index,
+                format,
+                channels: handler.channel_count(),
+                files: handler.produced_files().to_vec(),
+            });
         }
+
         summary
     }
 }
@@ -481,5 +554,45 @@ impl SegmentDetector {
         } else {
             false
         }
+    }
+}
+
+impl DecodeSummary {
+    /// Result summary for callers that drive the CLI as a subprocess.
+    pub fn to_json(&self, input: &Path) -> String {
+        let presentations: Vec<String> = self
+            .presentations
+            .iter()
+            .map(|presentation| {
+                let files: Vec<String> = presentation
+                    .files
+                    .iter()
+                    .map(|file| crate::json::escape(&file.to_string_lossy()))
+                    .collect();
+                let channels = match presentation.channels {
+                    Some(channels) => channels.to_string(),
+                    None => "null".to_string(),
+                };
+                format!(
+                    r#"{{"index":{},"format":{},"channels":{},"files":[{}]}}"#,
+                    presentation.index,
+                    crate::json::escape(presentation.format),
+                    channels,
+                    files.join(",")
+                )
+            })
+            .collect();
+
+        format!(
+            r#"{{"version":{},"input":{},"frames":{},"skippedFrames":{},"branches":{},"samples":{},"sampleRate":{},"presentations":[{}]}}"#,
+            crate::json::escape(env!("CARGO_PKG_VERSION")),
+            crate::json::escape(&input.to_string_lossy()),
+            self.decoded_frames,
+            self.skipped_frames,
+            self.branches,
+            self.total_samples,
+            self.final_sample_rate,
+            presentations.join(",")
+        )
     }
 }

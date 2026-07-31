@@ -15,12 +15,24 @@ mod byteorder;
 mod caf;
 mod cli;
 mod damf;
+mod exit;
 mod input;
+mod json;
 pub(crate) mod timestamp;
 #[allow(dead_code)]
 mod wav;
 
-fn main() -> Result<()> {
+fn main() -> std::process::ExitCode {
+    match run() {
+        Ok(()) => std::process::ExitCode::from(exit::SUCCESS as u8),
+        Err(error) => {
+            log::error!("{error:#}");
+            std::process::ExitCode::from(exit::code_for(&error) as u8)
+        }
+    }
+}
+
+fn run() -> Result<()> {
     let cli = Cli::parse();
 
     let base_level = cli.loglevel.to_level_filter();
@@ -38,10 +50,10 @@ fn main() -> Result<()> {
                 use std::io::Write;
                 writeln!(
                     buf,
-                    "{{\"ts\":{},\"lvl\":\"{}\",\"msg\":\"{}\"}}",
-                    buf.timestamp(),
-                    record.level(),
-                    record.args()
+                    "{{\"ts\":{},\"lvl\":{},\"msg\":{}}}",
+                    json::escape(&buf.timestamp().to_string()),
+                    json::escape(record.level().as_str()),
+                    json::escape(&record.args().to_string())
                 )
             });
         }
