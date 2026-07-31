@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Correct `TRIM_LUT[14]` value (-16.0 -> -15.0)
 - No longer panic on corrupt bitstreams: invalid `restart_sync_word`, division by zero in seamless-branch timing, and substream size/length underflows now return typed errors (#15, #16)
 - Persist heavy DRC gain/time updates in parser substream state; heavy DRC validation previously compared against zeroed values
+- `decode_presentations()` no longer copies OAMD payloads into non-object presentation results
 
 ## [0.4.0] - 2025-08-15
 

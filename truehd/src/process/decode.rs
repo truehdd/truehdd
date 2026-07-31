@@ -774,7 +774,7 @@ impl DecoderState {
                 - self.substream_state[presentation_idx].zero_samples,
             channel_count: self.substream_state[presentation_idx].max_matrix_chan + 1,
             pcm_data: *self.substream_state[presentation_idx].output_buffer,
-            oamd: if self.effective_presentations[3] {
+            oamd: if presentation_idx == 3 && self.effective_presentations[3] {
                 self.oamd.iter().cloned().collect::<Vec<_>>()
             } else {
                 vec![]
