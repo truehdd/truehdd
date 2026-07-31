@@ -1,4 +1,3 @@
-use fancy_regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::Display;
 use std::path::Path;
@@ -666,21 +665,73 @@ where
     }
 }
 
-/// Helper function for common YAML string formatting
+/// Reindents serializer output to the DAMF layout: twice the indentation,
+/// with list markers offset from their parent key. Only leading whitespace
+/// and quoting are rewritten, never the content of a value.
 fn format_yaml_string(yaml_str: String) -> String {
-    let mut yaml_str = yaml_str;
+    let mut out = String::with_capacity(yaml_str.len() * 2);
 
-    // Remove single quotes
-    yaml_str.retain(|c| c != '\'');
+    for line in yaml_str.lines() {
+        let indent = line.len() - line.trim_start_matches(' ').len();
+        let (marker, content) = match line[indent..].strip_prefix("- ") {
+            Some(content) => ("- ", content),
+            None => ("", &line[indent..]),
+        };
 
-    // 2 leading spaces; before the property name ending in `:`
-    let leading_spaces_regex = Regex::new(r"[ ]{2}(?=.+:)").unwrap();
+        for _ in 0..indent * 2 + marker.len() {
+            out.push(' ');
+        }
+        out.push_str(marker);
 
-    // A hyphen followed by a space; before the property name ending in `:`
-    let leading_hyphen_regex = Regex::new(r"-[ ](?=.+:)").unwrap();
-    
-    let filtered_str = leading_spaces_regex.replace_all(&yaml_str, "    ");
-    leading_hyphen_regex.replace_all(&filtered_str, "  - ").to_string()
+        match content
+            .split_once(": ")
+            .map(|(key, value)| (key, bare_scalar(value)))
+        {
+            Some((key, Some(value))) => {
+                out.push_str(key);
+                out.push_str(": ");
+                out.push_str(value);
+            }
+            _ => out.push_str(content),
+        }
+
+        out.push('\n');
+    }
+
+    out
+}
+
+/// Unquotes values the serializer only quoted because they look like a
+/// number or a sequence of numbers, which DAMF expects bare. Everything
+/// else keeps its quoting so paths containing spaces, quotes or colons
+/// survive as written.
+fn bare_scalar(value: &str) -> Option<&str> {
+    let inner = value
+        .strip_prefix('\'')
+        .and_then(|value| value.strip_suffix('\''))?;
+
+    let is_sequence = inner
+        .strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+        .is_some_and(|items| {
+            items.trim().is_empty() || items.split(',').all(|item| is_number(item.trim()))
+        });
+
+    (is_number(inner) || is_sequence).then_some(inner)
+}
+
+fn is_number(text: &str) -> bool {
+    let digits = text.strip_prefix('-').unwrap_or(text);
+    let (integer, fraction) = match digits.split_once('.') {
+        Some((integer, fraction)) => (integer, Some(fraction)),
+        None => (digits, None),
+    };
+
+    !integer.is_empty()
+        && integer.bytes().all(|b| b.is_ascii_digit())
+        && fraction.is_none_or(|fraction| {
+            !fraction.is_empty() && fraction.bytes().all(|b| b.is_ascii_digit())
+        })
 }
 
 #[test]
@@ -826,4 +877,54 @@ presentations:
     let yaml_str = serde_yaml_ng::to_string(&data).unwrap();
 
     assert_eq!(test_str, format_yaml_string(yaml_str));
+}
+
+#[test]
+fn preserves_pathological_file_names() {
+    use truehd::structs::oamd::TEST_DATA_TRIM;
+
+    let oamd = ObjectAudioMetadataPayload::read(TEST_DATA_TRIM).unwrap();
+
+    for base_name in [
+        "audio  -  output",
+        "it's a file",
+        "'quoted'",
+        "weird: name #x",
+        "  leading",
+        "[3]",
+        "24",
+    ] {
+        let serialized = Data::with_oamd_payload(&oamd, Path::new(base_name)).serialize_damf();
+        let parsed: Data = serde_yaml_ng::from_str(&serialized)
+            .unwrap_or_else(|e| panic!("{base_name:?} produced invalid YAML: {e}\n{serialized}"));
+        let presentation = &parsed.presentations[0];
+
+        assert_eq!(
+            presentation.metadata,
+            format!("{base_name}.atmos.metadata"),
+            "metadata reference does not match the file written for {base_name:?}"
+        );
+        assert_eq!(
+            presentation.audio,
+            format!("{base_name}.atmos.audio"),
+            "audio reference does not match the file written for {base_name:?}"
+        );
+    }
+}
+
+#[test]
+fn keeps_damf_bare_values() {
+    use truehd::structs::oamd::TEST_DATA_TRIM;
+
+    let oamd = ObjectAudioMetadataPayload::read(TEST_DATA_TRIM).unwrap();
+    let serialized = Data::with_oamd_payload(&oamd, Path::new("test")).serialize_damf();
+
+    assert!(serialized.contains("\n    fps: 24\n"), "{serialized}");
+    assert!(
+        serialized.contains("\n    scBedConfiguration: [3]\n"),
+        "{serialized}"
+    );
+
+    let events = Configuration::with_oamd_payload(&oamd, 48000, 0).serialize_events(false);
+    assert!(events.contains("\n    gain: 0\n"), "{events}");
 }

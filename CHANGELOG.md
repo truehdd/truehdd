@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--format` now applies to every selected presentation except presentation 3, which always uses CAF; previously the requested format was ignored whenever presentation 3 was involved
 
 ### Fixed
+- DAMF YAML no longer corrupts file references containing double spaces, `- ` or single quotes, and keeps quoting for names that need it so the output stays valid YAML (#17, reported and first fixed by @nekno in #18)
 - Removed a shutdown race that could report success after an unreported pipeline error
 
 ## [0.4.0] - 2025-08-15
