@@ -5,7 +5,6 @@ use crate::utils::crc::{CRC_MAJOR_SYNC_INFO_ALG, Crc16};
 use crate::utils::errors::ExtractError;
 use anyhow::Result;
 use log::error;
-use std::collections::VecDeque;
 use std::sync::Arc;
 
 /// Extracts audio frames from a continuous bitstream.
@@ -42,7 +41,8 @@ use std::sync::Arc;
 /// - CRC validation ensures frame integrity
 #[derive(Debug)]
 pub struct Extractor {
-    buffer: VecDeque<u8>,
+    buffer: Vec<u8>,
+    cursor: usize,
     timestamp: Option<Timestamp>,
     inited: bool,
     locked: bool,
@@ -58,7 +58,8 @@ pub struct Extractor {
 impl Default for Extractor {
     fn default() -> Self {
         Self {
-            buffer: VecDeque::with_capacity(120_000),
+            buffer: Vec::with_capacity(120_000),
+            cursor: 0,
             timestamp: None,
             inited: false,
             locked: false,
@@ -97,8 +98,42 @@ impl Extractor {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn push_bytes(&mut self, data: &[u8]) {
+        self.compact_if_needed(data.len());
         self.buffer.extend(data);
         self.io_counter += 1;
+    }
+
+    #[inline]
+    fn buffered_len(&self) -> usize {
+        self.buffer.len().saturating_sub(self.cursor)
+    }
+
+    #[inline]
+    fn buffered(&self) -> &[u8] {
+        &self.buffer[self.cursor..]
+    }
+
+    fn compact_if_needed(&mut self, incoming_len: usize) {
+        if self.cursor == 0 {
+            return;
+        }
+
+        if self.cursor == self.buffer.len() {
+            self.buffer.clear();
+            self.cursor = 0;
+            return;
+        }
+
+        let needs_room = self.buffer.len() + incoming_len > self.buffer.capacity();
+        let cursor_is_large = self.cursor >= 64 * 1024;
+        let mostly_consumed = self.cursor * 2 >= self.buffer.len();
+        if !(needs_room || cursor_is_large || mostly_consumed) {
+            return;
+        }
+
+        self.buffer.copy_within(self.cursor.., 0);
+        self.buffer.truncate(self.buffer.len() - self.cursor);
+        self.cursor = 0;
     }
 
     /// Forces the extractor to search for the next sync pattern.
@@ -137,14 +172,15 @@ impl Extractor {
 
         loop {
             let trailing_bytes = if self.inited { 4 } else { 16 };
-            let search_range = self.buffer.len().saturating_sub(trailing_bytes);
+            let search_range = self.buffered_len().saturating_sub(trailing_bytes);
             if search_range < 4 {
                 return self.insufficient();
             }
 
             let mut offset = 0;
             let mut state = 0;
-            for (i, byte) in self.buffer.range(4..search_range).enumerate() {
+            let buffer = self.buffered();
+            for (i, &byte) in buffer[4..search_range].iter().enumerate() {
                 match (state, byte) {
                     (_, 0xF8) => {
                         state = 1;
@@ -168,7 +204,9 @@ impl Extractor {
             // Try only once
             self.timestamp = if !self.inited && offset >= 16 {
                 self.consume_front(offset - 16);
-                Timestamp::from_bytes(&self.buffer.drain(..16).collect::<Vec<_>>()).ok()
+                let timestamp = Timestamp::from_bytes(&self.buffered()[..16]).ok();
+                self.consume_front(16);
+                timestamp
             } else {
                 self.consume_front(offset);
                 None
@@ -181,7 +219,7 @@ impl Extractor {
                 return self.insufficient();
             };
 
-            if self.buffer.len() < 4 + major_sync_info_len {
+            if self.buffered_len() < 4 + major_sync_info_len {
                 return self.insufficient();
             };
 
@@ -189,16 +227,11 @@ impl Extractor {
                 return self.insufficient();
             };
 
-            if self.buffer.len() < access_unit_len || access_unit_len <= major_sync_info_len + 6 {
+            if self.buffered_len() < access_unit_len || access_unit_len <= major_sync_info_len + 6 {
                 return self.insufficient();
             }
 
-            let access_unit_bytes = self
-                .buffer
-                .range(..access_unit_len)
-                .copied()
-                .collect::<Vec<_>>();
-
+            let access_unit_bytes = &self.buffered()[..access_unit_len];
             let crc_bytes = &(&access_unit_bytes[4 + major_sync_info_len..])[..2];
             let crc = u16::from_be_bytes([crc_bytes[0], crc_bytes[1]]);
             if crc != self.crc16_major_sync_info(&(&access_unit_bytes[4..])[..major_sync_info_len])
@@ -209,7 +242,7 @@ impl Extractor {
             }
 
             self.locked = true;
-            self.substreams = (self.buffer[20] >> 4) as usize;
+            self.substreams = (self.buffered()[20] >> 4) as usize;
 
             return Ok(());
         }
@@ -229,21 +262,21 @@ impl Extractor {
     }
 
     fn consume_front(&mut self, cnt: usize) {
-        self.buffer.drain(..cnt);
+        self.cursor = self.cursor.saturating_add(cnt);
+        self.compact_if_needed(0);
     }
 
     fn access_unit_len(&self) -> Option<usize> {
-        Some(
-            ((u16::from_be_bytes([*self.buffer.front()?, *self.buffer.get(1)?]) & 0xFFF) << 1)
-                as usize,
-        )
+        let buffer = self.buffered();
+        Some(((u16::from_be_bytes([*buffer.first()?, *buffer.get(1)?]) & 0xFFF) << 1) as usize)
     }
 
-    fn major_sync_info_len(&mut self) -> Option<usize> {
-        let len = if self.buffer.get(29)? & 0x01 == 0 {
+    fn major_sync_info_len(&self) -> Option<usize> {
+        let buffer = self.buffered();
+        let len = if buffer.get(29)? & 0x01 == 0 {
             26
         } else {
-            28 + ((self.buffer.get(30)? >> 3) & 0x1Eu8) as usize
+            28 + ((buffer.get(30)? >> 3) & 0x1Eu8) as usize
         };
 
         Some(len)
@@ -260,7 +293,7 @@ impl Extractor {
     }
 
     #[inline(always)]
-    const fn crc16_major_sync_info(&mut self, data: &[u8]) -> u16 {
+    const fn crc16_major_sync_info(&self, data: &[u8]) -> u16 {
         self.crc.update(self.crc.init, data)
     }
 }
@@ -279,18 +312,19 @@ impl Iterator for Extractor {
                     return None;
                 }
 
-                if self.buffer.len() < 6 {
+                if self.buffered_len() < 6 {
                     return self.iter_insufficient();
                 };
 
+                let buffer = self.buffered();
                 let mut offset = 0;
                 let mut pre = 4;
-                let mut skip = if self.buffer[4] == 0xF8 && self.buffer[5] == 0x72 {
-                    if self.buffer.len() < 21 {
+                let mut skip = if buffer[4] == 0xF8 && buffer[5] == 0x72 {
+                    if self.buffered_len() < 21 {
                         return self.iter_insufficient();
                     };
 
-                    let substreams = self.buffer[20] as usize >> 4;
+                    let substreams = buffer[20] as usize >> 4;
                     if self.substreams != substreams {
                         let error = ExtractError::SubstreamMismatch {
                             found: substreams,
@@ -319,7 +353,7 @@ impl Iterator for Extractor {
                         if pre > 0 {
                             pre -= 1;
 
-                            let Some(byte) = self.buffer.get(offset) else {
+                            let Some(&byte) = buffer.get(offset) else {
                                 break 'inner;
                             };
 
@@ -337,7 +371,7 @@ impl Iterator for Extractor {
                         if post > 0 {
                             post -= 1;
 
-                            let Some(byte) = self.buffer.get(offset) else {
+                            let Some(&byte) = buffer.get(offset) else {
                                 break 'inner;
                             };
 
@@ -349,11 +383,11 @@ impl Iterator for Extractor {
                         if substreams > 0 {
                             substreams -= 1;
 
-                            let Some(byte) = self.buffer.get(offset) else {
+                            let Some(&byte) = buffer.get(offset) else {
                                 break 'inner;
                             };
 
-                            post += 2 + if (*byte >> 7) != 0 { 2 } else { 0 };
+                            post += 2 + if (byte >> 7) != 0 { 2 } else { 0 };
 
                             continue;
                         }
@@ -375,13 +409,14 @@ impl Iterator for Extractor {
                     return self.iter_insufficient();
                 };
 
-                if self.buffer.len() < access_unit_len {
+                if self.buffered_len() < access_unit_len {
                     return self.iter_insufficient();
                 };
 
                 // Use pooled buffer for zero-copy frame creation
                 let mut frame_buffer = self.buffer_pool.acquire();
-                frame_buffer.extend(self.buffer.drain(..access_unit_len));
+                frame_buffer.extend_from_slice(&self.buffered()[..access_unit_len]);
+                self.consume_front(access_unit_len);
 
                 let timestamp = if self.timestamp.is_some() {
                     let timestamp = self.timestamp.clone();
@@ -403,8 +438,8 @@ impl Iterator for Extractor {
 
             if self.inited {
                 self.error_count += 1;
-                if !self.buffer.is_empty() {
-                    self.buffer.pop_front();
+                if self.buffered_len() > 0 {
+                    self.consume_front(1);
                 }
             }
 
