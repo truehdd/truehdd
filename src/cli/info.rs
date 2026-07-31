@@ -16,7 +16,11 @@ use truehd::structs::channel::{ChannelGroup, ChannelLabel};
 pub fn cmd_info(args: &InfoArgs, cli: &Cli, multi: Option<&MultiProgress>) -> Result<()> {
     log::info!("Analyzing TrueHD stream: {}", args.input.display());
 
-    let analysis_result = analyze_stream(&args.input, cli, multi)?;
+    let analysis_result =
+        analyze_stream(&args.input, cli, multi).map_err(|source| crate::exit::ExitError {
+            code: crate::exit::INPUT,
+            source,
+        })?;
 
     match analysis_result {
         Some((stream_info, _timestamp, frame_count, total_bytes)) => {

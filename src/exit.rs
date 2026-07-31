@@ -10,6 +10,11 @@ pub const SUCCESS: i32 = 0;
 /// Anything not covered by a more specific code.
 pub const FAILURE: i32 = 1;
 
+/// The command line could not be parsed. Produced by the argument parser
+/// itself, and recorded here so the contract is complete.
+#[allow(dead_code)]
+pub const USAGE: i32 = 2;
+
 /// The input could not be read.
 pub const INPUT: i32 = 3;
 

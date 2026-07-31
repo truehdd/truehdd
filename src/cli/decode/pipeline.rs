@@ -204,7 +204,10 @@ fn run_extractor_thread(
         // is the only trace they leave
         let skipped = extractor.error_count() as u64;
         if skipped > skipped_frames.swap(skipped, Ordering::Relaxed) && strict_mode {
-            return Err(anyhow!("{skipped} corrupt frame(s) skipped"));
+            let _ = tx.send(ExtractMsg::Fatal(PipelineError::Parse(anyhow!(
+                "{skipped} corrupt frame(s) skipped"
+            ))));
+            return Ok(false);
         }
 
         Ok(true)
@@ -430,14 +433,15 @@ impl PresentationOutputs {
             summary.total_samples = summary.total_samples.max(handler.total_samples);
             summary.final_sample_rate = handler.final_sample_rate;
 
-            let format = if handler.has_atmos() {
-                "damf"
-            } else {
-                match self.requested_format {
+            let format = match (handler.has_atmos(), index) {
+                (true, _) => "damf",
+                // Presentation 3 is written as CAF whatever was requested
+                (false, 3) => "caf",
+                (false, _) => match self.requested_format {
                     AudioFormat::Caf => "caf",
                     AudioFormat::Pcm => "pcm",
                     AudioFormat::W64 => "w64",
-                }
+                },
             };
 
             summary.presentations.push(PresentationSummary {

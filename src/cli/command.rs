@@ -250,7 +250,7 @@ pub struct DecodeArgs {
     #[arg(long, value_enum)]
     pub warp_mode: Option<WarpMode>,
 
-    /// Maximum access units to probe for Atmos metadata with bed_conform (default: 12000, ~10s at 48kHz)
+    /// Access units to probe for Atmos metadata with --bed-conform (12000 is about 10s at 48 kHz)
     #[arg(long, default_value_t = 12000)]
     pub probe_range: u64,
 }
