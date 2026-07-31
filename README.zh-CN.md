@@ -23,7 +23,7 @@ Dolby TrueHD 音频流解码工具
 
 ### 源码编译
 
-运行环境要求：Rust 1.87.0 或更新版本
+运行环境要求：Rust 1.95.0 或更新版本
 
 ```bash
 git clone https://github.com/truehdd/truehdd
@@ -88,13 +88,18 @@ truehdd info movie.thd
 
 选项:
       --output-path <PATH>       音频和元数据文件的输出路径
-      --format <FORMAT>          音频输出格式（表现索引3忽略此选项，始终使用CAF格式）
+      --format <FORMAT>          音频输出格式（表现索引 3 始终使用 CAF 格式）
                                  [默认: caf] [可选值: caf, pcm, w64]
-      --presentation <INDEX>     表现索引 (0-3) [默认: 3]
+      --presentation <SELECTION> 要解码的表现：索引 (0-3)、列表 (0,1,3)、"all"，
+                                 或 "max" 表示可用的最高表现 [默认: max]
       --no-estimate-progress     禁用进度估计
       --bed-conform              启用Atmos内容的声床适配
+      --metadata-only            仅输出对象音频元数据，跳过 PCM 输出
+      --json                     在标准输出打印机器可读的结果摘要
       --warp-mode <WARP_MODE>    指定元数据中不存在时的环绕声像延展 (warp) 模式
                                  [可选值: normal, warping, prologiciix, loro]
+      --probe-range <COUNT>      使用 --bed-conform 时探测 Atmos 元数据的存取单元上限
+                                 [默认: 12000]
 ...
 ```
 
@@ -115,6 +120,54 @@ truehdd info movie.thd
   3. `output.atmos.metadata` - 静态和动态信号的 3D 位置坐标
 
   **注意：** 表现索引3无视 `--format` 选项，始终使用CAF格式。使用 `--bed-conform` 将声床通道转换为7.1.2布局。
+
+
+- **多个表现：** 每个输出文件都带有表现索引后缀，例如 `output_p1.caf` 与 `output_p3.atmos`。所选表现在一次解码中完成，共用各子流之间重叠的运算。
+
+**仅输出元数据：**
+
+`--metadata-only` 仅为对象表现写出 `.atmos` 头文件与 `.atmos.metadata`，跳过音频文件，便于在不产生大量 PCM 数据的情况下查看或收集元数据。元数据与完整解码的结果完全一致：仅在无缝分支点附近解码音频（该处需要识别重复的存取单元），因此整体 CPU 占用约减少 40%。若某个表现不含对象音频元数据，则不会写出任何文件。
+
+**机器可读输出：**
+
+指定 `--json` 后，解码结束时会在标准输出打印一个结果对象，调用程序无需猜测生成了哪些文件：
+
+```json
+{
+  "version": "0.5.0",
+  "input": "movie.thd",
+  "frames": 225526,
+  "skippedFrames": 0,
+  "branches": 0,
+  "invalidBranches": 0,
+  "samples": 9021040,
+  "sampleRate": 48000,
+  "presentations": [
+    {"index": 3, "format": "damf", "channels": 12,
+     "files": ["out.atmos", "out.atmos.audio", "out.atmos.metadata"]}
+  ]
+}
+```
+
+`skippedFrames` 表示提取器无法使用并重新同步跳过的帧数。`branches` 表示符合解码器缓冲模型的无缝分支点数量，`invalidBranches` 表示不符合的数量；后者属于符合性问题，不会改变解码得到的采样。日志始终输出到标准错误，因此标准输出只包含该对象。如需机器可读的日志，请使用 `--log-format json`。
+
+退出码指明失败发生在哪一阶段：
+
+| 退出码 | 含义 |
+| --- | --- |
+| 0 | 成功 |
+| 1 | 未分类的失败 |
+| 2 | 命令行参数无效 |
+| 3 | 无法读取输入 |
+| 4 | 无法解析码流 |
+| 5 | 无法解码音频 |
+| 6 | 无法写出输出文件 |
+
+使用 `--strict` 时，跳过的帧也会被视为失败。
+
+**受损码流：**
+
+解析或解码失败的帧会被报告并跳过，解码将从下一个主同步处恢复，而不会中止。若希望在首次出现问题时立即失败，请使用 `--strict`。
 
 **声像延展模式选项：**
 

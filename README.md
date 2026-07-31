@@ -90,13 +90,18 @@ Arguments:
 
 Options:
       --output-path <PATH>       Output path for audio and metadata files
-      --format <FORMAT>          Audio format for output (ignored for presentation 3 which always uses CAF)
+      --format <FORMAT>          Audio format for output (presentation 3 always uses CAF)
                                  [default: caf] [possible values: caf, pcm, w64]
-      --presentation <INDEX>     Presentation index (0-3) [default: 3]
+      --presentation <SELECTION> Presentations to decode: an index (0-3), a list (0,1,3), "all",
+                                 or "max" for the highest available presentation [default: max]
       --no-estimate-progress     Disable progress estimation
       --bed-conform              Enable bed conformance for Atmos content
+      --metadata-only            Write only object audio metadata, skipping PCM output
+      --json                     Print a machine-readable result summary on stdout
       --warp-mode <WARP_MODE>    Specify warp mode when not present in metadata
                                  [possible values: normal, warping, prologiciix, loro]
+      --probe-range <COUNT>      Access units to probe for Atmos metadata with --bed-conform
+                                 [default: 12000]
 ...
 ```
 
@@ -118,6 +123,60 @@ When `--output-path` is specified, the tool generates appropriate output files:
 
   **Note:** Presentation 3 always uses CAF format regardless of `--format` option. Use `--bed-conform` to convert bed channels to 7.1.2 layout.
 
+
+- **Multiple presentations:** each output carries its presentation index as a suffix, for example `output_p1.caf` and `output_p3.atmos`. Selected presentations are decoded in a single pass, sharing the work their substreams have in common.
+
+**Metadata Only:**
+
+`--metadata-only` writes the `.atmos` header and `.atmos.metadata` for an object presentation and skips the audio file, which is useful for inspecting or collecting metadata without producing gigabytes of PCM. The metadata is identical to a full decode: audio is decoded only around seamless branch points, where duplicate access units have to be recognised, which leaves the pass using about 40% less CPU. A presentation without object audio metadata writes nothing.
+
+**Machine-Readable Output:**
+
+`--json` prints a single result object on stdout when decoding finishes, so a
+calling program does not have to guess which files were written:
+
+```json
+{
+  "version": "0.5.0",
+  "input": "movie.thd",
+  "frames": 225526,
+  "skippedFrames": 0,
+  "branches": 0,
+  "invalidBranches": 0,
+  "samples": 9021040,
+  "sampleRate": 48000,
+  "presentations": [
+    {"index": 3, "format": "damf", "channels": 12,
+     "files": ["out.atmos", "out.atmos.audio", "out.atmos.metadata"]}
+  ]
+}
+```
+
+`skippedFrames` counts frames the extractor could not use and resynchronised
+past. `branches` counts seamless branch points that satisfy the decoder buffer
+model and `invalidBranches` those that do not; the latter is a conformance
+finding and does not change the decoded samples. Logs stay on stderr, so
+stdout carries only this object. Use `--log-format json` for machine-readable
+logs as well.
+
+The exit code identifies which stage failed:
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Success |
+| 1 | Unspecified failure |
+| 2 | Invalid command line |
+| 3 | Input could not be read |
+| 4 | Bitstream could not be parsed |
+| 5 | Audio could not be decoded |
+| 6 | Output could not be written |
+
+With `--strict`, skipped frames are treated as a failure as well.
+
+**Damaged Streams:**
+
+A frame that fails to parse or decode is reported and skipped, and decoding resumes at the next major sync instead of aborting. Pass `--strict` to fail on the first problem instead.
+
 **Warp Mode Options:**
 
 The `--warp-mode` option controls how Dolby Atmos content handles downmix rendering when the metadata doesn't specify a warp mode:
@@ -136,6 +195,9 @@ truehdd decode --progress audio.thd --output-path decoded_audio
 
 # Decode with specific warp mode for content missing this metadata
 truehdd decode --warp-mode prologiciix audio.thd --output-path decoded_audio
+
+# Decode every available presentation in one pass
+truehdd decode --presentation all audio.thd --output-path decoded_audio
 
 # Decode from ffmpeg pipe
 ffmpeg -i movie.mkv -c copy -f truehd - | truehdd decode - --output-path audio
