@@ -19,6 +19,14 @@ fn main() -> Result<()> {
 
     if let Err(e) = gitcl_res {
         eprintln!("error occurred while generating instructions: {e:?}");
+
+        // Building outside a git checkout, such as from a published crate:
+        // describe the build by its package version instead.
+        println!(
+            "cargo:rustc-env=VERGEN_GIT_DESCRIBE={}",
+            env::var("CARGO_PKG_VERSION")?
+        );
+
         Emitter::default().idempotent().fail_on_error().emit()?;
     }
 
