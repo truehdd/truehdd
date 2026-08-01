@@ -9,7 +9,8 @@ use crate::utils::crc::{
     CRC_MAJOR_SYNC_INFO_ALG, CRC_RESTART_BLOCK_HEADER_ALG, CRC_SUBSTREAM_ALG, Crc8, Crc16,
 };
 use crate::utils::errors::ParseError;
-use crate::utils::perf::ParserPerfStats;
+// Re-exported so the type is nameable where the method returning it lives
+pub use crate::utils::perf::ParserPerfStats;
 use crate::utils::timing::HiresOutputTimingState;
 
 /// Parses audio frames into structured access units.

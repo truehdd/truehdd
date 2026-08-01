@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-08-01
+
+### Changed
+- `ParserPerfStats` is re-exported from `process::parse`, where the method returning it lives, as well as from `utils::perf`
+
 ## [0.6.0] - 2026-08-01
 
 ### Added
