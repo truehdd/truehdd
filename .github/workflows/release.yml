@@ -195,16 +195,18 @@ jobs:
       - name: Compose release notes
         shell: bash
         run: |
+          # Each crate is versioned on its own, so read both manifests
           VERSION=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          LIB_VERSION=$(grep -m1 '^version = ' truehd/Cargo.toml | cut -d'"' -f2)
           PREFIX="${{ env.RELEASE_BIN }}-${VERSION}"
 
           # Everything released since the previous tag, so versions that were
           # tagged but never published are included
           PREVIOUS=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
-          echo "Previous released version: ${PREVIOUS:-none}"
+          echo "Releasing ${VERSION} (library ${LIB_VERSION}), previous ${PREVIOUS:-none}"
 
           section() {
-            awk -v start="## [$1]" -v stop="## [$PREVIOUS]" -v have_stop="${PREVIOUS:+yes}" '
+            awk -v start="## [$1]" -v stop="## [$3]" -v have_stop="${3:+yes}" '
               index($0, start) == 1 { found = 1; next }
               found && have_stop == "yes" && index($0, stop) == 1 { exit }
               found && have_stop != "yes" && /^## \[/ { exit }
@@ -213,10 +215,15 @@ jobs:
           }
 
           notes() {
-            local text
-            text=$(section "$VERSION" "$1")
+            local version="$1" file="$2" stop="" text
+            # Collect intervening versions only when the file records the
+            # previous release; the crates do not always move together
+            if [ -n "$PREVIOUS" ] && grep -q "^## \[$PREVIOUS\]" "$file"; then
+              stop="$PREVIOUS"
+            fi
+            text=$(section "$version" "$file" "$stop")
             if [ -z "$(echo "$text" | tr -d '[:space:]')" ]; then
-              text=$(section "Unreleased" "$1")
+              text=$(section "Unreleased" "$file" "$stop")
             fi
             # Trim surrounding blank lines
             echo "$text" | sed '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}'
@@ -242,8 +249,8 @@ jobs:
             echo
             echo "## Changes"
             echo
-            notes CHANGELOG.md
-            LIB=$(notes truehd/CHANGELOG.md)
+            notes "$VERSION" CHANGELOG.md
+            LIB=$(notes "$LIB_VERSION" truehd/CHANGELOG.md)
             if [ -n "$(echo "$LIB" | tr -d '[:space:]')" ]; then
               echo
               echo "## Library (truehd crate)"

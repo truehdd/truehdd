@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-01
+
 ### Added
 - `perf` feature exposing per-stage parse timing through `Parser::last_parse_stats()`, attributing time to substream directories, segments, block header setup, LSB bypass, Huffman decoding and conformance checks. The hooks compile out when the feature is off; enabling them costs about a third of parse time
 

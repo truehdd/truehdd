@@ -11,7 +11,7 @@ A low-level parser and decoder for Dolby TrueHD audio bitstreams, implemented in
 
 ```toml
 [dependencies]
-truehd = "0.5.0"
+truehd = "0.6.0"
 ```
 
 Requires Rust 1.88.0 or later.

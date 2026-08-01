@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-08-01
+
+### Fixed
+- `cargo install truehdd` failed to compile because the version string required git metadata that a published crate does not carry; builds outside a checkout now report the package version. This affected every published version
+
 ## [0.5.0] - 2026-08-01
 
 ### Added
