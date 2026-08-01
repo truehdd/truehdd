@@ -187,7 +187,7 @@ impl std::str::FromStr for PresentationSelection {
             "max" => Ok(PresentationSelection::Max),
             _ if s.contains(',') => {
                 let presentations: Result<Vec<u8>, _> =
-                    s.split(',').map(str::trim).map(str::parse).collect();
+                    s.split(',').map(str::trim).map(str::parse::<u8>).collect();
                 match presentations {
                     Ok(mut presentations) => {
                         if presentations.iter().any(|&p| p > 3) {

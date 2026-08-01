@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING**: `--strict` treats frames the extractor had to skip as a failure, so it now exits non-zero on input it previously accepted
 
 ### Fixed
+- The presentation list parser failed to build on Windows, where an extra `FromIterator` implementation made the element type ambiguous
 - Errors are reported on stderr even when logging is turned off
 - DAMF YAML no longer corrupts file references containing double spaces, `- ` or single quotes, and keeps quoting for names that need it so the output stays valid YAML (#17, #18)
 - Fields in `--log-format json` output are escaped, so paths and messages containing quotes no longer break the JSON
