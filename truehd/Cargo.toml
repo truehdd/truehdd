@@ -14,6 +14,10 @@ exclude = ["tests/"]
 name = "truehd"
 crate-type = ["lib"]
 
+[features]
+# Per-stage parse timing, read with Parser::last_parse_stats
+perf = []
+
 [dependencies]
 anyhow = "1.0.104"
 bitstream-io = "4.10.0"

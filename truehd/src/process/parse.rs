@@ -9,6 +9,7 @@ use crate::utils::crc::{
     CRC_MAJOR_SYNC_INFO_ALG, CRC_RESTART_BLOCK_HEADER_ALG, CRC_SUBSTREAM_ALG, Crc8, Crc16,
 };
 use crate::utils::errors::ParseError;
+use crate::utils::perf::ParserPerfStats;
 use crate::utils::timing::HiresOutputTimingState;
 
 /// Parses audio frames into structured access units.
@@ -27,6 +28,7 @@ impl Parser {
     /// and timing information. Handles both major sync frames (with stream
     /// configuration) and continuation frames (audio data only).
     pub fn parse(&mut self, frame: &Frame) -> Result<AccessUnit> {
+        self.state.perf = ParserPerfStats::default();
         let reader = &mut BsIoSliceReader::from_slice(frame.as_ref());
         AccessUnit::read(&mut self.state, reader)
     }
@@ -45,6 +47,13 @@ impl Parser {
 
     pub fn hires_output_timing(&self) -> Option<usize> {
         self.state.hires_output_timing
+    }
+
+    /// Where parse time went for the most recent access unit.
+    ///
+    /// Every duration is zero unless the `perf` feature is enabled.
+    pub fn last_parse_stats(&self) -> ParserPerfStats {
+        self.state.perf
     }
 
     /// Number of seamless branch points that failed the buffer-model checks.
@@ -254,6 +263,9 @@ pub struct ParserState {
     pub has_substream_info_changed: bool,
     pub invalid_branches: usize,
 
+    /// Parse timing for the current access unit; see the `perf` feature.
+    pub perf: ParserPerfStats,
+
     pub variable_rate: bool,
     pub peak_data_rate: usize,
     pub prev_peak_data_rate: usize,
@@ -340,6 +352,7 @@ impl Default for ParserState {
             has_valid_branch: false,
             has_substream_info_changed: false,
             invalid_branches: 0,
+            perf: ParserPerfStats::default(),
 
             variable_rate: false,
             peak_data_rate: 0,

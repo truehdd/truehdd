@@ -24,6 +24,7 @@ use crate::structs::block::Block;
 use crate::structs::sync::{MAJOR_SYNC_FBA, MAJOR_SYNC_FBB};
 use crate::utils::bitstream_io::BsIoSliceReader;
 use crate::utils::errors::SubstreamError;
+use crate::utils::perf::Timer;
 
 /// Directory entry for substream navigation and control.
 ///
@@ -150,6 +151,8 @@ impl SubstreamSegment {
         let mut last_block_in_segment = false;
         state.substream_state_mut()?.block_index = 0;
 
+        let blocks = Timer::start();
+
         while !last_block_in_segment {
             if ss.block.len() > 4 || ss.block.len() >= 3 && state.format_sync == MAJOR_SYNC_FBA {
                 log_or_err!(
@@ -162,6 +165,9 @@ impl SubstreamSegment {
             last_block_in_segment = reader.get()?;
             state.substream_state_mut()?.block_index += 1;
         }
+        blocks.record(&mut state.perf.substream_segment_blocks);
+
+        let tail = Timer::start();
 
         reader.align_16bit()?;
 
@@ -303,6 +309,8 @@ impl SubstreamSegment {
                 })
             );
         }
+
+        tail.record(&mut state.perf.substream_segment_tail);
 
         Ok(ss)
     }

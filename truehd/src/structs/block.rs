@@ -22,6 +22,7 @@ use crate::structs::matrix::Matrixing;
 use crate::structs::restart_header::{Guards, GuardsField, RestartHeader};
 use crate::utils::bitstream_io::BsIoSliceReader;
 use crate::utils::errors::BlockError;
+use crate::utils::perf::Timer;
 
 /// Block header containing selective parameter updates.
 ///
@@ -187,6 +188,7 @@ impl BlockHeader {
 
 impl Block {
     pub fn read(state: &mut ParserState, reader: &mut BsIoSliceReader) -> Result<Self> {
+        let header_setup = Timer::start();
         let mut b = Block::default();
 
         // block_header_exists
@@ -378,8 +380,11 @@ impl Block {
             }
         }
 
+        header_setup.record(&mut state.perf.block_header_setup);
+
         for blki in 0..block_size {
             // bypassed_lsb
+            let bypassed_lsb = Timer::start();
             let bypassed_lsb_start_pos = reader.position()?;
 
             if restart_sync_word == 0x31EC {
@@ -405,11 +410,13 @@ impl Block {
             }
 
             let bypassed_lsb_bits = reader.position()? - bypassed_lsb_start_pos;
+            bypassed_lsb.record(&mut state.perf.block_bypassed_lsb);
             let block_data = &mut b.block_data[blki];
 
             let mut channel_data = [0i32; 16];
             let mut position_checks_needed = false;
 
+            let huffman = Timer::start();
             // huff decode
             for chi in min_chan..=max_chan {
                 let huff_offset = huff_offset[chi];
@@ -480,6 +487,8 @@ impl Block {
 
             block_data[min_chan..(max_chan + 1)]
                 .copy_from_slice(&channel_data[min_chan..(max_chan + 1)]);
+
+            huffman.record(&mut state.perf.block_huffman_decode);
         }
 
         if let Some(block_data_bits) = b.block_data_bits {
@@ -492,6 +501,7 @@ impl Block {
             }
         }
 
+        let checks = Timer::start();
         if error_protect {
             b.block_header_crc = reader.get_n(8)?;
             info!(
@@ -499,6 +509,8 @@ impl Block {
                 b.block_header_crc
             );
         }
+
+        checks.record(&mut state.perf.block_checks);
 
         Ok(b)
     }

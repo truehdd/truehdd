@@ -12,6 +12,7 @@ use crate::structs::substream::{SubstreamDirectory, SubstreamSegment};
 use crate::structs::sync::{MAJOR_SYNC_FBA, MAJOR_SYNC_FBB, MajorSyncInfo, UNIMPLEMENTED_FBB_MSG};
 use crate::utils::bitstream_io::BsIoSliceReader;
 use crate::utils::errors::AccessUnitError;
+use crate::utils::perf::Timer;
 
 /// A parsed access unit containing structured audio data and metadata.
 ///
@@ -62,6 +63,7 @@ pub struct AccessUnit {
 
 impl AccessUnit {
     pub fn read(state: &mut ParserState, reader: &mut BsIoSliceReader) -> Result<Self> {
+        let access_unit = Timer::start();
         state.is_major_sync = false;
 
         if !state.has_valid_branch {
@@ -167,10 +169,12 @@ impl AccessUnit {
             bail!(AccessUnitError::NoSubstream)
         };
 
+        let directories = Timer::start();
         for i in 0..substreams {
             state.substream_index = i;
             au.substream_directory[i] = SubstreamDirectory::read(state, reader)?;
         }
+        directories.record(&mut state.perf.substream_directories);
 
         state.has_valid_branch = false;
 
@@ -189,6 +193,7 @@ impl AccessUnit {
         state.substream_segment_start_pos = reader.position()?;
         state.has_parsed_substream = false;
 
+        let segments = Timer::start();
         for i in 0..substreams {
             state.substream_index = i;
 
@@ -204,13 +209,17 @@ impl AccessUnit {
             au.substream_segment[i] = SubstreamSegment::read(state, reader)?;
             state.has_parsed_substream = true;
         }
+        segments.record(&mut state.perf.substream_segments);
 
         if state.expected_au_end_pos() > reader.position()? as usize + 16 {
+            let timer = Timer::start();
             let extra_data = ExtraData::read(state, reader)?;
+            timer.record(&mut state.perf.extra_data);
             au.extra_data = Some(extra_data);
         }
 
         state.has_parsed_au = true;
+        access_unit.record(&mut state.perf.access_unit_total);
 
         if reader.position()? <= state.expected_au_end_pos() as u64 {
             state.total_access_unit_length += au.access_unit_length as usize;
