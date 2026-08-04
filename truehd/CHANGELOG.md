@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `object_gain` consumed its 6-bit index twice in `object_basic_info`, taking 12 bits and applying the dB mapping to the second read instead of the matched one. Any payload signalling an explicit object gain desynchronised from that point on
+
 ## [0.6.1] - 2026-08-01
 
 ### Changed

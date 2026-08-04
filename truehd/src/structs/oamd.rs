@@ -697,11 +697,15 @@ impl ObjectBasicInfo {
             basic.object_gain = match reader.get_n::<u8>(2)? {
                 0 => 0,
                 1 => GAIN_MINUS_INFINITY,
-                2 => match reader.get_n::<u8>(6)? {
-                    0..=14 => 15 - reader.get_n::<u8>(6)? as i8,
-                    15..=63 => 14 - reader.get_n::<u8>(6)? as i8,
-                    _ => unreachable!(),
-                },
+                2 => {
+                    let object_gain_idx = reader.get_n::<u8>(6)?;
+
+                    if object_gain_idx <= 14 {
+                        15 - object_gain_idx as i8
+                    } else {
+                        14 - object_gain_idx as i8
+                    }
+                }
                 3 => prev_object_gain,
                 _ => unreachable!(),
             };
