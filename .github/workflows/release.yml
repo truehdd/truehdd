@@ -21,7 +21,7 @@ jobs:
     
     steps:
       # Full history so git describe can resolve the version string
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup-release-env
@@ -80,7 +80,7 @@ jobs:
           python -c "import hashlib; import pathlib; print(hashlib.sha256(pathlib.Path('${AARCH64_GNU_ARCHIVE}').read_bytes()).hexdigest())" > ${AARCH64_GNU_ARCHIVE}.sha256
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Linux artifacts
           path: ./${{ env.RELEASE_DIR }}/*
@@ -90,7 +90,7 @@ jobs:
 
     steps:
       # Full history so git describe can resolve the version string
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup-release-env
@@ -128,7 +128,7 @@ jobs:
           python -c "import hashlib; import pathlib; print(hashlib.sha256(pathlib.Path('${AARCH64_ARCHIVE_FILE}').read_bytes()).hexdigest())" > ${AARCH64_ARCHIVE_FILE}.sha256
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Windows artifacts
           path: ./${{ env.RELEASE_DIR }}/*
@@ -138,7 +138,7 @@ jobs:
 
     steps:
       # Full history so git describe can resolve the version string
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup-release-env
@@ -168,7 +168,7 @@ jobs:
           python -c "import hashlib; import pathlib; print(hashlib.sha256(pathlib.Path('${ARCHIVE_FILE}').read_bytes()).hexdigest())" > ${ARCHIVE_FILE}.sha256
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macOS artifacts
           path: ./${{ env.RELEASE_DIR }}/*
@@ -182,10 +182,10 @@ jobs:
       attestations: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
 
       - name: Display structure of downloaded files
         run: ls -R
@@ -262,7 +262,7 @@ jobs:
           cat release-notes.md
 
       - name: Attest
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             Linux artifacts/*
@@ -270,7 +270,7 @@ jobs:
             macOS artifacts/*
 
       - name: Create a draft release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.RELEASE_PKG_VERSION }}
           draft: true
