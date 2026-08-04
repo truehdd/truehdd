@@ -820,11 +820,12 @@ impl DecodeHandler {
         if self.has_atmos {
             self.get_atmos_audio_path_from_base(&base)
         } else {
-            match self.format {
-                AudioFormat::Caf => base.with_extension("caf"),
-                AudioFormat::Pcm => base.with_extension("pcm"),
-                AudioFormat::W64 => base.with_extension("wav"),
-            }
+            let ext = match self.format {
+                AudioFormat::Caf => "caf",
+                AudioFormat::Pcm => "pcm",
+                AudioFormat::W64 => "wav",
+            };
+            add_extension(&base, ext)
         }
     }
 
@@ -834,13 +835,13 @@ impl DecodeHandler {
     }
 
     fn get_atmos_audio_path_from_base(&self, base: &Path) -> PathBuf {
-        base.with_extension("atmos.audio")
+        add_extension(base, "atmos.audio")
     }
 
     fn get_metadata_path(&self, base_path: &Path) -> PathBuf {
         let base = self.get_base_path_with_segment(base_path);
         if self.has_atmos {
-            base.with_extension("atmos.metadata")
+            add_extension(&base, "atmos.metadata")
         } else {
             PathBuf::new() // Empty path for non-Atmos
         }
@@ -922,6 +923,21 @@ fn write_damf_header_to_file(header_path: &Path, damf_data: &Data) -> Result<()>
     Ok(())
 }
 
+/// Append `ext` to the file name. `Path::with_extension` would replace whatever
+/// follows the last dot instead, so an output base such as `Movie.2024.1080p`
+/// would lose its last component and no longer match the DAMF header, which
+/// names its audio and metadata files by appending.
+fn add_extension(base_path: &Path, ext: &str) -> PathBuf {
+    if base_path
+        .extension()
+        .is_some_and(|existing| existing == ext)
+    {
+        base_path.to_path_buf()
+    } else {
+        create_path_with_suffix(base_path, ext)
+    }
+}
+
 fn create_path_with_suffix(base_path: &Path, suffix: &str) -> PathBuf {
     let mut path = base_path.to_path_buf();
     let new_name = format!(
@@ -979,5 +995,48 @@ mod tests {
 
         assert_eq!(info.total_channels, 12);
         assert_eq!(info.object_channels, 12);
+    }
+
+    #[test]
+    fn added_extensions_keep_dots_already_in_the_base() {
+        let base = Path::new("/out/Movie.2024.1080p");
+
+        assert_eq!(
+            add_extension(base, "atmos.audio"),
+            Path::new("/out/Movie.2024.1080p.atmos.audio")
+        );
+        assert_eq!(
+            add_extension(base, "atmos.metadata"),
+            Path::new("/out/Movie.2024.1080p.atmos.metadata")
+        );
+        assert_eq!(
+            add_extension(base, "caf"),
+            Path::new("/out/Movie.2024.1080p.caf")
+        );
+    }
+
+    /// The DAMF header names its audio and metadata files by appending to the
+    /// base name, so the paths written have to agree with it exactly.
+    #[test]
+    fn atmos_file_set_shares_one_base_name() {
+        for base in ["out", "out.thd", "Movie.2024.1080p", "trailing."] {
+            let base = Path::new(base);
+            let header = create_path_with_suffix(base, "atmos");
+            let audio = add_extension(base, "atmos.audio");
+            let metadata = add_extension(base, "atmos.metadata");
+
+            let stem = header.to_string_lossy();
+            let stem = stem.strip_suffix(".atmos").unwrap();
+            assert_eq!(audio, Path::new(&format!("{stem}.atmos.audio")));
+            assert_eq!(metadata, Path::new(&format!("{stem}.atmos.metadata")));
+        }
+    }
+
+    #[test]
+    fn added_extension_is_not_repeated() {
+        assert_eq!(
+            add_extension(Path::new("out.caf"), "caf"),
+            Path::new("out.caf")
+        );
     }
 }
