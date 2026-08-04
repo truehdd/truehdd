@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Decoding Atmos without `--bed-conform` wrote an audio file header that understated the channel count by the number of bed channels, while the PCM payload still carried every channel. An LFE-only bed with 11 objects produced a CAF declaring 11 channels for 12-channel interleaved data, so the sample count no longer divided evenly and Dolby Atmos tooling rejected the resulting master. This affected 0.5.0 and 0.5.1
+
 ## [0.5.1] - 2026-08-01
 
 ### Fixed

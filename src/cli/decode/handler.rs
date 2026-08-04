@@ -91,7 +91,14 @@ impl ChannelInfo {
     fn for_atmos(original_count: usize, bed_indices: &[usize], bed_conform: bool) -> Self {
         let bed_channels = bed_indices.len();
         let object_channels = original_count.saturating_sub(bed_indices.len());
-        let total_channels = if bed_conform { TARGET_BED_CHANNELS } else { 0 } + object_channels;
+        // Without bed conformance the bed channels are written through untouched,
+        // so they must stay part of the total. Only conformance replaces them with
+        // a full 7.1.2 bed.
+        let total_channels = if bed_conform {
+            TARGET_BED_CHANNELS
+        } else {
+            bed_channels
+        } + object_channels;
 
         Self {
             total_channels,
@@ -924,4 +931,53 @@ fn create_path_with_suffix(base_path: &Path, suffix: &str) -> PathBuf {
     );
     path.set_file_name(new_name);
     path
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Without bed conformance every decoded channel is written through as-is,
+    /// so the reported channel count has to match the PCM layout exactly.
+    /// Getting this wrong produces a CAF/W64 header that disagrees with its own
+    /// payload, which downstream Atmos tooling rejects.
+    #[test]
+    fn atmos_without_bed_conform_keeps_bed_channels() {
+        // 12 decoded channels: an LFE-only bed plus 11 objects.
+        let info = ChannelInfo::for_atmos(12, &[3], false);
+
+        assert_eq!(info.total_channels, 12);
+        assert_eq!(info.bed_channels, 1);
+        assert_eq!(info.object_channels, 11);
+        assert!(!info.is_bed_conformed);
+    }
+
+    #[test]
+    fn atmos_with_bed_conform_expands_to_full_bed() {
+        let info = ChannelInfo::for_atmos(12, &[3], true);
+
+        assert_eq!(info.total_channels, TARGET_BED_CHANNELS + 11);
+        assert_eq!(info.bed_channels, 1);
+        assert_eq!(info.object_channels, 11);
+        assert!(info.is_bed_conformed);
+    }
+
+    #[test]
+    fn atmos_without_bed_conform_matches_decoded_count_for_full_bed() {
+        // 7.1.2 bed plus 6 objects, no conformance needed.
+        let bed: Vec<usize> = (0..10).collect();
+        let info = ChannelInfo::for_atmos(16, &bed, false);
+
+        assert_eq!(info.total_channels, 16);
+        assert_eq!(info.bed_channels, 10);
+        assert_eq!(info.object_channels, 6);
+    }
+
+    #[test]
+    fn atmos_without_bed_indices_reports_all_channels_as_objects() {
+        let info = ChannelInfo::for_atmos(12, EMPTY_BED_INDICES, false);
+
+        assert_eq!(info.total_channels, 12);
+        assert_eq!(info.object_channels, 12);
+    }
 }
