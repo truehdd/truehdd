@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "truehdd"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2024"
 license = "Apache-2.0"
 description = "Tools for inspecting and decoding Dolby TrueHD bitstreams"
@@ -19,7 +19,7 @@ path = "src/main.rs"
 
 [dependencies]
 truehdd-macros = { version = "0.1.1", path = "truehdd-macros" }
-truehd = { version = "0.6.0", path = "truehd" }
+truehd = { version = "0.6.2", path = "truehd" }
 
 anyhow = "1.0.104"
 clap = { version = "4.6.4", features = ["derive"] }

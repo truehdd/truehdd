@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-08-04
+
 ### Fixed
 - Decoding Atmos without `--bed-conform` wrote an audio file header that understated the channel count by the number of bed channels, while the PCM payload still carried every channel. An LFE-only bed with 11 objects produced a CAF declaring 11 channels for 12-channel interleaved data, so every frame boundary but the first fell in the wrong place and Dolby Atmos tooling rejected the master (#29). The count now comes from the decoded count, so a bed assignment naming more channels than the presentation carries cannot skew it either
 - An output path whose name contains a dot lost everything after the last dot when the audio and metadata extensions were added, so `--output-path Movie.2024.1080p` wrote `Movie.2024.atmos.audio` while the Dolby Atmos master header referenced `Movie.2024.1080p.atmos.audio`, leaving the master incomplete. Non-Atmos output was misnamed the same way (`Movie.2024.caf`). This affected 0.5.0 and 0.5.1
