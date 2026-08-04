@@ -90,15 +90,14 @@ impl ChannelInfo {
     /// Create ChannelInfo for bed-conformed audio
     fn for_atmos(original_count: usize, bed_indices: &[usize], bed_conform: bool) -> Self {
         let bed_channels = bed_indices.len();
-        let object_channels = original_count.saturating_sub(bed_indices.len());
-        // Without bed conformance the bed channels are written through untouched,
-        // so they must stay part of the total. Only conformance replaces them with
-        // a full 7.1.2 bed.
+        let object_channels = original_count.saturating_sub(bed_channels);
+        // Only conformance rewrites the layout, replacing the bed with a full 7.1.2 one.
+        // Otherwise the decoded channels are written through untouched.
         let total_channels = if bed_conform {
-            TARGET_BED_CHANNELS
+            TARGET_BED_CHANNELS + object_channels
         } else {
-            bed_channels
-        } + object_channels;
+            original_count
+        };
 
         Self {
             total_channels,
@@ -1038,5 +1037,15 @@ mod tests {
             add_extension(Path::new("out.caf"), "caf"),
             Path::new("out.caf")
         );
+    }
+
+    #[test]
+    fn atmos_channel_count_never_exceeds_the_decoded_count() {
+        // A bed assignment claiming more channels than the presentation decodes must
+        // not inflate the header past the payload.
+        let bed: Vec<usize> = (0..10).collect();
+        let info = ChannelInfo::for_atmos(2, &bed, false);
+
+        assert_eq!(info.total_channels, 2);
     }
 }
