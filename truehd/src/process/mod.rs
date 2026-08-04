@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use std::fmt::Display;
 
 /// Frame extraction from audio bitstreams.
@@ -97,7 +97,13 @@ impl PresentationMap {
             .enumerate()
             .fold(0, |mask, (i, &required)| {
                 if required {
-                    mask | self.substream_mask_by_index(i)
+                    // A presentation the stream does not carry resolves to the highest
+                    // one it does, so those substreams are still needed
+                    let index = match self.presentation_type_by_index(i) {
+                        PresentationType::Invalid => self.max_independent_presentation(),
+                        _ => Some(i),
+                    };
+                    mask | index.map_or(0, |i| self.substream_mask_by_index(i))
                 } else {
                     mask
                 }
@@ -110,15 +116,24 @@ impl PresentationMap {
     ) -> Result<[bool; MAX_PRESENTATIONS]> {
         let mut presentations = [false; MAX_PRESENTATIONS];
 
-        required_presentations
+        for (i, _) in required_presentations
             .iter()
             .enumerate()
             .filter(|&(_, &required)| required)
-            .for_each(|(i, _)| match self.presentation_type_by_index(i) {
-                PresentationType::Invalid => {}
+        {
+            match self.presentation_type_by_index(i) {
+                // A stream need not carry four presentations. Asking for one it does
+                // not have decodes the highest available rather than nothing
+                PresentationType::Invalid => {
+                    let Some(max_independent) = self.max_independent_presentation() else {
+                        bail!("No presentation is available");
+                    };
+                    presentations[max_independent] = true;
+                }
                 PresentationType::CopyOf(copy_i) => presentations[copy_i] = true,
                 _ => presentations[i] = true,
-            });
+            }
+        }
 
         Ok(presentations)
     }
@@ -174,4 +189,51 @@ fn test_presentation_map() {
         map.presentation_type_by_index(1),
         PresentationType::Independent
     );
+}
+
+/// A stream need not carry four presentations. Asking for one it does not have
+/// resolved to nothing between 0.5.0 and 0.6.2, so the caller received no audio
+/// while the log claimed a fallback had been applied.
+#[test]
+fn absent_presentation_resolves_to_the_highest_available() {
+    // masks [1, 2, 5, 0]: presentation 3 is absent, 2 is the highest available.
+    let map = PresentationMap::with_substream_info(0b01011000, 0b00000000);
+    assert_eq!(map.presentation_type_by_index(3), PresentationType::Invalid);
+
+    let required = [false, false, false, true];
+    assert_eq!(
+        map.effective_presentations(&required).unwrap(),
+        [false, false, true, false]
+    );
+    assert_eq!(
+        map.substream_mask_by_required_presentations(&required),
+        map.substream_mask_by_index(2)
+    );
+}
+
+#[test]
+fn every_presentation_of_the_example_stream_decodes() {
+    use decode::Decoder;
+    use extract::Extractor;
+    use parse::Parser;
+
+    for presentation in 0..MAX_PRESENTATIONS {
+        let mut extractor = Extractor::default();
+        extractor.push_bytes(EXAMPLE_DATA);
+
+        let mut parser = Parser::default();
+        let mut decoder = Decoder::default();
+        let mut frames = 0;
+
+        for frame in extractor.flatten() {
+            let access_unit = parser.parse(&frame).expect("example data must parse");
+            let decoded = decoder
+                .decode_presentation(&access_unit, presentation)
+                .unwrap_or_else(|e| panic!("presentation {presentation}: {e}"));
+            assert!(decoded.sample_length > 0, "presentation {presentation}");
+            frames += 1;
+        }
+
+        assert_eq!(frames, 2, "presentation {presentation}");
+    }
 }

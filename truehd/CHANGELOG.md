@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Requesting a presentation the stream does not carry resolved to no presentation at all: `effective_presentations` skipped the absent index and `substream_mask_by_required_presentations` selected no substreams for it, while the decoder logged that it was falling back to the highest presentation available. `decode_presentation` therefore failed with `Failed to get presentation N` and `decode_presentations` returned all `None`. Both now resolve an absent presentation to that fallback, and fail only when the stream carries no presentation at all. This affected 0.5.0 through 0.6.2
+
 ## [0.6.2] - 2026-08-04
 
 ### Fixed

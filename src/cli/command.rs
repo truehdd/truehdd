@@ -139,7 +139,7 @@ pub enum PresentationSelection {
 
 impl PresentationSelection {
     /// Presentations to request from the decoder. Unavailable ones are
-    /// remapped or dropped by the decoder's presentation map.
+    /// remapped by the decoder's presentation map.
     pub fn to_required_presentations(&self) -> [bool; 4] {
         let mut required = [false; 4];
         match self {

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Decoding a stream that does not carry the requested presentation wrote no output at all and still reported success. The default `--presentation max` asks for index 3, so any stream with fewer than four substreams — a plain stereo or 5.1 TrueHD stream, for example — logged `Presentation 3 is not available, using presentation 0`, then finished with `0 frames, 0 samples` and exit code 0 without creating a file. An explicit `--presentation` naming an absent index behaved the same way. Output is byte-identical to 0.4.0 again. This affected 0.5.0 through 0.5.2
+
 ## [0.5.2] - 2026-08-04
 
 ### Fixed
