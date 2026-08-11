@@ -231,6 +231,12 @@ impl Parser {
     }
 }
 
+/// Per-substream parser state that outlives a restart header.
+///
+/// Everything a restart header re-establishes lives in [`ParserRestartState`] under
+/// [`restart`](Self::restart) instead, so a field placed here keeps its value across
+/// restarts by construction rather than by appearing in a list. Which of the two
+/// structs a new field goes in is the whole decision; the reset never changes.
 #[derive(Clone, Copy, Debug)]
 pub struct ParserSubstreamState {
     pub crc_present: bool,
@@ -247,6 +253,27 @@ pub struct ParserSubstreamState {
     pub heavy_drc_time_update: u8,
     pub heavy_drc_count: usize,
 
+    /// Discarded wholesale by every restart header.
+    pub restart: ParserRestartState,
+
+    pub hires_output_timing_state: HiresOutputTimingState,
+
+    pub latency: usize,
+    pub prev_latency: usize,
+
+    pub output_timing_history: [usize; 128],
+    pub substream_size_history: [usize; 128],
+    pub history_index: usize,
+}
+
+/// Per-substream parser state a restart header re-establishes.
+///
+/// [`ParserState::reset_parser_substream_state`] replaces this with
+/// [`Default`](Default::default) and touches nothing else, so a field added here is
+/// reset at the next restart header with no other edit, and a field that must survive
+/// one belongs in [`ParserSubstreamState`].
+#[derive(Clone, Copy, Debug)]
+pub struct ParserRestartState {
     pub block_index: usize,
 
     pub restart_sync_word: u16,
@@ -256,8 +283,6 @@ pub struct ParserSubstreamState {
     pub max_shift: i8,
     pub max_lsbs: u32,
     pub error_protect: bool,
-
-    pub hires_output_timing_state: HiresOutputTimingState,
 
     pub guards: Guards,
     pub block_size: usize,
@@ -277,13 +302,6 @@ pub struct ParserSubstreamState {
 
     pub output_shift: [i8; 16],
     pub quantiser_step_size: [u32; 16],
-
-    pub latency: usize,
-    pub prev_latency: usize,
-
-    pub output_timing_history: [usize; 128],
-    pub substream_size_history: [usize; 128],
-    pub history_index: usize,
 }
 
 impl Default for ParserSubstreamState {
@@ -303,6 +321,23 @@ impl Default for ParserSubstreamState {
             heavy_drc_time_update: 0,
             heavy_drc_count: 0,
 
+            restart: ParserRestartState::default(),
+
+            hires_output_timing_state: HiresOutputTimingState::default(),
+
+            latency: 0,
+            prev_latency: 0,
+
+            output_timing_history: [0; 128],
+            substream_size_history: [0; 128],
+            history_index: 0,
+        }
+    }
+}
+
+impl Default for ParserRestartState {
+    fn default() -> Self {
+        Self {
             block_index: 0,
             restart_sync_word: 0,
             min_chan: 0,
@@ -311,8 +346,6 @@ impl Default for ParserSubstreamState {
             max_shift: 0,
             max_lsbs: 0,
             error_protect: false,
-
-            hires_output_timing_state: HiresOutputTimingState::default(),
 
             guards: Guards::default(),
             block_size: 8,
@@ -332,13 +365,6 @@ impl Default for ParserSubstreamState {
 
             output_shift: [0; 16],
             quantiser_step_size: [0; 16],
-
-            latency: 0,
-            prev_latency: 0,
-
-            output_timing_history: [0; 128],
-            substream_size_history: [0; 128],
-            history_index: 0,
         }
     }
 }
@@ -611,28 +637,7 @@ impl ParserState {
     // TODO: provide iterator for sss here
 
     pub fn reset_parser_substream_state(&mut self) {
-        let ss_state = &mut self.substream_state[self.substream_index];
-        *ss_state = ParserSubstreamState {
-            crc_present: ss_state.crc_present,
-            substream_end_ptr: ss_state.substream_end_ptr,
-            drc_active: ss_state.drc_active,
-            drc_gain_update: ss_state.drc_gain_update,
-            drc_time_update: ss_state.drc_time_update,
-            drc_count: ss_state.drc_count,
-            heavy_drc_active: ss_state.heavy_drc_active,
-            heavy_drc_present: ss_state.heavy_drc_present,
-            heavy_drc_gain_update: ss_state.heavy_drc_gain_update,
-            heavy_drc_time_update: ss_state.heavy_drc_time_update,
-            heavy_drc_count: ss_state.heavy_drc_count,
-            hires_output_timing_state: ss_state.hires_output_timing_state,
-            latency: ss_state.latency,
-            prev_latency: ss_state.prev_latency,
-            output_timing_history: ss_state.output_timing_history,
-            substream_size_history: ss_state.substream_size_history,
-            history_index: ss_state.history_index,
-            // state: ss_state.coeff_state,
-            ..Default::default()
-        }
+        self.substream_state[self.substream_index].restart = ParserRestartState::default();
     }
 
     pub fn reset_for_branch(&mut self) {

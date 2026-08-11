@@ -68,10 +68,10 @@ impl Matrixing {
         let this_substream_info = state.substream_info;
         let audio_sampling_frequency_1 = state.audio_sampling_frequency_1;
         // ++*(a2+20148)
-        let ss_state = state.substream_state_mut()?;
+        let restart = &mut state.substream_state_mut()?.restart;
 
-        let restart_sync_word = ss_state.restart_sync_word;
-        let max_matrix_chan = ss_state.max_matrix_chan;
+        let restart_sync_word = restart.restart_sync_word;
+        let max_matrix_chan = restart.max_matrix_chan;
 
         let mut matrixing = Matrixing::default();
 
@@ -83,9 +83,9 @@ impl Matrixing {
 
                 if matrixing.new_matrix_config {
                     matrixing.primitive_matrices = reader.get_n::<u8>(4)? as usize + 1;
-                    ss_state.primitive_matrices = matrixing.primitive_matrices;
+                    restart.primitive_matrices = matrixing.primitive_matrices;
 
-                    for (pmi, matrices) in &mut matrixing.matrices[0..ss_state.primitive_matrices]
+                    for (pmi, matrices) in &mut matrixing.matrices[0..restart.primitive_matrices]
                         .iter_mut()
                         .enumerate()
                     {
@@ -97,21 +97,21 @@ impl Matrixing {
                         matrices.dither_scale = reader.get_n(4)?;
                         matrices.cf_mask = reader.get_n(max_matrix_chan as u32 + 1)?;
 
-                        ss_state.matrix_ch[pmi] = matrices.matrix_ch;
-                        ss_state.frac_bits[pmi] = matrices.frac_bits;
-                        ss_state.lsb_bypass_bit_count[pmi] = matrices.lsb_bypass_bit_count;
-                        ss_state.cf_mask[pmi] = matrices.cf_mask;
+                        restart.matrix_ch[pmi] = matrices.matrix_ch;
+                        restart.frac_bits[pmi] = matrices.frac_bits;
+                        restart.lsb_bypass_bit_count[pmi] = matrices.lsb_bypass_bit_count;
+                        restart.cf_mask[pmi] = matrices.cf_mask;
                     }
                 }
 
-                let primitive_matrices = ss_state.primitive_matrices;
+                let primitive_matrices = restart.primitive_matrices;
 
                 for (pmi, matrices) in matrixing.matrices[0..primitive_matrices]
                     .iter_mut()
                     .enumerate()
                 {
-                    let frac_bits = ss_state.frac_bits[pmi] as u32;
-                    let cf_mask = ss_state.cf_mask[pmi];
+                    let frac_bits = restart.frac_bits[pmi] as u32;
+                    let cf_mask = restart.cf_mask[pmi];
 
                     for chi in 0..=max_matrix_chan {
                         if (cf_mask >> chi) & 1 == 0 {
@@ -124,7 +124,7 @@ impl Matrixing {
                 }
             }
 
-            let primitive_matrices = ss_state.primitive_matrices;
+            let primitive_matrices = restart.primitive_matrices;
 
             matrixing.interpolation_used = reader.get()?;
 
@@ -142,7 +142,7 @@ impl Matrixing {
                             matrices.delta_bits = reader.get_n(4)?;
                             matrices.delta_precision = reader.get_n(2)?;
 
-                            ss_state.delta_bits[pmi] = matrices.delta_bits;
+                            restart.delta_bits[pmi] = matrices.delta_bits;
                         }
                     }
 
@@ -150,8 +150,8 @@ impl Matrixing {
                         .iter_mut()
                         .enumerate()
                     {
-                        let cf_mask = ss_state.cf_mask[pmi];
-                        let delta_bits = ss_state.delta_bits[pmi] as u32;
+                        let cf_mask = restart.cf_mask[pmi];
+                        let delta_bits = restart.delta_bits[pmi] as u32;
 
                         for chi in 0..=max_matrix_chan {
                             if delta_bits == 0 || (cf_mask >> chi) & 1 == 0 {
@@ -172,9 +172,9 @@ impl Matrixing {
             }
         } else {
             matrixing.primitive_matrices = reader.get_n::<u8>(4)? as usize;
-            ss_state.primitive_matrices = matrixing.primitive_matrices;
+            restart.primitive_matrices = matrixing.primitive_matrices;
 
-            for (pmi, matrices) in &mut matrixing.matrices[0..ss_state.primitive_matrices]
+            for (pmi, matrices) in &mut matrixing.matrices[0..restart.primitive_matrices]
                 .iter_mut()
                 .enumerate()
             {
@@ -182,9 +182,9 @@ impl Matrixing {
                 matrices.frac_bits = reader.get_n(4)?;
                 matrices.lsb_bypass_used = reader.get()?;
 
-                ss_state.matrix_ch[pmi] = matrices.matrix_ch;
-                ss_state.frac_bits[pmi] = matrices.frac_bits;
-                ss_state.lsb_bypass_used[pmi] = matrices.lsb_bypass_used;
+                restart.matrix_ch[pmi] = matrices.matrix_ch;
+                restart.frac_bits[pmi] = matrices.frac_bits;
+                restart.lsb_bypass_used[pmi] = matrices.lsb_bypass_used;
 
                 let coeff_bits = matrices.frac_bits as u32 + 2;
 

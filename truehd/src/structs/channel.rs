@@ -193,7 +193,7 @@ impl ChannelParams {
         let mut cp = ChannelParams::default();
 
         let mut new_filter = false;
-        let guards = state.substream_state()?.guards;
+        let guards = state.substream_state()?.restart.guards;
 
         if guards.need_change(GuardsField::CoeffsA) {
             // new_coeffs_a
@@ -246,14 +246,14 @@ impl ChannelParams {
             }
         }
 
-        let ss_state = state.substream_state_mut()?;
+        let restart = &mut state.substream_state_mut()?.restart;
 
         if guards.need_change(GuardsField::HuffOffset) {
             // new_huff_offset
             if reader.get()? {
                 let huff_offset = reader.get_s(15)?;
 
-                ss_state.huff_offset[chi] = huff_offset;
+                restart.huff_offset[chi] = huff_offset;
                 cp.huff_offset = Some(huff_offset);
             }
         }
@@ -261,14 +261,14 @@ impl ChannelParams {
         cp.huff_type = reader.get_n::<u8>(2)? as usize;
         cp.huff_lsbs = reader.get_n(5)?;
 
-        let max_huff_lsbs = if ss_state.restart_sync_word == 0x31EC {
+        let max_huff_lsbs = if restart.restart_sync_word == 0x31EC {
             31
         } else {
             24
         };
 
-        ss_state.huff_lsbs[chi] = cp.huff_lsbs;
-        ss_state.huff_type[chi] = cp.huff_type;
+        restart.huff_lsbs[chi] = cp.huff_lsbs;
+        restart.huff_type[chi] = cp.huff_type;
 
         if cp.huff_lsbs > max_huff_lsbs {
             log_or_err!(

@@ -156,7 +156,7 @@ impl SubstreamSegment {
 
         let mut ss = Self::default();
         let mut last_block_in_segment = false;
-        state.substream_state_mut()?.block_index = 0;
+        state.substream_state_mut()?.restart.block_index = 0;
 
         let blocks = Timer::start();
 
@@ -171,7 +171,7 @@ impl SubstreamSegment {
             }
             ss.block.push(Block::read(state, reader)?);
             last_block_in_segment = reader.get()?;
-            state.substream_state_mut()?.block_index += 1;
+            state.substream_state_mut()?.restart.block_index += 1;
         }
         blocks.record(&mut state.perf.substream_segment_blocks);
 

@@ -33,10 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A trim element with `b_default_trim` set was dropped instead of stored, so a renderer-derived trim was indistinguishable from an absent one
 
 ### Changed
+- The high-resolution timing decoder takes a `TimingContext` snapshot and returns the stream start timing, replacing the `Timing` trait. The caller no longer has to copy the state out, update the copy and write it back to satisfy the borrow checker
 - `ExtractError::InvalidSyncPattern` and `SubstreamError::UnalignedSegmentStart` are gone, along with the rule IDs they carried. Neither could ever be raised: the extractor searches for a sync pattern rather than validating one, and a substream segment always starts 16-bit aligned because everything ahead of it is a whole number of 16-bit words
 - `samples_per_75ms` is a function in `structs::sync` rather than the same expression written out at three call sites. Behaviour is unchanged, including the rounding at 44.1 kHz, the one rate where 75 ms is not a whole number of samples
 - `ISF_COUNT_LIST` covers all eight values of the 3-bit index rather than six, and `MAX_OBJ_INFO_BLOCKS` is exposed alongside `MAX_OBJECT_COUNT`
 - Error messages spell their comparisons in ASCII, `<=` and `>=` rather than the typographic forms, so they survive any terminal or log encoding
+- The per-substream parser fields a restart header re-establishes moved into `ParserRestartState`, reached as `ParserSubstreamState::restart`. Which fields survive a restart is now the struct a field is declared in, not a list inside the reset, so a new field can no longer be silently reset. Field names, defaults and reset behaviour are unchanged
 
 ## [0.6.3] - 2026-08-04
 

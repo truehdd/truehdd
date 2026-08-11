@@ -16,7 +16,7 @@ use log::{info, trace, warn};
 
 use crate::log_or_err;
 use crate::process::decode::DecoderState;
-use crate::process::parse::{ParserState, ParserSubstreamState};
+use crate::process::parse::{ParserRestartState, ParserState};
 use crate::structs::channel::ChannelParams;
 use crate::structs::matrix::Matrixing;
 use crate::structs::restart_header::{Guards, GuardsField, RestartHeader};
@@ -68,19 +68,19 @@ impl Default for Block {
 impl BlockHeader {
     fn read(state: &mut ParserState, reader: &mut BsIoSliceReader) -> Result<Self> {
         let samples_per_au = state.samples_per_au;
-        let ss_state = state.substream_state_mut()?;
-        let max_shift = ss_state.max_shift;
+        let restart = &mut state.substream_state_mut()?.restart;
+        let max_shift = restart.max_shift;
 
         let mut bh = BlockHeader::default();
 
-        if ss_state.guards.need_change(GuardsField::Guards) {
+        if restart.guards.need_change(GuardsField::Guards) {
             // new_guards
             if reader.get()? {
-                ss_state.guards = Guards::read(reader)?;
+                restart.guards = Guards::read(reader)?;
             }
         }
 
-        let guards = ss_state.guards;
+        let guards = restart.guards;
 
         if guards.need_change(GuardsField::BlockSize) {
             // new_block_size
@@ -98,7 +98,7 @@ impl BlockHeader {
                 }
 
                 bh.block_size = Some(block_size);
-                ss_state.block_size = block_size;
+                restart.block_size = block_size;
             }
         }
 
@@ -109,12 +109,12 @@ impl BlockHeader {
             }
         }
 
-        let ss_state = state.substream_state_mut()?;
+        let restart = &mut state.substream_state_mut()?.restart;
 
         if guards.need_change(GuardsField::OutputShift) {
             // new_output_shift
             if reader.get()? {
-                for i in 0..=ss_state.max_matrix_chan {
+                for i in 0..=restart.max_matrix_chan {
                     let output_shift = reader.get_s(4)?;
                     if output_shift > max_shift {
                         bail!(BlockError::OutputShiftTooLarge {
@@ -126,7 +126,7 @@ impl BlockHeader {
                     }
 
                     bh.output_shift[i] = Some(output_shift);
-                    ss_state.output_shift[i] = output_shift;
+                    restart.output_shift[i] = output_shift;
                 }
             }
         }
@@ -134,16 +134,16 @@ impl BlockHeader {
         if guards.need_change(GuardsField::QuantiserStepSize) {
             // new_quantiser_step_size
             if reader.get()? {
-                for i in 0..=ss_state.max_chan {
+                for i in 0..=restart.max_chan {
                     let quantiser_step_size = reader.get_n(4)?;
 
                     bh.quantiser_step_size[i] = Some(quantiser_step_size);
-                    ss_state.quantiser_step_size[i] = quantiser_step_size;
+                    restart.quantiser_step_size[i] = quantiser_step_size;
                 }
             }
         }
 
-        for chi in ss_state.min_chan..=ss_state.max_chan {
+        for chi in restart.min_chan..=restart.max_chan {
             // params_for_this_chan
             if reader.get()? {
                 bh.channel_params[chi] = Some(ChannelParams::read(state, reader, chi)?);
@@ -201,7 +201,7 @@ impl Block {
             b.block_header = Some(BlockHeader::read(state, reader)?);
         }
 
-        b.block_data_bits = if state.substream_state()?.error_protect {
+        b.block_data_bits = if state.substream_state()?.restart.error_protect {
             let block_data_bits = reader.get_n(16)?;
             if block_data_bits > 16000 {
                 bail!(BlockError::BlockDataBitsTooLarge(block_data_bits));
@@ -212,7 +212,7 @@ impl Block {
         };
 
         // TODO: for all substreams
-        if !state.has_parsed_substream && state.substream_state()?.block_index == 0 {
+        if !state.has_parsed_substream && state.substream_state()?.restart.block_index == 0 {
             // latency
             let au_offset = state.au_counter - state.last_major_sync_index;
             let samples_per_au = state.samples_per_au;
@@ -349,7 +349,7 @@ impl Block {
             }
         }
 
-        let ParserSubstreamState {
+        let ParserRestartState {
             restart_sync_word,
             min_chan,
             max_chan,
@@ -366,7 +366,7 @@ impl Block {
             lsb_bypass_bit_count,
             quantiser_step_size,
             ..
-        } = *state.substream_state()?;
+        } = state.substream_state()?.restart;
 
         let block_data_start_pos = reader.position()?;
 

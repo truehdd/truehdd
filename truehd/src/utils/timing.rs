@@ -1,43 +1,30 @@
-//! Timing utilities for high-resolution output timing.
+//! High-resolution output timing.
 //!
-//! Provides timing trait implementations and high-resolution timing
-//! state management for stream synchronization.
+//! `output_timing` is 16 bits and wraps; this field carries the high half, one bit per
+//! access unit, so a decoder can recover an absolute sample position.
 
-use anyhow::Result;
 use log::{debug, info, trace};
 
 use crate::process::parse::ParserState;
 
-/// Trait providing timing information access for audio processing.
-pub trait Timing {
-    fn au_index(&self) -> Result<usize>;
-    fn samples_per_au(&self) -> Result<usize>;
-    fn substream_index(&self) -> Result<usize>;
-    fn output_timing(&self) -> Result<usize>;
-    fn update_hires_output_timing(&mut self, hires_output_timing: usize) -> Result<()>;
+/// The stream facts a field decode needs, snapshotted so the decoder can run while the
+/// state it owns is mutably borrowed out of the same [`ParserState`].
+#[derive(Debug, Default, Clone, Copy)]
+pub struct TimingContext {
+    pub au_index: usize,
+    pub samples_per_au: usize,
+    pub substream_index: usize,
+    pub output_timing: usize,
 }
 
-impl Timing for ParserState {
-    fn au_index(&self) -> Result<usize> {
-        Ok(self.au_counter)
-    }
-
-    fn samples_per_au(&self) -> Result<usize> {
-        Ok(self.samples_per_au)
-    }
-
-    fn substream_index(&self) -> Result<usize> {
-        Ok(self.substream_index)
-    }
-
-    fn output_timing(&self) -> Result<usize> {
-        Ok(self.output_timing)
-    }
-
-    fn update_hires_output_timing(&mut self, hires_output_timing: usize) -> Result<()> {
-        self.hires_output_timing = Some(hires_output_timing);
-
-        Ok(())
+impl From<&ParserState> for TimingContext {
+    fn from(state: &ParserState) -> Self {
+        Self {
+            au_index: state.au_counter,
+            samples_per_au: state.samples_per_au,
+            substream_index: state.substream_index,
+            output_timing: state.output_timing,
+        }
     }
 }
 
@@ -55,12 +42,16 @@ pub struct HiresOutputTimingState {
 }
 
 impl HiresOutputTimingState {
-    /// Decodes the field one bit per access unit and reports what it finds. The
-    /// arithmetic is 32-bit and wrapping: the timing this reconstructs is the high half
-    /// of a 32-bit sample position whose low half is `output_timing`, so a value that
-    /// runs backwards is a sequence error to report, not an underflow to panic on.
+    /// Feeds one access unit's bit and returns the stream's start timing when the first
+    /// field completes.
+    ///
+    /// The arithmetic is 32-bit and wrapping: the value reconstructed here is the high
+    /// half of a 32-bit sample position whose low half is `output_timing`, so a field
+    /// running backwards is a sequence error to report, not an underflow to panic on.
     /// Findings are informational — a stream carrying no field at all is legal.
-    pub fn update(&mut self, state: &mut dyn Timing, hires_present: bool) -> Result<()> {
+    pub fn update(&mut self, ctx: &TimingContext, hires_present: bool) -> Option<usize> {
+        let mut stream_start = None;
+
         match self.state_index {
             0 => {
                 self.counter = 0;
@@ -81,8 +72,8 @@ impl HiresOutputTimingState {
                     self.state_index = 6;
                     self.serialisation_counter = 0;
                     self.timing = 0;
-                    self.au_index = state.au_index()?;
-                    self.au_output_timing = state.output_timing()?;
+                    self.au_index = ctx.au_index;
+                    self.au_output_timing = ctx.output_timing;
 
                     break 'a;
                 }
@@ -145,19 +136,19 @@ impl HiresOutputTimingState {
                         let hires_output_timing = ((self.timing as u32) << 16)
                             .wrapping_add(self.au_output_timing as u32)
                             .wrapping_sub(
-                                (self.au_index as u32)
-                                    .wrapping_mul(state.samples_per_au()? as u32),
-                            ) as usize;
+                                (self.au_index as u32).wrapping_mul(ctx.samples_per_au as u32),
+                            )
+                            as usize;
                         debug!(
                             "First high-resolution timing field: {} (AU {}), stream start timing: {}",
                             self.timing, self.au_index, hires_output_timing
                         );
 
-                        state.update_hires_output_timing(hires_output_timing)?;
+                        stream_start = Some(hires_output_timing);
                     } else if (self.timing as u32).wrapping_sub(self.prev_timing as u32)
                         == ((self.au_index as u32)
                             .wrapping_sub(self.prev_au_index as u32)
-                            .wrapping_mul(state.samples_per_au()? as u32)
+                            .wrapping_mul(ctx.samples_per_au as u32)
                             .wrapping_add(self.prev_au_output_timing as u32))
                             >> 16
                     {
@@ -172,7 +163,7 @@ impl HiresOutputTimingState {
                             self.au_index,
                             self.prev_timing,
                             self.prev_au_index,
-                            state.substream_index()?
+                            ctx.substream_index
                         );
 
                         self.counter = 0;
@@ -194,7 +185,8 @@ impl HiresOutputTimingState {
             }
             _ => unreachable!("Invalid state for parsing hires_output_timing."),
         }
-        Ok(())
+
+        stream_start
     }
 
     pub fn reset_for_branch(&mut self) {
@@ -207,48 +199,28 @@ impl HiresOutputTimingState {
 mod tests {
     use super::*;
 
-    #[derive(Default)]
-    struct Fixed {
-        hires: Option<usize>,
-    }
-
-    impl Timing for Fixed {
-        fn au_index(&self) -> Result<usize> {
-            Ok(0)
-        }
-        fn samples_per_au(&self) -> Result<usize> {
-            Ok(40)
-        }
-        fn substream_index(&self) -> Result<usize> {
-            Ok(0)
-        }
-        fn output_timing(&self) -> Result<usize> {
-            Ok(0)
-        }
-        fn update_hires_output_timing(&mut self, hires: usize) -> Result<()> {
-            self.hires = Some(hires);
-            Ok(())
-        }
-    }
-
-    fn drive(bits: &[bool]) -> (HiresOutputTimingState, Fixed) {
+    fn drive(bits: &[bool]) -> (HiresOutputTimingState, Option<usize>) {
+        let ctx = TimingContext {
+            samples_per_au: 40,
+            ..Default::default()
+        };
         let mut machine = HiresOutputTimingState::default();
-        let mut state = Fixed::default();
+        let mut stream_start = None;
         for &bit in bits {
-            machine.update(&mut state, bit).expect("state machine");
+            stream_start = machine.update(&ctx, bit).or(stream_start);
         }
-        (machine, state)
+        (machine, stream_start)
     }
 
     /// Five zeros reach the field start, then the shortest field carrying 1 sets the
     /// stream's start timing from the high half of the position.
     #[test]
     fn the_first_field_sets_the_stream_start_timing() {
-        let (_, state) = drive(&[
+        let (_, stream_start) = drive(&[
             false, false, false, false, false, // preamble
             true, true, true, false, false, false, false, false, // field = 1
         ]);
-        assert_eq!(state.hires, Some(1 << 16));
+        assert_eq!(stream_start, Some(1 << 16));
     }
 
     /// A field that runs backwards is a sequence error, not an underflow. The subtraction
@@ -256,12 +228,12 @@ mod tests {
     /// checks — on exactly the malformed input the check exists to catch.
     #[test]
     fn a_backwards_field_reports_instead_of_underflowing() {
-        let (machine, state) = drive(&[
+        let (machine, stream_start) = drive(&[
             false, false, false, false, false, // preamble
             true, true, true, false, false, false, false, false, // field = 1
             true, true, false, false, false, false, false, // field = 0, goes backwards
         ]);
-        assert_eq!(state.hires, Some(1 << 16), "first field still decoded");
+        assert_eq!(stream_start, Some(1 << 16), "first field still decoded");
         assert_eq!(machine.counter, 0, "the sequence error resets the run counter");
     }
 }

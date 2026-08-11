@@ -21,6 +21,7 @@ use crate::structs::sync::{
 };
 use crate::utils::bitstream_io::BsIoSliceReader;
 use crate::utils::errors::RestartHeaderError;
+use crate::utils::timing::TimingContext;
 use anyhow::{Result, anyhow, bail};
 use log::Level::Warn;
 use log::{info, trace, warn};
@@ -367,9 +368,14 @@ impl RestartHeader {
                 "AU {}: high-resolution output timing field = {}",
                 state.au_counter, rh.hires_output_timing
             );
-            let mut hires_output_timing_state = state.substream_state()?.hires_output_timing_state;
-            hires_output_timing_state.update(state, rh.hires_output_timing)?;
-            state.substream_state_mut()?.hires_output_timing_state = hires_output_timing_state;
+            let ctx = TimingContext::from(&*state);
+            if let Some(stream_start) = state
+                .substream_state_mut()?
+                .hires_output_timing_state
+                .update(&ctx, rh.hires_output_timing)
+            {
+                state.hires_output_timing = Some(stream_start);
+            }
         }
 
         reader.skip_n(2)?;
@@ -470,13 +476,13 @@ impl RestartHeader {
         state.reset_parser_substream_state();
         let ss_state = state.substream_state_mut()?;
 
-        ss_state.restart_sync_word = rh.restart_sync_word as u16;
-        ss_state.min_chan = rh.min_chan as usize;
-        ss_state.max_chan = rh.max_chan as usize;
-        ss_state.max_matrix_chan = rh.max_matrix_chan as usize;
-        ss_state.max_shift = rh.max_shift as i8;
-        ss_state.max_lsbs = rh.max_lsbs as u32;
-        ss_state.error_protect = rh.error_protect;
+        ss_state.restart.restart_sync_word = rh.restart_sync_word as u16;
+        ss_state.restart.min_chan = rh.min_chan as usize;
+        ss_state.restart.max_chan = rh.max_chan as usize;
+        ss_state.restart.max_matrix_chan = rh.max_matrix_chan as usize;
+        ss_state.restart.max_shift = rh.max_shift as i8;
+        ss_state.restart.max_lsbs = rh.max_lsbs as u32;
+        ss_state.restart.error_protect = rh.error_protect;
         ss_state.heavy_drc_present = rh.heavy_drc_present;
 
         Ok(rh)
