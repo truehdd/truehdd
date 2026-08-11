@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `Parser::set_allow_seamless_branch` turns off the tolerance that lets a major sync excuse the timing and output-timing checks. Five checks were unreachable without it, since the tolerance defaulted on and had no setter. The default is unchanged
+- The restart gap, the number of access units between one major sync and the next, is now tracked in `ParserState::restart_gap` (a four-deep history, most recent first) and checked: a gap must be 1 or at least 8. The field was declared and never read. The rules over *runs* of short gaps, and their relaxation for a spliced stream, are not implemented: only their wording is known, not the conditions that raise them
 - `ExtraData::verify_evo_protection` checks an Evolution frame's primary protection word against a supplied key, returning `EvoProtectionStatus`. Behind the optional `evo-protection` feature, off by default
 - `ExtraData::evo_hmac_message` returns the bytes the protection digest covers, with `ExtraData::extra_data_offset` and `EvoFrame::protection_offset`
 - FBB (Meridian / DVD-Audio) stream support. Parsing bailed with `unimplemented!` at three sites, so an FBB stream could not be read at all. The major sync now takes the same path as FBA, the channel-assignment bound applies to both formats while the identity-permutation rule stays FBA-only, and `AccessUnitError::FbbSyncTooFar` covers FBB's tighter 32-access-unit repetition limit. One `unimplemented!` remains, for heavy DRC on FBB. `EXAMPLE_DATA_FBB` and `EXAMPLE_DATA_FBB_UNEXTRACTABLE` are the fixtures
@@ -19,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `truehd/tests/decode_verify.rs`: decode-correctness tests over embedded stream slices. The PCM digests are derived from the encoder's source WAVs wherever a lossless source exists, so they pin decoding as the encoder's inverse rather than as the decoder's own output; the corruption tests prove the `lossless_check` comparison fires
 
 ### Fixed
+- Nine conformance checks were bare log calls, so no caller could see them under `--strict`, count them by rule or place them in the stream: the peak data rate ceiling, the four seamless-branch cause checks, the termination word and the two checks inside it, and DRC time update against DRC count. Each now reports a typed error at the bit it fired at, still at the level it logged at before
+- `BlockError::HuffmanNinthBitMissing` was declared and never raised. The huffman tables reach their deepest leaf through a nine-bit code whose ninth bit they ignore, and only the code ending in 1 is legal; that is now checked
 - The extractor found no frames at all in FBB streams whose `channel_meaning` sets the bit FBA defines as `extra_channel_meaning_present`: it computed an extended major sync info length whose CRC could never match, and the parser misread the same extension. Both are FBA-only; an FBB major sync info is always the fixed 26 bytes. `fbb_unextractable_stream_extracts` is no longer ignored
 - The `substream_info` whitelist rejected valid FBB values and accepted FBB's layered `0x0C` only through release-mode shift wrapping that panics under debug overflow checks. It now applies to FBA alone, and its shifts are range-guarded
 - The `lossless_check` byte was compared only for the highest presentation of a decode, so a multi-presentation run wrote corrupted PCM in a lower presentation without warning. It now runs for every effective presentation
@@ -27,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A trim element with `b_default_trim` set was dropped instead of stored, so a renderer-derived trim was indistinguishable from an absent one
 
 ### Changed
+- `ExtractError::InvalidSyncPattern` and `SubstreamError::UnalignedSegmentStart` are gone, along with the rule IDs they carried. Neither could ever be raised: the extractor searches for a sync pattern rather than validating one, and a substream segment always starts 16-bit aligned because everything ahead of it is a whole number of 16-bit words
 - `samples_per_75ms` is a function in `structs::sync` rather than the same expression written out at three call sites. Behaviour is unchanged, including the rounding at 44.1 kHz, the one rate where 75 ms is not a whole number of samples
 - `ISF_COUNT_LIST` covers all eight values of the 3-bit index rather than six, and `MAX_OBJ_INFO_BLOCKS` is exposed alongside `MAX_OBJECT_COUNT`
 - Error messages spell their comparisons in ASCII, `<=` and `>=` rather than the typographic forms, so they survive any terminal or log encoding

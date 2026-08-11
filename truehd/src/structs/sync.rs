@@ -207,10 +207,6 @@ impl MajorSyncInfo {
 
         state.format_sync = ms.format_sync;
 
-        {
-            // TODO: restart_gap
-        }
-
         ms.format_info = FormatInfo::read(state, reader)?;
         ms.signature = reader.get_n(16)?;
 

@@ -20,7 +20,7 @@ use crate::process::parse::{ParserState, ParserSubstreamState};
 use crate::structs::channel::ChannelParams;
 use crate::structs::matrix::Matrixing;
 use crate::structs::restart_header::{Guards, GuardsField, RestartHeader};
-use crate::utils::bitstream_io::BsIoSliceReader;
+use crate::utils::bitstream_io::{BsIoSliceReader, HUFFMAN_DEEPEST_CODE};
 use crate::utils::errors::BlockError;
 use crate::utils::perf::Timer;
 
@@ -442,6 +442,22 @@ impl Block {
 
                 let mut audio_data = if huff_type != 0 {
                     let huff_code = reader.get_huffman(huff_type)?;
+
+                    // Every table reaches its deepest leaf through a nine-bit code whose
+                    // ninth bit it ignores, and only 1 is legal there.
+                    if huff_code == HUFFMAN_DEEPEST_CODE {
+                        reader.seek(-1)?;
+
+                        if !reader.get()? {
+                            log_or_err!(
+                                state,
+                                Warn,
+                                anyhow!(BlockError::HuffmanNinthBitMissing),
+                                reader
+                            );
+                        }
+                    }
+
                     let lsbs = if lsbs_bits > 0 {
                         reader.get_n::<u32>(lsbs_bits)? as i32
                     } else {

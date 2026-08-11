@@ -17,6 +17,9 @@ use crate::utils::fifo::{ACCUMULATORS, FifoDepthState};
 pub use crate::utils::perf::ParserPerfStats;
 use crate::utils::timing::HiresOutputTimingState;
 
+/// How many restart gaps [`ParserState::restart_gap`] keeps.
+pub const RESTART_GAP_HISTORY: usize = 4;
+
 /// Parses audio frames into structured access units.
 ///
 /// Converts raw frame data into [`AccessUnit`] objects containing
@@ -194,6 +197,15 @@ impl Parser {
         self.state.fail_level = level;
     }
 
+    /// Whether a major sync may excuse the timing and output-timing checks.
+    ///
+    /// `true` (the default) treats a discontinuity at a major sync as a splice and skips
+    /// the checks that a splice legitimately breaks. `false` evaluates them everywhere,
+    /// which is what a conformance pass over a stream that is not spliced wants.
+    pub fn set_allow_seamless_branch(&mut self, allow: bool) {
+        self.state.allow_seamless_branch = allow;
+    }
+
     /// Deepest each byte-domain FIFO accumulator has been, in bytes.
     ///
     /// Indexed by [`Accumulator`](crate::utils::fifo::Accumulator): substream 0, the
@@ -348,7 +360,8 @@ pub struct ParserState {
     pub au_index: u64,
     pub au_offset: u64,
 
-    pub restart_gap: [usize; MAX_PRESENTATIONS],
+    /// Access units between each of the last few major syncs, most recent first.
+    pub restart_gap: [usize; RESTART_GAP_HISTORY],
     pub last_major_sync_index: usize,
     pub au_counter: usize,
     pub is_major_sync: bool,

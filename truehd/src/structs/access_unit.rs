@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow, bail};
 use log::Level::{Error, Warn};
-use log::{trace, warn};
+use log::trace;
 
 use crate::log_or_err;
 use crate::process::MAX_PRESENTATIONS;
@@ -141,6 +141,10 @@ impl AccessUnit {
 
             trace!("AU {}: Major sync found {}", state.au_counter, suffix);
 
+            if state.has_parsed_au {
+                Self::check_restart_gap(state, reader)?;
+            }
+
             state.last_major_sync_index = state.au_counter;
         } else {
             // no major sync, update gap check
@@ -162,8 +166,6 @@ impl AccessUnit {
         if major_sync_interval > sync_limit {
             log_or_err!(state, Warn, anyhow!(too_far), reader);
         }
-
-        // TODO: restart gap check
 
         Self::check_fifo(state)?;
 
@@ -297,6 +299,36 @@ impl AccessUnit {
         }
     }
 
+    /// Access units between this major sync and the previous one.
+    ///
+    /// Only the bound on a single gap is checked. There are also rules over
+    /// runs of short gaps, and a relaxation of them for a spliced stream, but their
+    /// triggering conditions are not established, so they are not implemented here; the
+    /// history is kept so that they can be.
+    fn check_restart_gap(state: &mut ParserState, reader: &mut BsIoSliceReader) -> Result<()> {
+        let gap = state.au_counter - state.last_major_sync_index;
+
+        state.restart_gap.rotate_right(1);
+        state.restart_gap[0] = gap;
+
+        trace!(
+            "AU {}: restart_gap {gap}, after {:?}",
+            state.au_counter,
+            &state.restart_gap[1..]
+        );
+
+        if gap != 1 && gap < 8 {
+            log_or_err!(
+                state,
+                Warn,
+                anyhow!(AccessUnitError::RestartGapInvalid(gap)),
+                reader
+            );
+        }
+
+        Ok(())
+    }
+
     fn check_fifo(state: &mut ParserState) -> Result<()> {
         if !state.check_fifo {
             return Ok(());
@@ -324,8 +356,17 @@ impl AccessUnit {
             153600000
         };
 
-        if state.peak_data_rate * state.audio_sampling_frequency_1 as usize > max_data_rate {
-            warn!("Peak data rate exceeds maximum allowed");
+        let rate = state.peak_data_rate * state.audio_sampling_frequency_1 as usize;
+
+        if rate > max_data_rate {
+            log_or_err!(
+                state,
+                Warn,
+                anyhow!(AccessUnitError::PeakDataRateTooHigh {
+                    rate,
+                    max: max_data_rate
+                })
+            );
         }
 
         if !state.has_parsed_au {

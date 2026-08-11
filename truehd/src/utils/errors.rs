@@ -74,9 +74,6 @@ pub enum ExtractError {
 
     #[error("Insufficient buffer data for frame extraction")]
     InsufficientData,
-
-    #[error("Invalid sync pattern detected")]
-    InvalidSyncPattern,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -99,6 +96,9 @@ pub enum AccessUnitError {
     #[error("FBB stream major syncs must occur at intervals not exceeding 32 access units")]
     FbbSyncTooFar,
 
+    #[error("Restart gap must be 1 or >= 8. Read {0}")]
+    RestartGapInvalid(usize),
+
     #[error("No substream")]
     NoSubstream,
 
@@ -119,6 +119,9 @@ pub enum AccessUnitError {
 
     #[error("Timing shorter than previous duration after jump")]
     TimingShorterThanPreviousAfterJump,
+
+    #[error("peak_data_rate implies a data rate above the format maximum: {rate} > {max}")]
+    PeakDataRateTooHigh { rate: usize, max: usize },
 
     #[error("Data rate exceeds peak_data_rate")]
     DataRateExceeded,
@@ -332,6 +335,36 @@ pub enum RestartHeaderError {
     #[error("Invalid seamless branch")]
     InvalidSeamlessBranch,
 
+    #[error("advance[n] > advance[n-1] + 3*samples_per_au/4 ({advance} > {prev_advance} + {slack})")]
+    BranchAdvanceTooLarge {
+        advance: usize,
+        prev_advance: usize,
+        slack: usize,
+    },
+
+    #[error(
+        "advance[n] > advance[n-1] + samples_per_au - duration[n-1] \
+        ({advance} > {prev_advance} + {samples_per_au} - {prev_fifo_duration})"
+    )]
+    BranchAdvanceExceedsBuffer {
+        advance: usize,
+        prev_advance: usize,
+        samples_per_au: usize,
+        prev_fifo_duration: usize,
+    },
+
+    #[error(
+        "advance[n] > samples_per_75ms - samples_per_au ({advance} > {limit_75ms} - {samples_per_au})"
+    )]
+    BranchAdvanceExceeds75ms {
+        advance: usize,
+        limit_75ms: usize,
+        samples_per_au: usize,
+    },
+
+    #[error("Data rate exceeds peak_data_rate after adjusting timing for the jump")]
+    BranchDataRateExceeded,
+
     #[error("Substream 1 must use sync word 0x31EB unless it is last in 6ch presentation")]
     InvalidSyncBForSubstream1,
 
@@ -384,8 +417,19 @@ pub enum SubstreamError {
     #[error("Too many blocks in the substream segment. Got {0}")]
     TooManyBlocks(usize),
 
-    #[error("substream_segment for substream {0} does not start on an even byte boundary")]
-    UnalignedSegmentStart(usize),
+    #[error("drc_time_update = {drc_time_update}, but drc_count = {drc_count}")]
+    DrcTimeUpdateExceeded { drc_time_update: u8, drc_count: usize },
+
+    #[error("Termination word must be 0x348D3. Read {0:#X}")]
+    InvalidTerminationWord(u32),
+
+    #[error("terminator_b must be 0x1234 for substream {substream}. Read {read:#06X}")]
+    InvalidTerminatorB { substream: usize, read: u16 },
+
+    #[error(
+        "Too many zero samples to complete the access unit for substream {substream}. Read {zero_samples}"
+    )]
+    TooManyZeroSamples { substream: usize, zero_samples: u16 },
 
     #[error("substream_segment for substream {0} does not end on an even byte boundary")]
     UnalignedSegmentEnd(usize),

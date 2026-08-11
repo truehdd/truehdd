@@ -16,7 +16,7 @@
 //! Optional 8-bit parity check and CRC protection.
 
 use anyhow::{Result, anyhow};
-use log::{trace, warn};
+use log::trace;
 
 use crate::log_or_err;
 use crate::process::parse::ParserState;
@@ -57,11 +57,22 @@ impl SubstreamDirectory {
 
             ss_state.drc_count += 1;
 
-            if ss_state.drc_active && 1 << ss_state.drc_time_update < ss_state.drc_count {
-                warn!(
-                    "drc_time_update={}, but drc_count={}",
-                    ss_state.drc_time_update, ss_state.drc_count
-                )
+            let (drc_active, drc_time_update, drc_count) = (
+                ss_state.drc_active,
+                ss_state.drc_time_update,
+                ss_state.drc_count,
+            );
+
+            if drc_active && 1 << drc_time_update < drc_count {
+                log_or_err!(
+                    state,
+                    log::Level::Warn,
+                    anyhow!(SubstreamError::DrcTimeUpdateExceeded {
+                        drc_time_update,
+                        drc_count
+                    }),
+                    reader
+                );
             }
         }
 
@@ -137,18 +148,11 @@ pub struct SubstreamSegment {
 
 impl SubstreamSegment {
     pub fn read(state: &mut ParserState, reader: &mut BsIoSliceReader) -> Result<Self> {
+        // No start-alignment check: everything between the access unit start and the
+        // first segment is a whole number of 16-bit words (the 32-bit header, a major
+        // sync info that ends 16-bit aligned, 16- or 32-bit directory entries), and a
+        // segment that ends misaligned ends the access unit before the next one starts.
         let start_pos = reader.position()?;
-        if start_pos & 0xF != 0 {
-            log_or_err!(
-                state,
-                log::Level::Error,
-                anyhow!(
-                    "Substream {} segment not byte-aligned at start",
-                    state.substream_index
-                ),
-                reader
-            );
-        }
 
         let mut ss = Self::default();
         let mut last_block_in_segment = false;
@@ -222,19 +226,29 @@ impl SubstreamSegment {
                             tm.zero_samples, state.substream_index
                         )
                     } else {
-                        warn!(
-                            "Too many zero samples to complete access unit for substream {}, Read {}",
-                            state.substream_index, tm.zero_samples
-                        )
+                        log_or_err!(
+                            state,
+                            log::Level::Warn,
+                            anyhow!(SubstreamError::TooManyZeroSamples {
+                                substream: state.substream_index,
+                                zero_samples: tm.zero_samples
+                            }),
+                            reader
+                        );
                     }
                 } else {
                     tm.terminator_b = reader.get_n(13)?;
 
                     if tm.terminator_b != 0x1234 {
-                        warn!(
-                            "Invalid terminator B: expected 0x1234, found {:#04X} (substream {})",
-                            tm.terminator_b, state.substream_index
-                        )
+                        log_or_err!(
+                            state,
+                            log::Level::Warn,
+                            anyhow!(SubstreamError::InvalidTerminatorB {
+                                substream: state.substream_index,
+                                read: tm.terminator_b
+                            }),
+                            reader
+                        );
                     } else {
                         trace!(
                             "Termination word {:#08X} found for substream {}",
@@ -243,9 +257,14 @@ impl SubstreamSegment {
                     }
                 }
             } else {
-                warn!("Invalid termination word: expected 0x348D3, found {terminator_a:#X}",);
-
                 reader.seek(-18)?;
+
+                log_or_err!(
+                    state,
+                    log::Level::Warn,
+                    anyhow!(SubstreamError::InvalidTerminationWord(terminator_a)),
+                    reader
+                );
             }
 
             // TODO: check new matrixing and filter coeffs (for each channel) happens no more than once for each substream

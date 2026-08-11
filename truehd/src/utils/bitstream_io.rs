@@ -43,6 +43,9 @@ define_huffman_tree!(HuffTree3 : i32 = [
     ]
 );
 
+/// Value every huffman table maps its deepest, nine-bit code to.
+pub const HUFFMAN_DEEPEST_CODE: i32 = -7;
+
 #[derive(Debug)]
 pub struct BitstreamIoReader<R: io::Read + io::Seek> {
     bs: BitReader<R, BigEndian>,

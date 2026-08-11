@@ -277,39 +277,58 @@ impl RestartHeader {
                         break 'check_output_timing;
                     }
 
+                    // Counted before the causes are reported, since any one of them can
+                    // end the access unit under a stricter fail level.
+                    state.invalid_branches += 1;
+
                     if !c1 {
-                        warn!(
-                            "AU {}: advance[n]>advance[n-1]+3*samples_per_au/4, \
-                            ({advance} > {prev_advance} + {})",
-                            state.au_counter,
-                            3 * (samples_per_au >> 2)
+                        log_or_err!(
+                            state,
+                            Warn,
+                            anyhow!(RestartHeaderError::BranchAdvanceTooLarge {
+                                advance,
+                                prev_advance,
+                                slack: samples_per_au_3q4,
+                            }),
+                            reader
                         );
                     }
 
                     if !c2 {
-                        warn!(
-                            "AU {}: advance[n]>advance[n-1]+samples_per_au-duration[n-1], \
-                            ({advance} > {prev_advance} + {samples_per_au} - {prev_fifo_duration})",
-                            state.au_counter
+                        log_or_err!(
+                            state,
+                            Warn,
+                            anyhow!(RestartHeaderError::BranchAdvanceExceedsBuffer {
+                                advance,
+                                prev_advance,
+                                samples_per_au,
+                                prev_fifo_duration,
+                            }),
+                            reader
                         );
                     }
 
                     if !c3 {
-                        warn!(
-                            "AU {}: advance[n]>samples_per_75ms-samples_per_au, \
-                            ({advance} > {limit_75ms} - {samples_per_au})",
-                            state.au_counter
+                        log_or_err!(
+                            state,
+                            Warn,
+                            anyhow!(RestartHeaderError::BranchAdvanceExceeds75ms {
+                                advance,
+                                limit_75ms,
+                                samples_per_au,
+                            }),
+                            reader
                         );
                     }
 
                     if !c4 {
-                        warn!(
-                            "AU {}: data_rate exceeds peak_data_rate after adjusting timing for jump",
-                            state.au_counter
+                        log_or_err!(
+                            state,
+                            Warn,
+                            anyhow!(RestartHeaderError::BranchDataRateExceeded),
+                            reader
                         );
                     }
-
-                    state.invalid_branches += 1;
 
                     log_or_err!(
                         state,
