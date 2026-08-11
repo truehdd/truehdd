@@ -1,5 +1,6 @@
 use super::handler::DecodeHandler;
 use crate::cli::command::{AudioFormat, DecodeArgs, WarpMode};
+use crate::cli::evo::{EvoKey, EvoVerifier, hex};
 use crate::input::InputReader;
 use anyhow::{Result, anyhow};
 use crossbeam::channel::{Receiver, Sender, bounded};
@@ -53,11 +54,21 @@ pub struct DecodeSummary {
     pub skipped_frames: u64,
     pub branches: u64,
     pub invalid_branches: u64,
+    pub evo_checked: u64,
+    pub evo_failed: u64,
     pub decoded_frames: u64,
     pub total_samples: u64,
     pub final_sample_rate: u32,
     pub start_time: Instant,
     pub presentations: Vec<PresentationSummary>,
+}
+
+/// Stream statistics the parser thread reports back while it runs.
+struct ParserCounters {
+    branches: Arc<AtomicU64>,
+    invalid_branches: Arc<AtomicU64>,
+    evo_checked: Arc<AtomicU64>,
+    evo_failed: Arc<AtomicU64>,
 }
 
 /// What a single presentation wrote.
@@ -105,6 +116,8 @@ pub fn run_threaded_pipeline(
     let skipped_frames = Arc::new(AtomicU64::new(0));
     let branches = Arc::new(AtomicU64::new(0));
     let invalid_branches = Arc::new(AtomicU64::new(0));
+    let evo_checked = Arc::new(AtomicU64::new(0));
+    let evo_failed = Arc::new(AtomicU64::new(0));
 
     let mut outputs = PresentationOutputs {
         handlers: core::array::from_fn(|_| None),
@@ -124,8 +137,13 @@ pub fn run_threaded_pipeline(
         let skipped = Arc::clone(&skipped_frames);
         s.spawn(move |_| run_extractor_thread(input_path, tx_extract, strict_mode, skipped));
 
-        let branch_counter = Arc::clone(&branches);
-        let invalid_branch_counter = Arc::clone(&invalid_branches);
+        let counters = ParserCounters {
+            branches: Arc::clone(&branches),
+            invalid_branches: Arc::clone(&invalid_branches),
+            evo_checked: Arc::clone(&evo_checked),
+            evo_failed: Arc::clone(&evo_failed),
+        };
+        let evo_key = args.evo_key.clone();
         s.spawn(move |_| {
             run_parser_thread(
                 rx_extract,
@@ -133,8 +151,8 @@ pub fn run_threaded_pipeline(
                 fail_level,
                 required_presentations,
                 strict_mode,
-                branch_counter,
-                invalid_branch_counter,
+                counters,
+                evo_key,
             )
         });
 
@@ -153,6 +171,8 @@ pub fn run_threaded_pipeline(
                 skipped_frames: skipped_frames.load(Ordering::Relaxed),
                 branches: branches.load(Ordering::Relaxed),
                 invalid_branches: invalid_branches.load(Ordering::Relaxed),
+                evo_checked: evo_checked.load(Ordering::Relaxed),
+                evo_failed: evo_failed.load(Ordering::Relaxed),
                 ..outputs.summary()
             }),
             Err(e) => Err(e),
@@ -224,14 +244,21 @@ fn run_parser_thread(
     fail_level: Level,
     required_presentations: [bool; MAX_PRESENTATIONS],
     strict_mode: bool,
-    branches: Arc<AtomicU64>,
-    invalid_branches: Arc<AtomicU64>,
+    counters: ParserCounters,
+    evo_key: Option<EvoKey>,
 ) {
+    let ParserCounters {
+        branches,
+        invalid_branches,
+        evo_checked,
+        evo_failed,
+    } = counters;
     let mut parser = Parser::default();
     parser.set_fail_level(fail_level);
     parser.set_required_presentations(&required_presentations);
     let mut segment_detector = SegmentDetector::new();
     let mut resyncing = false;
+    let mut verifier = evo_key.map(EvoVerifier::new);
 
     for msg in rx {
         match msg {
@@ -241,6 +268,27 @@ fn run_parser_thread(
                         info!("Recovered parsing at frame {index}");
                         resyncing = false;
                     }
+                    if let Some(verifier) = &mut verifier {
+                        let status = verifier.check(&au, frame.as_ref());
+                        evo_checked.store(verifier.checked() as u64, Ordering::Relaxed);
+                        evo_failed.store(verifier.failed() as u64, Ordering::Relaxed);
+
+                        if let (Some(expected), Some(actual)) = (status.expected(), status.actual())
+                        {
+                            let message = format!(
+                                "Evolution protection mismatch at frame {index}: expected {}, read {}",
+                                hex(expected),
+                                hex(actual)
+                            );
+                            if strict_mode {
+                                let _ = tx
+                                    .send(ParseMsg::Fatal(PipelineError::Parse(anyhow!(message))));
+                                return;
+                            }
+                            warn!("{message}");
+                        }
+                    }
+
                     let stream_changed = segment_detector.check(&au);
                     // The flag also covers substream_info changes, which the
                     // segment detector reports separately
@@ -279,6 +327,12 @@ fn run_parser_thread(
                 return;
             }
         }
+    }
+
+    if let Some(verifier) = &verifier
+        && verifier.secondary_seen()
+    {
+        debug!("Secondary Evolution protection words were present but are not verified");
     }
 }
 
@@ -419,6 +473,8 @@ impl PresentationOutputs {
             skipped_frames: 0,
             branches: 0,
             invalid_branches: 0,
+            evo_checked: 0,
+            evo_failed: 0,
             decoded_frames: 0,
             total_samples: 0,
             final_sample_rate: 48000,
@@ -596,13 +652,15 @@ impl DecodeSummary {
             .collect();
 
         format!(
-            r#"{{"version":{},"input":{},"frames":{},"skippedFrames":{},"branches":{},"invalidBranches":{},"samples":{},"sampleRate":{},"presentations":[{}]}}"#,
+            r#"{{"version":{},"input":{},"frames":{},"skippedFrames":{},"branches":{},"invalidBranches":{},"evoChecked":{},"evoFailed":{},"samples":{},"sampleRate":{},"presentations":[{}]}}"#,
             crate::json::escape(env!("CARGO_PKG_VERSION")),
             crate::json::escape(&input.to_string_lossy()),
             self.decoded_frames,
             self.skipped_frames,
             self.branches,
             self.invalid_branches,
+            self.evo_checked,
+            self.evo_failed,
             self.total_samples,
             self.final_sample_rate,
             presentations.join(",")

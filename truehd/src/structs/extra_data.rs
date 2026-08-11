@@ -8,7 +8,9 @@ use log::trace;
 
 use crate::log_or_err;
 use crate::process::parse::ParserState;
-use crate::structs::evolution::EvoFrame;
+#[cfg(feature = "evo-protection")]
+use crate::structs::evolution::EvoProtectionStatus;
+use crate::structs::evolution::{EvoFrame, EvoProtection};
 use crate::utils::bitstream_io::BsIoSliceReader;
 use crate::utils::errors::ExtraDataError;
 
@@ -22,6 +24,9 @@ pub struct ExtraData {
     pub evo_frame: Option<EvoFrame>,
     pub ectra_data_padding: usize,
     pub extra_data_parity: u8,
+
+    /// Byte offset of `extra_data` within the access unit.
+    pub extra_data_offset: usize,
 }
 
 impl ExtraData {
@@ -34,9 +39,12 @@ impl ExtraData {
             );
         }
 
+        let extra_data_offset = (reader.position()? >> 3) as usize;
+
         let mut extra_data = Self {
             header_check_nibble: reader.get_n(4)?,
             extra_data_length: reader.get_n(12)?,
+            extra_data_offset,
             ..Default::default()
         };
 
@@ -145,5 +153,100 @@ impl ExtraData {
         }
 
         Ok(extra_data)
+    }
+
+    /// Bytes covered by the Evolution frame protection digest, given the access unit they were
+    /// parsed from.
+    ///
+    /// The message is the access unit up to the `extra_data` header, followed by the Evolution
+    /// frame with its protection words zeroed. The four bytes in between, the `extra_data`
+    /// header and the Evolution frame length, are not covered.
+    ///
+    /// Returns `None` when the access unit carries no Evolution frame, or when it is too short
+    /// to be the one this was parsed from.
+    pub fn evo_hmac_message(&self, access_unit: &[u8]) -> Option<Vec<u8>> {
+        let evo = self.evo_frame_zeroed(access_unit)?;
+
+        let mut message = Vec::with_capacity(self.extra_data_offset + evo.len());
+        message.extend_from_slice(&access_unit[..self.extra_data_offset]);
+        message.extend_from_slice(&evo);
+
+        Some(message)
+    }
+
+    /// Checks the Evolution frame's primary protection word against `key`.
+    ///
+    /// The word holds the leading bytes of `HMAC-SHA-256(key, `[`evo_hmac_message`]`)`, truncated
+    /// to the width the frame selected. `access_unit` is the bytes this was parsed from.
+    ///
+    /// Secondary protection words are not checked. No observed TrueHD stream carries one, so the
+    /// check would be untested.
+    ///
+    /// [`evo_hmac_message`]: Self::evo_hmac_message
+    #[cfg(feature = "evo-protection")]
+    pub fn verify_evo_protection(&self, access_unit: &[u8], key: &[u8]) -> EvoProtectionStatus {
+        use hmac::{Hmac, Mac};
+
+        let Some(evo_frame) = self.evo_frame.as_ref() else {
+            return EvoProtectionStatus::Absent;
+        };
+
+        let protection = &evo_frame.evo_protection;
+        let length = EvoProtection::SIZE[protection.protection_length_primary as usize];
+
+        if length == 0 {
+            return EvoProtectionStatus::Absent;
+        }
+
+        let Some(evo) = self.evo_frame_zeroed(access_unit) else {
+            return EvoProtectionStatus::Absent;
+        };
+
+        let mut mac =
+            <Hmac<sha2::Sha256>>::new_from_slice(key).expect("HMAC accepts keys of any length");
+        mac.update(&access_unit[..self.extra_data_offset]);
+        mac.update(&evo);
+        let digest = mac.finalize().into_bytes();
+
+        if digest[..length] == protection.protection_bits_primary[..length] {
+            return EvoProtectionStatus::Match;
+        }
+
+        let mut expected = [0u8; 16];
+        expected[..length].copy_from_slice(&digest[..length]);
+
+        EvoProtectionStatus::Mismatch {
+            expected,
+            actual: protection.protection_bits_primary,
+            length,
+        }
+    }
+
+    /// The Evolution frame as it appears in `access_unit`, with both protection words zeroed.
+    fn evo_frame_zeroed(&self, access_unit: &[u8]) -> Option<Vec<u8>> {
+        let evo_frame = self.evo_frame.as_ref()?;
+        let evo_start = self.extra_data_offset + 4;
+        let evo_end = evo_start + self.evo_frame_byte_length as usize;
+
+        if evo_end > access_unit.len() {
+            return None;
+        }
+
+        let mut evo = access_unit[evo_start..evo_end].to_vec();
+
+        let protection = &evo_frame.evo_protection;
+        let bits = (EvoProtection::SIZE[protection.protection_length_primary as usize]
+            + EvoProtection::SIZE[protection.protection_length_secondary as usize])
+            << 3;
+
+        for bit in evo_frame.protection_offset..evo_frame.protection_offset + bits {
+            let byte = bit >> 3;
+            if byte >= evo.len() {
+                return None;
+            }
+            evo[byte] &= !(0x80 >> (bit & 7));
+        }
+
+        Some(evo)
     }
 }

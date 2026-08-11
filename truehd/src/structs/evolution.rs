@@ -107,12 +107,53 @@ impl EvoPayload {
 }
 
 /// Evolution frame protection and integrity data
+///
+/// `protection_length_*` selects a truncation width from [`EvoProtection::SIZE`]; the bytes are
+/// the leading bytes of an HMAC-SHA-256 digest. `0` means the word is absent.
+///
+/// The primary digest covers the access unit up to the `extra_data` header, then this frame with
+/// the protection words zeroed. The caller supplies the key; see
+/// [`ExtraData::verify_evo_protection`](crate::structs::extra_data::ExtraData::verify_evo_protection).
+/// The secondary word is absent from every stream observed so far.
 #[derive(Debug, Default)]
 pub struct EvoProtection {
     pub protection_length_primary: u8,
     pub protection_length_secondary: u8,
     pub protection_bits_primary: [u8; 16],
     pub protection_bits_secondary: [u8; 16],
+}
+
+/// Outcome of checking an Evolution frame's primary protection word.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EvoProtectionStatus {
+    /// No Evolution frame, no primary protection word, or an access unit too short to check.
+    Absent,
+    Match,
+    Mismatch {
+        expected: [u8; 16],
+        actual: [u8; 16],
+        length: usize,
+    },
+}
+
+impl EvoProtectionStatus {
+    /// The digest bytes the key produced, truncated to the width the frame selected.
+    pub fn expected(&self) -> Option<&[u8]> {
+        match self {
+            Self::Mismatch {
+                expected, length, ..
+            } => Some(&expected[..*length]),
+            _ => None,
+        }
+    }
+
+    /// The digest bytes the frame carried, truncated to the width the frame selected.
+    pub fn actual(&self) -> Option<&[u8]> {
+        match self {
+            Self::Mismatch { actual, length, .. } => Some(&actual[..*length]),
+            _ => None,
+        }
+    }
 }
 
 impl EvoProtection {
@@ -144,10 +185,14 @@ pub struct EvoFrame {
     pub key_id: u32,
     pub evo_payloads: Vec<EvoPayload>,
     pub evo_protection: EvoProtection,
+
+    /// Bit offset of `protection_bits_primary` within this frame.
+    pub protection_offset: usize,
 }
 
 impl EvoFrame {
     pub fn read(reader: &mut BsIoSliceReader) -> Result<Self> {
+        let frame_start = reader.position()?;
         let mut evo_frame = EvoFrame {
             evo_version: reader.get_n(2)?,
             ..Default::default()
@@ -169,7 +214,8 @@ impl EvoFrame {
             evo_frame.evo_payloads.push(evo_payload);
         }
 
-        // TODO: HMAC
+        // 4 bits of lengths precede the primary word
+        evo_frame.protection_offset = (reader.position()? - frame_start) as usize + 4;
         evo_frame.evo_protection = EvoProtection::read(reader)?;
 
         Ok(evo_frame)

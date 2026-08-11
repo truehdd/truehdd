@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `ExtraData::verify_evo_protection` checks an Evolution frame's primary protection word against a supplied key, returning `EvoProtectionStatus`. Behind the optional `evo-protection` feature, off by default
+- `ExtraData::evo_hmac_message` returns the bytes the protection digest covers, with `ExtraData::extra_data_offset` and `EvoFrame::protection_offset`
+
 ## [0.6.3] - 2026-08-04
 
 ### Fixed

@@ -253,4 +253,9 @@ pub struct DecodeArgs {
     /// Access units to probe for Atmos metadata with --bed-conform (12000 is about 10s at 48 kHz)
     #[arg(long, default_value_t = 12000)]
     pub probe_range: u64,
+
+    /// Verify Evolution frame protection with this HMAC-SHA-256 key, given as hex or as
+    /// @FILE holding hex. Mismatches warn, or abort under --strict.
+    #[arg(long, value_name = "KEY", value_parser = crate::cli::evo::parse_key)]
+    pub evo_key: Option<crate::cli::evo::EvoKey>,
 }

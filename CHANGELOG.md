@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `decode --evo-key` verifies Evolution frame protection against a supplied HMAC-SHA-256 key, given as hex or as `@FILE`. Mismatches warn and are counted as `evoChecked` and `evoFailed`, or abort under `--strict`
+
 ## [0.5.3] - 2026-08-04
 
 ### Fixed

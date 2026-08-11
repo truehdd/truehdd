@@ -78,6 +78,13 @@ pub fn cmd_decode(args: &DecodeArgs, cli: &Cli, multi: Option<&MultiProgress>) -
                 "Processing complete: {} frames, {} samples",
                 summary.decoded_frames, summary.total_samples
             );
+
+            if args.evo_key.is_some() {
+                info!(
+                    "Evolution protection: {} frames checked, {} mismatched",
+                    summary.evo_checked, summary.evo_failed
+                );
+            }
             info!("Decoding completed successfully");
 
             if args.json {

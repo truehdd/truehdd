@@ -108,6 +108,8 @@ Options:
       --probe-range <PROBE_RANGE>
                                  Access units to probe for Atmos metadata with --bed-conform
                                  [default: 12000]
+      --evo-key <KEY>            Verify Evolution frame protection with this HMAC-SHA-256 key,
+                                 given as hex or as @FILE holding hex
       --loglevel <LOGLEVEL>      Set the log level [default: info]
       --strict                   Treat warnings as fatal errors (fail on first warning)
       --log-format <LOG_FORMAT>  Log output format [default: plain]
@@ -140,6 +142,10 @@ When `--output-path` is specified, the tool generates appropriate output files:
 
 `--metadata-only` writes the `.atmos` header and `.atmos.metadata` for an object presentation and skips the audio file, which is useful for inspecting or collecting metadata without producing gigabytes of PCM. The metadata is identical to a full decode. The `.atmos` header still names the audio file it did not write, so the result is a metadata set rather than a loadable master. A presentation without object audio metadata writes nothing.
 
+**Evolution Frame Protection:**
+
+Evolution frames carry protection words holding a truncated HMAC-SHA-256 over the access unit and the frame itself. Checking them needs the key the encoder used, which is not built in, so `--evo-key` takes one as hex or as `@FILE` holding hex. Without it nothing is verified. A mismatch is a warning by default and is counted in the summary; under `--strict` the first one aborts the decode. Streams with no Evolution frame report zero frames checked rather than a failure.
+
 **Machine-Readable Output:**
 
 `--json` prints a single result object on stdout when decoding finishes, so a
@@ -153,6 +159,8 @@ calling program does not have to guess which files were written:
   "skippedFrames": 0,
   "branches": 0,
   "invalidBranches": 0,
+  "evoChecked": 0,
+  "evoFailed": 0,
   "samples": 9021040,
   "sampleRate": 48000,
   "presentations": [
