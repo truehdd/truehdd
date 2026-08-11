@@ -8,6 +8,9 @@ use crate::utils::bitstream_io::BsIoSliceReader;
 use crate::utils::crc::{
     CRC_MAJOR_SYNC_INFO_ALG, CRC_RESTART_BLOCK_HEADER_ALG, CRC_SUBSTREAM_ALG, Crc8, Crc16,
 };
+use crate::utils::diagnostic::{
+    Diagnostic, DiagnosticMode, DiagnosticSink, Location, Rule, bit_position,
+};
 use crate::utils::errors::ParseError;
 use crate::utils::fifo::{ACCUMULATORS, FifoDepthState};
 // Re-exported so the type is nameable where the method returning it lives
@@ -21,6 +24,7 @@ use crate::utils::timing::HiresOutputTimingState;
 #[derive(Default)]
 pub struct Parser {
     state: ParserState,
+    resyncing: bool,
 }
 
 impl Parser {
@@ -30,9 +34,116 @@ impl Parser {
     /// and timing information. Handles both major sync frames (with stream
     /// configuration) and continuation frames (audio data only).
     pub fn parse(&mut self, frame: &Frame) -> Result<AccessUnit> {
+        self.parse_inner(frame).0
+    }
+
+    fn parse_inner(&mut self, frame: &Frame) -> (Result<AccessUnit>, Option<u64>) {
         self.state.perf = ParserPerfStats::default();
+        self.state.au_index = frame.index;
+        self.state.au_offset = frame.offset;
+
         let reader = &mut BsIoSliceReader::from_slice(frame.as_ref());
-        AccessUnit::read(&mut self.state, reader)
+        let access_unit = AccessUnit::read(&mut self.state, reader);
+
+        let bit_offset = match access_unit {
+            Ok(_) => None,
+            Err(_) => bit_position(reader),
+        };
+
+        (access_unit, bit_offset)
+    }
+
+    /// Parses a frame, recording what fails instead of returning it.
+    ///
+    /// For [`DiagnosticMode::Collect`]. A check that ends the access unit is recorded
+    /// like any other, the parser is then reset, and parsing resumes at the next frame
+    /// carrying a major sync; frames skipped while resynchronising are not parsed and
+    /// raise no diagnostics of their own. Returns `None` for an access unit that did not
+    /// parse.
+    ///
+    /// A paired [`Decoder`](crate::process::decode::Decoder) must be reset with
+    /// `reset_for_next_major_sync` whenever this returns `None`, or its state will
+    /// silently diverge from the parser's.
+    pub fn parse_recovering(&mut self, frame: &Frame) -> Option<AccessUnit> {
+        if self.resyncing && !frame.is_major_sync() {
+            self.state.au_index = frame.index;
+            self.state.au_offset = frame.offset;
+
+            return None;
+        }
+
+        let recorded = self.state.diagnostics.len();
+
+        match self.parse_inner(frame) {
+            (Ok(access_unit), _) => {
+                self.resyncing = false;
+
+                Some(access_unit)
+            }
+            (Err(error), bit_offset) => {
+                self.record_parse_failure(recorded, error, bit_offset);
+                self.reset_for_next_major_sync();
+                self.resyncing = true;
+
+                None
+            }
+        }
+    }
+
+    /// Keeps the error that ended an access unit.
+    ///
+    /// A check that fails at or below the fail level records itself on the way out, but
+    /// leaves [`Diagnostic::source`] empty because the error is still travelling to here.
+    /// An error raised outside the check macro has no diagnostic at all yet.
+    fn record_parse_failure(
+        &mut self,
+        recorded: usize,
+        error: anyhow::Error,
+        bit_offset: Option<u64>,
+    ) {
+        if !self.state.is_collecting() {
+            return;
+        }
+
+        if self.state.diagnostics.len() > recorded
+            && let Some(diagnostic) = self.state.diagnostics.last_mut()
+            && diagnostic.source.is_none()
+        {
+            diagnostic.source = Some(error);
+
+            return;
+        }
+
+        let diagnostic = Diagnostic {
+            rule: error.rule_id(),
+            severity: log::Level::Error,
+            location: self.state.location(bit_offset),
+            message: error.to_string(),
+            source: Some(error),
+        };
+
+        self.state.diagnostics.push(diagnostic);
+    }
+
+    /// What happens to a failed conformance check.
+    pub fn set_diagnostic_mode(&mut self, mode: DiagnosticMode) {
+        self.state.diagnostic_mode = mode;
+    }
+
+    pub fn diagnostic_mode(&self) -> DiagnosticMode {
+        self.state.diagnostic_mode
+    }
+
+    /// Checks that have fired so far, oldest first.
+    ///
+    /// Always empty in [`DiagnosticMode::FailFast`], which records nothing.
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.state.diagnostics
+    }
+
+    /// Takes the collected diagnostics, leaving none behind.
+    pub fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
+        std::mem::take(&mut self.state.diagnostics)
     }
 
     pub fn set_required_presentations(
@@ -227,6 +338,15 @@ pub struct ParserState {
     pub fail_level: log::Level,
     pub allow_seamless_branch: bool,
     pub check_fifo: bool,
+    pub diagnostic_mode: DiagnosticMode,
+
+    /// Checks that fired, in the order they fired. Only filled in
+    /// [`DiagnosticMode::Collect`].
+    pub diagnostics: Vec<Diagnostic>,
+
+    /// Location of the access unit being parsed, taken from its [`Frame`].
+    pub au_index: u64,
+    pub au_offset: u64,
 
     pub restart_gap: [usize; MAX_PRESENTATIONS],
     pub last_major_sync_index: usize,
@@ -321,6 +441,10 @@ impl Default for ParserState {
             fail_level: log::Level::Error,
             allow_seamless_branch: true,
             check_fifo: true,
+            diagnostic_mode: DiagnosticMode::default(),
+            diagnostics: Vec::new(),
+            au_index: 0,
+            au_offset: 0,
             restart_gap: [0, 8, 8, 8],
 
             last_major_sync_index: 0,
@@ -405,14 +529,42 @@ impl Default for ParserState {
     }
 }
 
+impl DiagnosticSink for ParserState {
+    fn fail_level(&self) -> log::Level {
+        self.fail_level
+    }
+
+    fn diagnostic_mode(&self) -> DiagnosticMode {
+        self.diagnostic_mode
+    }
+
+    fn location(&self, bit_offset: Option<u64>) -> Location {
+        Location {
+            au_index: self.au_index,
+            au_offset: self.au_offset,
+            bit_offset,
+        }
+    }
+
+    fn push_diagnostic(&mut self, diagnostic: Diagnostic) {
+        self.diagnostics.push(diagnostic);
+    }
+}
+
 impl ParserState {
     pub fn reset_for_next_major_sync(&mut self) {
+        let diagnostics = std::mem::take(&mut self.diagnostics);
+
         *self = Self {
             fail_level: self.fail_level,
             allow_seamless_branch: self.allow_seamless_branch,
             check_fifo: self.check_fifo,
             required_presentations: self.required_presentations,
             invalid_branches: self.invalid_branches,
+            diagnostic_mode: self.diagnostic_mode,
+            diagnostics,
+            au_index: self.au_index,
+            au_offset: self.au_offset,
             ..Default::default()
         };
     }

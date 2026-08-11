@@ -217,13 +217,15 @@ impl Matrixing {
                         index: pmi,
                         max: max_matrix_chan,
                         actual: matrices.matrix_ch,
-                    })
+                    }),
+                    reader
                 );
             } else if matrices.frac_bits > 14 {
                 log_or_err!(
                     state,
                     Warn,
-                    anyhow!(MatrixError::FracBitsTooHigh(matrices.frac_bits))
+                    anyhow!(MatrixError::FracBitsTooHigh(matrices.frac_bits)),
+                    reader
                 );
             } else if current_substream_index == 0
                 && matrices.lsb_bypass_used
@@ -235,7 +237,8 @@ impl Matrixing {
                     Warn,
                     anyhow!(MatrixError::InvalidLsbBypass {
                         info: this_substream_info
-                    })
+                    }),
+                    reader
                 );
             }
         }

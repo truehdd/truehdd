@@ -260,7 +260,8 @@ impl Block {
                     Warn,
                     anyhow!(BlockError::LatencyInconsistent {
                         substream: state.substream_index
-                    })
+                    }),
+                    reader
                 );
             }
 
@@ -271,7 +272,8 @@ impl Block {
                     anyhow!(BlockError::DurationExceedsLatency {
                         duration: state.fifo_duration,
                         latency
-                    })
+                    }),
+                    reader
                 );
             }
 
@@ -285,7 +287,8 @@ impl Block {
                     anyhow!(BlockError::LatencyTooHigh {
                         latency: prev_latency,
                         samples: samples_per_75ms
-                    })
+                    }),
+                    reader
                 );
             }
 
@@ -296,7 +299,8 @@ impl Block {
                     anyhow!(BlockError::LatencyTooLow {
                         latency: prev_latency,
                         au: samples_per_au
-                    })
+                    }),
+                    reader
                 );
             }
 

@@ -160,7 +160,7 @@ impl AccessUnit {
         };
 
         if major_sync_interval > sync_limit {
-            log_or_err!(state, Warn, anyhow!(too_far));
+            log_or_err!(state, Warn, anyhow!(too_far), reader);
         }
 
         // TODO: restart gap check
@@ -234,7 +234,8 @@ impl AccessUnit {
                 anyhow!(AccessUnitError::AccessUnitTooLong(
                     reader.position()? as usize,
                     state.expected_au_end_pos()
-                ))
+                )),
+                reader
             );
         }
 

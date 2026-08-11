@@ -233,6 +233,14 @@ impl Default for DecoderSubstreamState {
     }
 }
 
+/// Decode-time checks stay fail-fast; they report on samples rather than on bitstream
+/// syntax, and a decode that continues past one produces wrong audio.
+impl crate::utils::diagnostic::DiagnosticSink for DecoderState {
+    fn fail_level(&self) -> log::Level {
+        self.fail_level
+    }
+}
+
 #[derive(Debug)]
 #[repr(C)]
 pub struct DecoderState {

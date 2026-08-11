@@ -227,7 +227,8 @@ impl ChannelParams {
                     anyhow!(ChannelError::FilterOrderTooHigh {
                         a: coeffs_a.order,
                         b: coeffs_b.order
-                    })
+                    }),
+                    reader
                 );
             }
 
@@ -239,7 +240,8 @@ impl ChannelParams {
                         chan: chi,
                         a_q: coeffs_a.coeff_q,
                         b_q: coeffs_b.coeff_q
-                    })
+                    }),
+                    reader
                 );
             }
         }
@@ -276,7 +278,8 @@ impl ChannelParams {
                     chan: chi,
                     max: max_huff_lsbs,
                     actual: cp.huff_lsbs
-                })
+                }),
+                reader
             );
         }
 

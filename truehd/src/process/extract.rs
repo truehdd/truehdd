@@ -53,6 +53,7 @@ pub struct Extractor {
     error_count: usize,
     frames_processed: usize,
     fail_level: log::Level,
+    consumed: u64,
 }
 
 impl Default for Extractor {
@@ -70,7 +71,14 @@ impl Default for Extractor {
             error_count: 0,
             frames_processed: 0,
             fail_level: log::Level::Error,
+            consumed: 0,
         }
+    }
+}
+
+impl crate::utils::diagnostic::DiagnosticSink for Extractor {
+    fn fail_level(&self) -> log::Level {
+        self.fail_level
     }
 }
 
@@ -237,7 +245,7 @@ impl Extractor {
             if crc != self.crc16_major_sync_info(&(&access_unit_bytes[4..])[..major_sync_info_len])
             {
                 self.consume_front(access_unit_len);
-                log_or_err!(&self, log::Level::Error, ExtractError::ParityCheckFailed);
+                log_or_err!(self, log::Level::Error, ExtractError::ParityCheckFailed);
                 continue;
             }
 
@@ -263,7 +271,13 @@ impl Extractor {
 
     fn consume_front(&mut self, cnt: usize) {
         self.cursor = self.cursor.saturating_add(cnt);
+        self.consumed = self.consumed.saturating_add(cnt as u64);
         self.compact_if_needed(0);
+    }
+
+    /// Byte offset of the next unconsumed byte, counted from the first byte pushed.
+    pub fn stream_position(&self) -> u64 {
+        self.consumed
     }
 
     fn access_unit_len(&self) -> Option<usize> {
@@ -425,6 +439,7 @@ impl Iterator for Extractor {
                 // Use pooled buffer for zero-copy frame creation
                 let mut frame_buffer = self.buffer_pool.acquire();
                 frame_buffer.extend_from_slice(&self.buffered()[..access_unit_len]);
+                let offset = self.consumed;
                 self.consume_front(access_unit_len);
 
                 let timestamp = if self.timestamp.is_some() {
@@ -439,6 +454,8 @@ impl Iterator for Extractor {
                 let frame = Frame {
                     timestamp,
                     data: frame_buffer.into(),
+                    index: self.frames_processed as u64,
+                    offset,
                 };
 
                 self.frames_processed += 1;
@@ -484,6 +501,13 @@ impl Iterator for Extractor {
 pub struct Frame {
     pub timestamp: Option<Timestamp>,
     pub data: Arc<[u8]>,
+
+    /// Zero-based position of this access unit in the sequence the extractor emitted.
+    pub index: u64,
+
+    /// Byte offset of the access unit, counted from the first byte pushed into the
+    /// extractor. Absolute within the stream only if the whole stream was pushed.
+    pub offset: u64,
 }
 
 impl AsRef<[u8]> for Frame {
@@ -558,6 +582,29 @@ fn buf_extract() -> anyhow::Result<()> {
     let frame = extractor.next().unwrap().unwrap();
     assert_eq!(frame.as_ref().len(), 20);
     Ok(())
+}
+
+/// The offset a frame carries must address that frame's first byte in the pushed stream.
+#[test]
+fn frames_carry_their_stream_position() {
+    use crate::process::EXAMPLE_DATA;
+
+    let mut data = Vec::new();
+    data.extend_from_slice(EXAMPLE_DATA);
+    data.extend_from_slice(EXAMPLE_DATA);
+
+    let mut extractor = Extractor::default();
+    extractor.push_bytes(&data);
+
+    let frames: Vec<Frame> = extractor.by_ref().filter_map(|f| f.ok()).collect();
+    assert_eq!(frames.len(), 4);
+
+    for (i, frame) in frames.iter().enumerate() {
+        assert_eq!(frame.index, i as u64);
+
+        let start = frame.offset as usize;
+        assert_eq!(&data[start..start + frame.data.len()], frame.as_ref());
+    }
 }
 
 #[test]

@@ -70,7 +70,8 @@ impl SubstreamDirectory {
                 log_or_err!(
                     state,
                     log::Level::Error,
-                    anyhow!(SubstreamError::InvalidExtraSubstreamWordFbb)
+                    anyhow!(SubstreamError::InvalidExtraSubstreamWordFbb),
+                    reader
                 );
             }
 
@@ -98,7 +99,8 @@ impl SubstreamDirectory {
                     } else {
                         "out".into()
                     }
-                })
+                }),
+                reader
             );
         }
 
@@ -143,7 +145,8 @@ impl SubstreamSegment {
                 anyhow!(
                     "Substream {} segment not byte-aligned at start",
                     state.substream_index
-                )
+                ),
+                reader
             );
         }
 
@@ -158,7 +161,8 @@ impl SubstreamSegment {
                 log_or_err!(
                     state,
                     log::Level::Warn,
-                    anyhow!(SubstreamError::TooManyBlocks(ss.block.len()))
+                    anyhow!(SubstreamError::TooManyBlocks(ss.block.len())),
+                    reader
                 );
             }
             ss.block.push(Block::read(state, reader)?);
@@ -271,7 +275,8 @@ impl SubstreamSegment {
                         substream: state.substream_index,
                         calculated: parity,
                         read: ss.substream_parity
-                    })
+                    }),
+                    reader
                 );
             }
 
@@ -285,7 +290,8 @@ impl SubstreamSegment {
                         substream: state.substream_index,
                         calculated: crc,
                         read: ss.substream_crc
-                    })
+                    }),
+                    reader
                 );
             }
         }
@@ -296,7 +302,8 @@ impl SubstreamSegment {
             log_or_err!(
                 state,
                 log::Level::Error,
-                anyhow!(SubstreamError::UnalignedSegmentEnd(state.substream_index))
+                anyhow!(SubstreamError::UnalignedSegmentEnd(state.substream_index)),
+                reader
             );
         } else if expected_end_pos != end_pos {
             log_or_err!(
@@ -306,7 +313,8 @@ impl SubstreamSegment {
                     substream: state.substream_index,
                     read: reader.position()?,
                     expected: expected_end_pos
-                })
+                }),
+                reader
             );
         }
 

@@ -1,18 +1,49 @@
+/// Reports a failed conformance check to a [`DiagnosticSink`](crate::utils::diagnostic::DiagnosticSink).
+///
+/// At or below the sink's fail level the error is returned from the enclosing function,
+/// otherwise it is logged. Pass the bit reader as a fourth argument wherever the check
+/// holds one, so a collected diagnostic can name the bit it fired at.
 #[macro_export]
 macro_rules! log_or_err {
-    ($state:expr, $level:expr, $err:expr $(,)?) => {{
-        if $level <= $state.fail_level {
-            return Err($err);
-        } else {
-            match $level {
-                ::log::Level::Error => ::log::error!("{}", $err),
-                ::log::Level::Warn => ::log::warn!("{}", $err),
-                ::log::Level::Info => ::log::info!("{}", $err),
-                ::log::Level::Debug => ::log::debug!("{}", $err),
-                ::log::Level::Trace => ::log::trace!("{}", $err),
+    (@at $state:expr, $level:expr, $err:expr, $bit:expr) => {{
+        let error = $err;
+        let level: ::log::Level = $level;
+        let fatal = level <= $crate::utils::diagnostic::DiagnosticSink::fail_level(&*$state);
+        let collecting = $crate::utils::diagnostic::DiagnosticSink::is_collecting(&*$state);
+
+        if fatal {
+            if collecting {
+                $crate::utils::diagnostic::record(&mut *$state, level, &error, $bit);
             }
+
+            return Err(error);
+        }
+
+        match level {
+            ::log::Level::Error => ::log::error!("{}", error),
+            ::log::Level::Warn => ::log::warn!("{}", error),
+            ::log::Level::Info => ::log::info!("{}", error),
+            ::log::Level::Debug => ::log::debug!("{}", error),
+            ::log::Level::Trace => ::log::trace!("{}", error),
+        }
+
+        if collecting {
+            $crate::utils::diagnostic::record_owned(&mut *$state, level, error, $bit);
         }
     }};
+
+    ($state:expr, $level:expr, $err:expr $(,)?) => {
+        $crate::log_or_err!(@at $state, $level, $err, ::core::option::Option::None)
+    };
+
+    ($state:expr, $level:expr, $err:expr, $reader:expr $(,)?) => {
+        $crate::log_or_err!(
+            @at $state,
+            $level,
+            $err,
+            $crate::utils::diagnostic::bit_position($reader)
+        )
+    };
 }
 
 #[derive(thiserror::Error, Debug)]

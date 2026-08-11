@@ -6,6 +6,7 @@
 pub mod bitstream_io;
 pub mod buffer_pool;
 pub mod crc;
+pub mod diagnostic;
 pub mod dither;
 pub mod errors;
 pub mod fifo;

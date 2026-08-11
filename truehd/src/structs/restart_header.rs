@@ -131,7 +131,8 @@ impl RestartHeader {
                         read: rh.output_timing,
                         substream: state.substream_index,
                         expected: state.output_timing
-                    })
+                    }),
+                    reader
                 );
             }
 
@@ -184,7 +185,8 @@ impl RestartHeader {
                             anyhow!(RestartHeaderError::OutputTimingAfterJump {
                                 read: state.output_timing,
                                 expected: expected_output_timing
-                            })
+                            }),
+                            reader
                         );
                     }
                     state.output_timing_jump = true;
@@ -199,7 +201,8 @@ impl RestartHeader {
                         anyhow!(RestartHeaderError::InvalidOutputTiming {
                             read: state.output_timing,
                             expected: expected_output_timing
-                        })
+                        }),
+                        reader
                     );
                 }
 
@@ -223,7 +226,8 @@ impl RestartHeader {
                                 samples_per_au,
                                 prev_advance,
                                 advance,
-                            })
+                            }),
+                            reader
                         );
                         break 'check_output_timing;
                     }
@@ -310,7 +314,8 @@ impl RestartHeader {
                     log_or_err!(
                         state,
                         Warn,
-                        anyhow!(RestartHeaderError::InvalidSeamlessBranch)
+                        anyhow!(RestartHeaderError::InvalidSeamlessBranch),
+                        reader
                     );
                 }
             }

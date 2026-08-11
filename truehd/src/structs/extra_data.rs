@@ -35,7 +35,8 @@ impl ExtraData {
             log_or_err!(
                 state,
                 log::Level::Warn,
-                anyhow!(ExtraDataError::MisalignedExtraDataStart)
+                anyhow!(ExtraDataError::MisalignedExtraDataStart),
+                reader
             );
         }
 
@@ -55,7 +56,8 @@ impl ExtraData {
                     log_or_err!(
                         state,
                         log::Level::Warn,
-                        anyhow!(ExtraDataError::PaddingNotZero)
+                        anyhow!(ExtraDataError::PaddingNotZero),
+                        reader
                     );
                 }
 
@@ -76,7 +78,8 @@ impl ExtraData {
             log_or_err!(
                 state,
                 log::Level::Warn,
-                anyhow!(ExtraDataError::LengthParityFailed(parity))
+                anyhow!(ExtraDataError::LengthParityFailed(parity)),
+                reader
             );
         }
 
@@ -92,7 +95,8 @@ impl ExtraData {
                 anyhow!(ExtraDataError::ExtraDataTooLong {
                     length: extra_data.extra_data_length,
                     remaining: expected_remaining_bits
-                })
+                }),
+                reader
             );
         }
 
@@ -107,7 +111,8 @@ impl ExtraData {
                     anyhow!(ExtraDataError::EvoFrameTooLong {
                         evo_len: extra_data.evo_frame_byte_length,
                         extra_len: extra_data.extra_data_length
-                    })
+                    }),
+                    reader
                 );
             }
 
@@ -115,7 +120,8 @@ impl ExtraData {
                 log_or_err!(
                     state,
                     log::Level::Warn,
-                    anyhow!(ExtraDataError::EvoFrameMisaligned)
+                    anyhow!(ExtraDataError::EvoFrameMisaligned),
+                    reader
                 );
             }
 
@@ -128,7 +134,8 @@ impl ExtraData {
                     log_or_err!(
                         state,
                         log::Level::Warn,
-                        anyhow!(ExtraDataError::EvoFramePaddingNotZero)
+                        anyhow!(ExtraDataError::EvoFramePaddingNotZero),
+                        reader
                     );
                 }
             }
@@ -148,7 +155,8 @@ impl ExtraData {
                 anyhow!(ExtraDataError::ExtraDataParityMismatch {
                     expected: parity,
                     actual: extra_data.extra_data_parity
-                })
+                }),
+                reader
             );
         }
 

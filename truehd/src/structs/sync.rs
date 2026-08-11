@@ -218,7 +218,8 @@ impl MajorSyncInfo {
             log_or_err!(
                 state,
                 Warn,
-                anyhow!(SyncError::InvalidMajorSyncSignature(ms.signature))
+                anyhow!(SyncError::InvalidMajorSyncSignature(ms.signature)),
+                reader
             )
         }
 
@@ -229,7 +230,8 @@ impl MajorSyncInfo {
             log_or_err!(
                 state,
                 Warn,
-                anyhow!(SyncError::ReservedFlagsNonZero(ms.flags))
+                anyhow!(SyncError::ReservedFlagsNonZero(ms.flags)),
+                reader
             )
         }
 
@@ -240,7 +242,8 @@ impl MajorSyncInfo {
                 anyhow!(SyncError::FlagsMismatch {
                     read: ms.flags,
                     expected: state.flags
-                })
+                }),
+                reader
             );
         }
 
@@ -270,7 +273,8 @@ impl MajorSyncInfo {
                     anyhow!(SyncError::PeakDataRateMismatch {
                         read: ms.peak_data_rate,
                         expected: state.peak_data_rate,
-                    })
+                    }),
+                    reader
                 )
             }
         }
@@ -286,7 +290,8 @@ impl MajorSyncInfo {
                     anyhow!(SyncError::SubstreamCountMismatch {
                         read: ms.substreams,
                         expected: substreams,
-                    })
+                    }),
+                    reader
                 )
             }
         } else {
@@ -304,7 +309,8 @@ impl MajorSyncInfo {
                     log::Level::Debug,
                     anyhow!(SyncError::ReservedExtendedSubstreamInfo(
                         ms.extended_substream_info >> 2
-                    ))
+                    )),
+                    reader
                 );
             }
 
@@ -312,7 +318,8 @@ impl MajorSyncInfo {
                 log_or_err!(
                     state,
                     log::Level::Debug,
-                    anyhow!(SyncError::ReservedSubstreamInfo(ms.substream_info))
+                    anyhow!(SyncError::ReservedSubstreamInfo(ms.substream_info)),
+                    reader
                 );
             }
 
@@ -335,7 +342,8 @@ impl MajorSyncInfo {
                         anyhow!(SyncError::SubstreamInfoMismatch {
                             read: ms.substream_info,
                             expected: state.substream_info
-                        })
+                        }),
+                        reader
                     )
                 }
 
@@ -346,7 +354,8 @@ impl MajorSyncInfo {
                         anyhow!(SyncError::ExtendedSubstreamInfoMismatch {
                             read: ms.extended_substream_info,
                             expected: state.extended_substream_info
-                        })
+                        }),
+                        reader
                     )
                 }
             }
@@ -368,7 +377,8 @@ impl MajorSyncInfo {
                 log_or_err!(
                     state,
                     Error,
-                    anyhow!(SyncError::InvalidSubstreamInfo(substream_info))
+                    anyhow!(SyncError::InvalidSubstreamInfo(substream_info)),
+                    reader
                 )
             }
 
@@ -384,7 +394,8 @@ impl MajorSyncInfo {
                     anyhow!(SyncError::SubstreamInfoInCompatible {
                         substream_info,
                         extended_substream_info
-                    })
+                    }),
+                    reader
                 )
             }
 
@@ -396,7 +407,8 @@ impl MajorSyncInfo {
                     log::Level::Debug,
                     anyhow!(SyncError::ReservedExtendedSubstreamInfo(
                         ms.extended_substream_info
-                    ))
+                    )),
+                    reader
                 );
             };
 
@@ -411,7 +423,8 @@ impl MajorSyncInfo {
                         anyhow!(SyncError::SixchAndEightchChannelAssignmentMismatch {
                             sixch: sixch_assign,
                             eightch: eightch_assign
-                        })
+                        }),
+                        reader
                     );
                 }
 
@@ -426,7 +439,8 @@ impl MajorSyncInfo {
                             anyhow!(SyncError::SixchAndEightchChannelModifierMismatch {
                                 sixch: sixch_modifier,
                                 eightch: eightch_modifier,
-                            })
+                            }),
+                            reader
                         )
                     }
                 }
@@ -437,7 +451,8 @@ impl MajorSyncInfo {
                     log_or_err!(
                         state,
                         Warn,
-                        anyhow!(SyncError::SubstreamCountInsufficient { min, bit })
+                        anyhow!(SyncError::SubstreamCountInsufficient { min, bit }),
+                        reader
                     );
                 }
             }
@@ -453,7 +468,8 @@ impl MajorSyncInfo {
                 log_or_err!(
                     state,
                     log::Level::Debug,
-                    anyhow!(SyncError::SubstreamCountInfoInconsistent)
+                    anyhow!(SyncError::SubstreamCountInfoInconsistent),
+                    reader
                 );
             };
         }
@@ -484,7 +500,8 @@ impl MajorSyncInfo {
                 anyhow!(SyncError::MajorSyncCrcMismatch {
                     calculated: crc,
                     read: ms.major_sync_info_crc
-                })
+                }),
+                reader
             );
         } else {
             // for gap check
