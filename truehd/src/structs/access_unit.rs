@@ -3,7 +3,7 @@ use log::Level::{Error, Warn};
 use log::trace;
 
 use crate::log_or_err;
-use crate::process::MAX_PRESENTATIONS;
+use crate::process::{MAX_PRESENTATIONS, PresentationMap};
 use crate::process::decode::DecoderState;
 use crate::process::parse::ParserState;
 use crate::structs::channel::ChannelLabel;
@@ -13,7 +13,7 @@ use crate::structs::substream::{SubstreamDirectory, SubstreamSegment};
 use crate::structs::sync::{MAJOR_SYNC_FBA, MAJOR_SYNC_FBB, MajorSyncInfo};
 use crate::utils::bitstream_io::BsIoSliceReader;
 use crate::utils::errors::{AccessUnitError, FifoError};
-use crate::utils::fifo::{ACCUMULATORS, Accumulator};
+use crate::utils::fifo::{ACCUMULATORS, Accumulator, FifoContribution, SUBSTREAMS};
 use crate::utils::perf::Timer;
 
 /// The one FBB `fbb_channel_assignment` whose decoded channel order has been measured.
@@ -236,6 +236,9 @@ impl AccessUnit {
 
         if reader.position()? <= state.expected_au_end_pos() as u64 {
             state.total_access_unit_length += au.access_unit_length as usize;
+            state.max_access_unit_size = state
+                .max_access_unit_size
+                .max((au.access_unit_length as usize) << 1);
         } else {
             log_or_err!(
                 state,
@@ -604,8 +607,10 @@ impl AccessUnit {
         };
 
         // A substream region is its directory entry (one word, two with the extra word)
-        // plus its payload, priced as the difference of cumulative end pointers.
+        // plus its payload, priced as the difference of cumulative end pointers. The
+        // payload alone is the stream's own bytes; the directory word is overhead.
         let mut region = [0u64; MAX_PRESENTATIONS];
+        let mut payload = [0u64; MAX_PRESENTATIONS];
         let mut previous_end = 0u64;
 
         // Only `substreams` directory entries are populated; the remaining
@@ -618,49 +623,63 @@ impl AccessUnit {
             } else {
                 16
             };
-            region[i] = words + 16 * end.wrapping_sub(previous_end);
+            payload[i] = 16 * end.wrapping_sub(previous_end);
+            region[i] = words + payload[i];
             previous_end = end;
         }
 
         let info = state.substream_info;
+        let map = PresentationMap::for_format_sync(
+            state.format_sync,
+            info,
+            state.extended_substream_info,
+        );
         let mut bits = [0u64; ACCUMULATORS];
+        let mut stream_bits = [0u64; ACCUMULATORS];
 
-        bits[0] = base + region[0] + extra_bits;
-
-        // The 6-channel decoder reads substreams 0 and 1, and counts nothing at all
-        // unless substream_info says a second substream carries the 6-channel mix.
-        if info & 0x08 != 0 {
-            bits[1] = base + region[0] + region[1] + extra_bits;
-        }
-
-        if is_fba {
-            // The 8-channel decoder gates every region on its own substream_info bit.
-            // FBB skips this accumulator entirely.
-            let mut sum = base;
-
-            for (bit, r) in [(0x10, 0), (0x20, 1), (0x40, 2)] {
-                if info & bit != 0 {
-                    sum += region[r];
-                }
+        // A decoder buffers the substreams its own presentation is made of, which is the
+        // mask the decode path resolves. Deriving every sum from the mask keeps the
+        // 6-channel one in step with the others: summing substreams 0 and 1 for it however
+        // the stream is laid out overstates a presentation that one independent substream
+        // carries whole.
+        for (k, mask) in (0..MAX_PRESENTATIONS)
+            .map(|k| (k, map.substream_mask_by_index(k)))
+            .filter(|&(_, mask)| mask != 0)
+        {
+            // FBB has no 8- or 16-channel decoder, and a 16-channel presentation needs a
+            // fourth substream to live in.
+            if (!is_fba && k >= 2) || (k == 3 && substreams < 4) {
+                continue;
             }
 
-            bits[2] = sum + extra_bits;
-
-            // The 16-channel decoder reads the top region down to the one selected by
-            // extended_substream_info.
-            if info & 0x80 != 0 && substreams >= 4 {
-                let lowest = 3 - (state.extended_substream_info & 3) as usize;
-                bits[3] = base + region[lowest..=3].iter().sum::<u64>() + extra_bits;
+            for r in (0..MAX_PRESENTATIONS).filter(|r| mask >> r & 1 != 0) {
+                bits[k] += region[r];
+                stream_bits[k] += payload[r];
             }
+
+            bits[k] += base + extra_bits;
         }
 
-        let mut contribution = [0usize; ACCUMULATORS];
+        let mut contribution = FifoContribution::default();
 
-        for (k, item) in bits.iter().enumerate() {
-            contribution[k] = (item / 8) as usize;
+        for k in 0..ACCUMULATORS {
+            contribution.total[k] = (bits[k] / 8) as usize;
+            contribution.stream[k] = (stream_bits[k] / 8) as usize;
         }
 
-        contribution[4] = state.access_unit_length << 1;
+        // The whole-stream row is priced from the access unit length rather than summed,
+        // so its overhead is whatever the length holds beyond the substream segments.
+        contribution.total[4] = state.access_unit_length << 1;
+        contribution.stream[4] = (previous_end << 1) as usize;
+
+        for (own, bits) in contribution
+            .substream
+            .iter_mut()
+            .zip(payload)
+            .take(substreams.min(SUBSTREAMS))
+        {
+            *own = (bits / 8) as usize;
+        }
 
         // Time is priced with a synthetic output clock: the unwrapped output timing of
         // the first access unit, advanced one access unit per access unit ever after and

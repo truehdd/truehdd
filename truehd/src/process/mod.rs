@@ -413,11 +413,12 @@ fn every_presentation_of_the_example_stream_decodes() {
     }
 }
 
-/// Each accumulator is gated on its own `substream_info` bit. Here bit 3 is clear, so the
-/// 6-channel accumulator counts nothing at all rather than falling back to substream 0,
-/// while bit 4 gates the substream-0 region into the 8-channel sum.
+/// Each accumulator sums the substreams its own presentation is made of. This stream
+/// carries one substream and declares presentations 1 and 2 as copies of presentation 0,
+/// so all three decoders buffer the same substream and reach the same depth. The
+/// 16-channel presentation does not exist and stays empty.
 #[test]
-fn fifo_depth_gates_each_accumulator_on_substream_info() {
+fn fifo_depth_follows_the_presentation_masks() {
     use extract::Extractor;
     use parse::Parser;
 
@@ -429,7 +430,7 @@ fn fifo_depth_gates_each_accumulator_on_substream_info() {
         parser.parse(&frame).expect("example data must parse");
     }
 
-    assert_eq!(parser.fifo_depth_peaks(), [104, 0, 104, 0, 104]);
+    assert_eq!(parser.fifo_depth_peaks(), [104, 104, 104, 0, 104]);
 }
 
 /// FBB never computes the 8-channel accumulator. The 6-channel one still gates on bit 3 of

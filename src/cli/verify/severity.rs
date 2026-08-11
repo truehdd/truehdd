@@ -37,16 +37,6 @@ impl Severity {
         }
     }
 
-    /// Plural used in the summary tally.
-    pub const fn plural(self) -> &'static str {
-        match self {
-            Severity::Info => "info",
-            Severity::Warning => "warnings",
-            Severity::Error => "errors",
-            Severity::Fatal => "fatal",
-        }
-    }
-
     /// The level a check reports at, for a check the parser read past.
     ///
     /// A check that ended the access unit is [`Severity::Fatal`] whatever it reports at,

@@ -24,16 +24,42 @@ fn zz_fifo_peaks() {
     ex.push_bytes(&data);
     let mut p = truehd::process::parse::Parser::default();
     let mut n = 0;
+    let mut max_au = 0;
+    let mut total = 0usize;
     for f in ex.by_ref() {
         if let Ok(f) = f
-            && p.parse(&f).is_ok()
+            && let Ok(au) = p.parse(&f)
         {
-            n += 1
+            n += 1;
+            let bytes = (au.access_unit_length as usize) << 1;
+            max_au = max_au.max(bytes);
+            total += bytes;
         }
     }
+    let subs: Vec<String> = (0..truehd::utils::fifo::SUBSTREAMS)
+        .filter_map(|i| {
+            let s = p.substream_state(i)?;
+            Some(format!(
+                "{}:{} lat {} chan {}..{} mmc {} sw {:04X}",
+                i,
+                p.fifo_substream_peaks()[i],
+                s.latency,
+                s.restart.min_chan,
+                s.restart.max_chan,
+                s.restart.max_matrix_chan,
+                s.restart.restart_sync_word,
+            ))
+        })
+        .collect();
     println!(
-        "AUs {n} peaks {:?} invalid_branches {}",
+        "AUs {n} peaks {:?} records {:?} substreams [{}] maxrate {} @ {} maxau {} avgau {:.2} maxlat {}",
         p.fifo_depth_peaks(),
-        p.invalid_branches()
+        p.fifo_depth_records(),
+        subs.join(" | "),
+        p.max_data_rate(),
+        p.max_data_rate_au(),
+        max_au,
+        total as f64 / n as f64,
+        p.max_fifo_latency(),
     );
 }

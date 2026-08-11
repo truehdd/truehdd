@@ -243,6 +243,8 @@ impl Block {
                 ss_state.latency = latency;
             }
 
+            state.max_latency = state.max_latency.max(latency);
+
             if !state.is_major_sync {
                 state.advance = latency.wrapping_sub(samples_per_au);
             }

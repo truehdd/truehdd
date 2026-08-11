@@ -12,7 +12,7 @@ use crate::utils::diagnostic::{
     Diagnostic, DiagnosticMode, DiagnosticSink, Location, Rule, bit_position,
 };
 use crate::utils::errors::ParseError;
-use crate::utils::fifo::{ACCUMULATORS, FifoDepthState};
+use crate::utils::fifo::{ACCUMULATORS, FifoDepthState, FifoPeak, SUBSTREAMS};
 // Re-exported so the type is nameable where the method returning it lives
 pub use crate::utils::perf::ParserPerfStats;
 use crate::utils::timing::HiresOutputTimingState;
@@ -215,6 +215,52 @@ impl Parser {
         self.state.fifo_depth.peaks()
     }
 
+    /// Each accumulator's deepest point, split into the stream's own substream-segment
+    /// bytes and the container overhead standing with them at that moment.
+    ///
+    /// The two parts always add back up to [`FifoPeak::total`], which is the figure
+    /// [`fifo_depth_peaks`](Self::fifo_depth_peaks) reports and the cap applies to.
+    pub fn fifo_depth_records(&self) -> [FifoPeak; ACCUMULATORS] {
+        self.state.fifo_depth.peak_records()
+    }
+
+    /// Deepest each substream's own payload bytes have been, with no overhead priced in.
+    ///
+    /// A substream's own allowance is 15000 bytes per channel it carries, which
+    /// [`ParserRestartState::min_chan`] and `max_chan` give.
+    pub fn fifo_substream_peaks(&self) -> [usize; SUBSTREAMS] {
+        self.state.fifo_depth.substream_peaks()
+    }
+
+    /// Highest instantaneous data rate the stream reached, in bits per second.
+    ///
+    /// Measured over the input-timing interval an access unit was delivered in, and
+    /// taken only across intervals the timing checks did not flag as a jump.
+    pub fn max_data_rate(&self) -> usize {
+        self.state.max_data_rate
+    }
+
+    /// Access unit the maximum data rate was measured at.
+    pub fn max_data_rate_au(&self) -> usize {
+        self.state.max_data_rate_au_index
+    }
+
+    /// Deepest FIFO latency seen, in samples: how far an access unit's playback trails
+    /// its delivery.
+    pub fn max_fifo_latency(&self) -> usize {
+        self.state.max_latency
+    }
+
+    /// Largest access unit seen, in bytes.
+    pub fn max_access_unit_size(&self) -> usize {
+        self.state.max_access_unit_size
+    }
+
+    /// Bytes of every access unit that parsed, for an average over their count.
+    pub fn total_access_unit_bytes(&self) -> usize {
+        self.state.total_access_unit_length << 1
+    }
+
     /// Resets stream state after a fatal parse failure.
     ///
     /// After [`parse`](Self::parse) returns an error, internal state may be
@@ -407,6 +453,10 @@ pub struct ParserState {
 
     pub max_data_rate: usize,
     pub max_data_rate_au_index: usize,
+    /// Deepest FIFO latency seen, in samples.
+    pub max_latency: usize,
+    /// Largest access unit seen, in bytes.
+    pub max_access_unit_size: usize,
 
     pub advance: usize,
     pub prev_advance: usize,
@@ -506,6 +556,8 @@ impl Default for ParserState {
 
             max_data_rate: 0,
             max_data_rate_au_index: 0,
+            max_latency: 0,
+            max_access_unit_size: 0,
 
             advance: 0,
             prev_advance: 0,

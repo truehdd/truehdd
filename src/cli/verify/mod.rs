@@ -123,8 +123,7 @@ impl Verification<'_> {
             source,
         })?;
 
-        self.facts.fifo_peaks = parser.fifo_depth_peaks();
-        self.facts.invalid_branches = parser.invalid_branches();
+        self.facts.adopt_measurements(&parser);
 
         Ok(())
     }

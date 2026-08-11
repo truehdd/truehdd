@@ -15,6 +15,9 @@
 /// Number of depth accumulators, indexed by [`Accumulator`].
 pub const ACCUMULATORS: usize = 5;
 
+/// Substreams the per-substream windows track, one per presentation slot.
+pub const SUBSTREAMS: usize = crate::process::MAX_PRESENTATIONS;
+
 const RING: usize = 128;
 
 /// Which set of substreams an accumulator sums over.
@@ -30,7 +33,12 @@ pub enum Accumulator {
 
 /// FBB byte caps for substream 0, indexed by `substream_info - 4`. An index outside the
 /// table acts as zero.
-const FBB_SUBSTREAM0_CAP: [usize; 10] = [90_000, 30_000, 0, 0, 30_000, 0, 0, 0, 0, 0];
+///
+/// A cap belongs to a decoder, not a substream: it is 15000 bytes per channel of the
+/// presentation that decoder reconstructs, so a two-channel decoder allows 30000 and a
+/// six-channel one 90000. Where substream 0 alone is the six-channel presentation, its
+/// cap is that decoder's.
+const FBB_SUBSTREAM0_CAP: [usize; 10] = [90_000, 30_000, 0, 30_000, 0, 0, 0, 0, 0, 30_000];
 
 /// FBB byte caps shared by the 6-channel sum and the whole stream, indexed by
 /// `substream_info - 4`.
@@ -94,26 +102,58 @@ pub struct FifoDepthReport {
     pub underrun: Option<usize>,
 }
 
+/// What one access unit adds to the window, split by where the bytes come from.
+///
+/// `total` is what an accumulator is capped on. `stream` is the part of it that is
+/// substream-segment payload — the audio the stream carries — and the remainder is the
+/// container overhead priced around it: the access unit header, a major sync, the
+/// directory words the accumulator covers and EXTRA_DATA. `substream` prices each
+/// substream's own payload on its own, with no overhead at all.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FifoContribution {
+    pub total: [usize; ACCUMULATORS],
+    pub stream: [usize; ACCUMULATORS],
+    pub substream: [usize; SUBSTREAMS],
+}
+
+/// Deepest one accumulator has been, and what it held at that moment.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FifoPeak {
+    pub total: usize,
+    pub stream: usize,
+    pub overhead: usize,
+}
+
 /// Sliding-window byte occupancy of the decoder input FIFO.
 #[derive(Clone, Copy, Debug)]
 pub struct FifoDepthState {
     contribution: [[u32; RING]; ACCUMULATORS],
+    stream: [[u32; RING]; ACCUMULATORS],
+    substream: [[u32; RING]; SUBSTREAMS],
     removal: [usize; RING],
     read: usize,
     write: usize,
     depth: [usize; ACCUMULATORS],
-    peak: [usize; ACCUMULATORS],
+    depth_stream: [usize; ACCUMULATORS],
+    depth_substream: [usize; SUBSTREAMS],
+    peak: [FifoPeak; ACCUMULATORS],
+    peak_substream: [usize; SUBSTREAMS],
 }
 
 impl Default for FifoDepthState {
     fn default() -> Self {
         Self {
             contribution: [[0; RING]; ACCUMULATORS],
+            stream: [[0; RING]; ACCUMULATORS],
+            substream: [[0; RING]; SUBSTREAMS],
             removal: [0; RING],
             read: 0,
             write: 0,
             depth: [0; ACCUMULATORS],
-            peak: [0; ACCUMULATORS],
+            depth_stream: [0; ACCUMULATORS],
+            depth_substream: [0; SUBSTREAMS],
+            peak: [FifoPeak::default(); ACCUMULATORS],
+            peak_substream: [0; SUBSTREAMS],
         }
     }
 }
@@ -136,15 +176,20 @@ impl FifoDepthState {
         &mut self,
         playhead: usize,
         removal: usize,
-        contribution: [usize; ACCUMULATORS],
+        contribution: FifoContribution,
     ) -> FifoDepthReport {
         let mut report = FifoDepthReport::default();
 
         let slot = self.write;
         self.removal[slot] = removal;
 
-        for (k, item) in contribution.iter().enumerate() {
-            self.contribution[k][slot] = *item as u32;
+        for k in 0..ACCUMULATORS {
+            self.contribution[k][slot] = contribution.total[k] as u32;
+            self.stream[k][slot] = contribution.stream[k] as u32;
+        }
+
+        for i in 0..SUBSTREAMS {
+            self.substream[i][slot] = contribution.substream[i] as u32;
         }
 
         let mut drained = 0;
@@ -152,18 +197,29 @@ impl FifoDepthState {
         while playhead > self.removal[self.read] && drained < RING {
             let read = self.read;
 
-            for (k, depth) in self.depth.iter_mut().enumerate() {
+            for k in 0..ACCUMULATORS {
                 let leaving = self.contribution[k][read] as usize;
 
-                match depth.checked_sub(leaving) {
-                    Some(remaining) => *depth = remaining,
+                match self.depth[k].checked_sub(leaving) {
+                    Some(remaining) => {
+                        self.depth[k] = remaining;
+                        self.depth_stream[k] = self.depth_stream[k]
+                            .saturating_sub(self.stream[k][read] as usize);
+                    }
                     None => {
-                        *depth = 0;
+                        self.depth[k] = 0;
+                        self.depth_stream[k] = 0;
                         report.underrun = Some(k);
                     }
                 }
 
-                self.peak[k] = self.peak[k].max(*depth);
+                self.sample_peak(k);
+            }
+
+            for i in 0..SUBSTREAMS {
+                self.depth_substream[i] =
+                    self.depth_substream[i].saturating_sub(self.substream[i][read] as usize);
+                self.peak_substream[i] = self.peak_substream[i].max(self.depth_substream[i]);
             }
 
             self.read = (read + 1) & (RING - 1);
@@ -174,9 +230,15 @@ impl FifoDepthState {
             }
         }
 
-        for (k, depth) in self.depth.iter_mut().enumerate() {
-            *depth += contribution[k];
-            self.peak[k] = self.peak[k].max(*depth);
+        for k in 0..ACCUMULATORS {
+            self.depth[k] += contribution.total[k];
+            self.depth_stream[k] += contribution.stream[k];
+            self.sample_peak(k);
+        }
+
+        for i in 0..SUBSTREAMS {
+            self.depth_substream[i] += contribution.substream[i];
+            self.peak_substream[i] = self.peak_substream[i].max(self.depth_substream[i]);
         }
 
         self.write = (slot + 1) & (RING - 1);
@@ -185,9 +247,42 @@ impl FifoDepthState {
         report
     }
 
+    /// Records the decomposition standing at a new deepest point.
+    ///
+    /// The split is only meaningful at one instant, so it is taken when the total sets a
+    /// record rather than maximised on its own: the stream and overhead parts of a peak
+    /// always add back up to it.
+    fn sample_peak(&mut self, k: usize) {
+        if self.depth[k] <= self.peak[k].total {
+            return;
+        }
+
+        self.peak[k] = FifoPeak {
+            total: self.depth[k],
+            stream: self.depth_stream[k],
+            overhead: self.depth[k] - self.depth_stream[k].min(self.depth[k]),
+        };
+    }
+
     /// Deepest each accumulator has been over the stream.
     pub fn peaks(&self) -> [usize; ACCUMULATORS] {
+        let mut peaks = [0; ACCUMULATORS];
+
+        for (peak, record) in peaks.iter_mut().zip(self.peak) {
+            *peak = record.total;
+        }
+
+        peaks
+    }
+
+    /// Deepest each accumulator has been, with the stream and overhead parts it held then.
+    pub fn peak_records(&self) -> [FifoPeak; ACCUMULATORS] {
         self.peak
+    }
+
+    /// Deepest each substream's own bytes have been, with no overhead priced in.
+    pub fn substream_peaks(&self) -> [usize; SUBSTREAMS] {
+        self.peak_substream
     }
 
     /// Access units currently held in the window.
@@ -200,7 +295,40 @@ impl FifoDepthState {
 mod tests {
     use super::*;
 
+    /// An access unit whose bytes are half the stream's own and half overhead, with the
+    /// two substreams carrying a quarter of the total each.
+    fn unit(total: [usize; ACCUMULATORS]) -> FifoContribution {
+        let mut substream = [0; SUBSTREAMS];
+        substream[0] = total[4] / 4;
+        substream[1] = total[4] / 4;
+
+        FifoContribution {
+            total,
+            stream: total.map(|bytes| bytes / 2),
+            substream,
+        }
+    }
+
     const UNIT: [usize; ACCUMULATORS] = [10, 20, 30, 40, 50];
+
+    /// A two-substream FBB stream carries substream_info 0x0D, and its substream-0 cap
+    /// must be real. It was once zero, which rejected every conformant stream of the
+    /// shape that most DVD-Audio content uses.
+    #[test]
+    fn a_two_substream_fbb_stream_has_real_caps() {
+        assert_eq!(Accumulator::Substream0.fbb_cap(0x0D), Some(30_000));
+        assert_eq!(Accumulator::Sixch.fbb_cap(0x0D), Some(90_000));
+        assert_eq!(Accumulator::WholeStream.fbb_cap(0x0D), Some(90_000));
+
+        // the single-substream shapes are unchanged
+        assert_eq!(Accumulator::Substream0.fbb_cap(0x04), Some(90_000));
+        assert_eq!(Accumulator::Substream0.fbb_cap(0x05), Some(30_000));
+        assert_eq!(Accumulator::Substream0.fbb_cap(0x07), Some(30_000));
+        assert_eq!(Accumulator::Sixch.fbb_cap(0x07), Some(30_000));
+
+        // only the low nibble selects a cap
+        assert_eq!(Accumulator::Substream0.fbb_cap(0x2D), Some(30_000));
+    }
 
     #[test]
     fn a_record_stays_until_playback_strictly_passes_its_removal_time() {
@@ -210,18 +338,18 @@ mod tests {
         // plus one access unit, here arrival + 100.
         for i in 0..3 {
             let arrival = i * 40;
-            fifo.push(arrival, arrival + 100, UNIT);
+            fifo.push(arrival, arrival + 100, unit(UNIT));
         }
         assert_eq!(fifo.buffered(), 3);
         assert_eq!(fifo.peaks(), [30, 60, 90, 120, 150]);
 
         // Playback exactly at a removal time does NOT drain: the drain is strict.
-        let report = fifo.push(100, 220, UNIT);
+        let report = fifo.push(100, 220, unit(UNIT));
         assert_eq!(fifo.buffered(), 4);
         assert_eq!(report.depths, [40, 80, 120, 160, 200]);
 
         // One sample later the first record leaves, and only the first.
-        let report = fifo.push(101, 221, UNIT);
+        let report = fifo.push(101, 221, unit(UNIT));
         assert_eq!(fifo.buffered(), 4);
         assert_eq!(report.depths, [40, 80, 120, 160, 200]);
         assert!(report.underrun.is_none());
@@ -233,12 +361,12 @@ mod tests {
 
         // The first record is still buffered when the second arrives, so the peak holds
         // both, even though the first would have drained at any playhead past 50.
-        fifo.push(0, 50, UNIT);
-        fifo.push(50, 100, UNIT);
+        fifo.push(0, 50, unit(UNIT));
+        fifo.push(50, 100, unit(UNIT));
         assert_eq!(fifo.peaks(), [20, 40, 60, 80, 100]);
 
         // At 51 the first record drains before the third is added: same peak.
-        fifo.push(51, 150, UNIT);
+        fifo.push(51, 150, unit(UNIT));
         assert_eq!(fifo.peaks(), [20, 40, 60, 80, 100]);
     }
 
@@ -246,24 +374,60 @@ mod tests {
     fn an_underrun_clamps_to_zero_and_stops_the_drain_pass() {
         let mut fifo = FifoDepthState::default();
 
-        fifo.push(0, 10, [10, 20, 30, 40, 50]);
-        fifo.push(1, 11, [10, 20, 30, 40, 50]);
+        fifo.push(0, 10, unit(UNIT));
+        fifo.push(1, 11, unit(UNIT));
 
         // Corrupt the model by force: drain everything against a record claiming more
         // than the accumulators hold. Both stale records are past removal, but the
         // underrun on the first stops the pass before the second is touched.
         let mut broken = FifoDepthState::default();
-        broken.push(0, 10, [100, 100, 100, 100, 100]);
-        broken.push(1, 11, [10, 20, 30, 40, 50]);
+        broken.push(0, 10, unit([100, 100, 100, 100, 100]));
+        broken.push(1, 11, unit(UNIT));
         // depths now [110, 120, 130, 140, 150]; drain a record of 200 each
         broken.contribution.iter_mut().for_each(|c| c[0] = 200);
 
-        let report = broken.push(100, 200, [1, 1, 1, 1, 1]);
+        let report = broken.push(100, 200, unit([2, 2, 2, 2, 2]));
         assert!(report.underrun.is_some());
         // clamped to zero on every accumulator, then the new unit was added, and the
         // second stale record was left in place
-        assert_eq!(report.depths, [1, 1, 1, 1, 1]);
+        assert_eq!(report.depths, [2, 2, 2, 2, 2]);
         assert_eq!(broken.buffered(), 2);
+    }
+
+    /// The split is only a split: whatever the window does to an accumulator, the stream
+    /// and overhead parts recorded at its deepest point add back up to it.
+    #[test]
+    fn the_stream_and_overhead_parts_of_a_peak_add_up_to_it() {
+        let mut fifo = FifoDepthState::default();
+
+        for i in 0..40 {
+            let arrival = i * 40;
+            fifo.push(arrival, arrival + 300, unit(UNIT));
+        }
+
+        for record in fifo.peak_records() {
+            assert_eq!(record.stream + record.overhead, record.total);
+            assert_eq!(record.stream, record.total / 2);
+        }
+
+        assert_eq!(fifo.peak_records().map(|record| record.total), fifo.peaks());
+    }
+
+    /// A substream's window is its own payload with nothing priced around it, so its peak
+    /// stays under the accumulator that carries the same bytes plus the overheads.
+    #[test]
+    fn a_substream_peak_carries_no_overhead() {
+        let mut fifo = FifoDepthState::default();
+
+        for i in 0..8 {
+            let arrival = i * 40;
+            fifo.push(arrival, arrival + 300, unit(UNIT));
+        }
+
+        let peaks = fifo.substream_peaks();
+        assert_eq!(peaks, [8 * (UNIT[4] / 4), 8 * (UNIT[4] / 4), 0, 0]);
+        let whole = fifo.peak_records()[Accumulator::WholeStream as usize];
+        assert!(peaks.iter().sum::<usize>() < whole.total);
     }
 
     #[test]
@@ -271,11 +435,11 @@ mod tests {
         let mut fifo = FifoDepthState::default();
 
         for i in 0..(RING * 2) {
-            fifo.push(i, usize::MAX, [1, 1, 1, 1, 1]);
+            fifo.push(i, usize::MAX, unit([2, 2, 2, 2, 2]));
         }
 
         // Nothing ever drained, so the depth kept the full count even though the ring
         // only remembers the last 128 records.
-        assert_eq!(fifo.peaks(), [RING * 2; ACCUMULATORS]);
+        assert_eq!(fifo.peaks(), [RING * 4; ACCUMULATORS]);
     }
 }
