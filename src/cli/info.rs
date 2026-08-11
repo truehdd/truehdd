@@ -12,7 +12,7 @@ use truehd::process::{
 };
 use truehd::structs::access_unit::AccessUnit;
 use truehd::structs::channel::{ChannelGroup, ChannelLabel, FbaChannelMeaning};
-use truehd::structs::sync::MAJOR_SYNC_FBB;
+use truehd::structs::sync::{MAJOR_SYNC_FBA, MAJOR_SYNC_FBB};
 
 pub fn cmd_info(args: &InfoArgs, cli: &Cli, multi: Option<&MultiProgress>) -> Result<()> {
     log::info!("Analyzing TrueHD stream: {}", args.input.display());
@@ -287,7 +287,15 @@ struct StreamInfo {
 impl StreamInfo {
     fn from_major_sync(major_sync: &truehd::structs::sync::MajorSyncInfo) -> Result<Self> {
         Ok(Self {
-            format_sync: format!("{:08X}", major_sync.format_sync),
+            format_sync: format!(
+                "{} ({:08X})",
+                match major_sync.format_sync {
+                    MAJOR_SYNC_FBA => "FBA",
+                    MAJOR_SYNC_FBB => "FBB",
+                    _ => "unknown",
+                },
+                major_sync.format_sync
+            ),
             sampling_frequency: major_sync.format_info.sampling_frequency_1()?,
             variable_rate: major_sync.variable_rate,
             peak_data_rate: (major_sync.peak_data_rate as u32

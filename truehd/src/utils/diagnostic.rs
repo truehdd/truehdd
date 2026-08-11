@@ -307,7 +307,7 @@ impl Location {
 
 impl fmt::Display for Location {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "au {} @{:#x}", self.au_index, self.byte_offset())?;
+        write!(f, "au {} @{:#X}", self.au_index, self.byte_offset())?;
 
         match self.bit_in_byte() {
             Some(bit) => write!(f, "+{bit}"),

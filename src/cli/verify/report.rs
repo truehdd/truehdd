@@ -842,7 +842,7 @@ fn branch_points(facts: &StreamFacts) -> Section {
             format!("Branch {index}"),
             vec![
                 branch.au_index.to_string(),
-                format!("{:#010X}", branch.byte_offset),
+                format!("{:#X}", branch.byte_offset),
                 facts
                     .sample_time(branch.sample)
                     .map_or_else(|| branch.sample.to_string(), time_str),
@@ -1419,7 +1419,7 @@ mod tests {
         let report = report(&spliced);
         assert_eq!(
             cells(&report, "Branch Points", "Branch 0"),
-            ["44", "0x000013B4", "00:00:00.036", "3527", "invalid"]
+            ["44", "0x13B4", "00:00:00.036", "3527", "invalid"]
         );
 
         // The figures for this stream, with branch tolerance on.
@@ -1444,6 +1444,36 @@ mod tests {
             !unspliced.iter().any(|s| s.title == "Branch Points"),
             "an unspliced stream has no branches to report"
         );
+    }
+
+    /// A stream can be longer than 4 GB, so a branch offset is a 64-bit value and its
+    /// column is sized from what it holds. Padding it to a fixed eight digits would have
+    /// invented leading zeros below 4 GB and stopped being uniform above it.
+    #[test]
+    fn a_branch_past_four_gigabytes_keeps_its_offset_and_its_column() {
+        let mut facts = facts_of(FBA_SPLICED);
+        let far = 0x1_2345_6789u64;
+        facts.branches[1].byte_offset = far;
+
+        let report = report(&facts);
+        assert_eq!(
+            cells(&report, "Branch Points", "Branch 1")[1],
+            "0x123456789"
+        );
+        assert_eq!(cells(&report, "Branch Points", "Branch 0")[1], "0x13B4");
+
+        // The renderer sizes the column from the widest cell, so the two offsets still end
+        // in the same column: the wide one is not truncated and the narrow one is padded.
+        let rendered = render(&report);
+        let end_of = |needle: &str| {
+            let line = rendered
+                .lines()
+                .find(|line| line.contains(needle))
+                .unwrap_or_else(|| panic!("no rendered row holding {needle}"));
+            line.find(needle).unwrap() + needle.len()
+        };
+
+        assert_eq!(end_of("0x123456789"), end_of("0x13B4"));
     }
 
     /// A DVD-Audio stream branches by the same rules, and its depths hold as the TrueHD
