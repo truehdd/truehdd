@@ -24,7 +24,7 @@ pub struct Presentation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     ffoa: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    fps: Option<Fps>,
+    pub fps: Option<Fps>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     sc_number_of_elements: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -62,8 +62,8 @@ enum PresentationType {
     Cinema,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-enum Fps {
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+pub enum Fps {
     #[serde(rename = "23.976")]
     R23_976,
     #[serde(rename = "24")]

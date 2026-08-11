@@ -15,6 +15,14 @@ pub const W64_DATA_GUID: [u8; 16] = [
 ];
 
 /// Sony Wave64 file writer for 24-bit PCM audio (.wav extension)
+const WAVE_FORMAT_PCM: u16 = 1;
+const WAVE_FORMAT_EXTENSIBLE: u16 = 0xFFFE;
+
+/// KSDATAFORMAT_SUBTYPE_PCM, the subformat the extensible header names.
+const KSDATAFORMAT_SUBTYPE_PCM: [u8; 16] = [
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71,
+];
+
 pub struct WAVWriter<W: Write + Seek> {
     writer: BufWriter<W>,
     data_size_position: u64,
@@ -22,6 +30,7 @@ pub struct WAVWriter<W: Write + Seek> {
     sample_rate: u32,
     channels: u32,
     bits_per_sample: u32,
+    channel_mask: Option<u32>,
     file_size_position: u64,
 }
 
@@ -35,6 +44,7 @@ impl<W: Write + Seek> WAVWriter<W> {
             sample_rate: 48000,
             channels: 2,
             bits_per_sample: 24,
+            channel_mask: None,
             file_size_position: 0,
         }
     }
@@ -45,6 +55,7 @@ impl<W: Write + Seek> WAVWriter<W> {
         sample_rate: u32,
         channels: u32,
         bits_per_sample: u32,
+        channel_mask: Option<u32>,
     ) -> io::Result<()> {
         if self.data_written > 0 {
             return Err(io::Error::new(
@@ -53,6 +64,7 @@ impl<W: Write + Seek> WAVWriter<W> {
             ));
         }
 
+        self.channel_mask = channel_mask;
         self.sample_rate = sample_rate;
         self.channels = channels;
         self.bits_per_sample = bits_per_sample;
@@ -67,13 +79,23 @@ impl<W: Write + Seek> WAVWriter<W> {
         self.writer.write_all(&0u64.to_le_bytes())?; // File size (to be updated later)
         self.writer.write_all(&W64_WAVE_GUID)?;
 
-        // W64 fmt chunk
+        // W64 fmt chunk. A channel mask needs the extensible form, which is the 16-byte
+        // fmt data plus cbSize, the valid-bit count, the mask and a subformat GUID.
         self.writer.write_all(&W64_FMT_GUID)?;
-        let fmt_chunk_size = 24u64 + 16u64; // 16 bytes for fmt data + 24 bytes for GUID + size
-        self.writer.write_all(&fmt_chunk_size.to_le_bytes())?;
+        let fmt_data_size = if self.channel_mask.is_some() {
+            40u64
+        } else {
+            16u64
+        };
+        self.writer
+            .write_all(&(24u64 + fmt_data_size).to_le_bytes())?;
 
-        // fmt data (same as WAV)
-        self.writer.write_all(&1u16.to_le_bytes())?; // PCM format
+        let format_tag = if self.channel_mask.is_some() {
+            WAVE_FORMAT_EXTENSIBLE
+        } else {
+            WAVE_FORMAT_PCM
+        };
+        self.writer.write_all(&format_tag.to_le_bytes())?;
         self.writer
             .write_all(&(self.channels as u16).to_le_bytes())?;
         self.writer.write_all(&self.sample_rate.to_le_bytes())?;
@@ -85,6 +107,14 @@ impl<W: Write + Seek> WAVWriter<W> {
         self.writer.write_all(&(block_align as u16).to_le_bytes())?;
         self.writer
             .write_all(&(self.bits_per_sample as u16).to_le_bytes())?;
+
+        if let Some(mask) = self.channel_mask {
+            self.writer.write_all(&22u16.to_le_bytes())?; // cbSize
+            self.writer
+                .write_all(&(self.bits_per_sample as u16).to_le_bytes())?; // valid bits
+            self.writer.write_all(&mask.to_le_bytes())?;
+            self.writer.write_all(&KSDATAFORMAT_SUBTYPE_PCM)?;
+        }
 
         // W64 data chunk
         self.writer.write_all(&W64_DATA_GUID)?;
@@ -164,7 +194,7 @@ mod tests {
         let cursor = Cursor::new(buffer);
         let mut writer = WAVWriter::new(cursor);
 
-        writer.configure_audio_format(48000, 2, 24)?;
+        writer.configure_audio_format(48000, 2, 24, None)?;
         writer.write_header()?;
 
         let cursor = writer.into_inner()?;
@@ -186,7 +216,7 @@ mod tests {
         let cursor = Cursor::new(buffer);
         let mut writer = WAVWriter::new(cursor);
 
-        writer.configure_audio_format(48000, 2, 24)?;
+        writer.configure_audio_format(48000, 2, 24, None)?;
         writer.write_header()?;
 
         // Write some test samples

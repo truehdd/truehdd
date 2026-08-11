@@ -40,6 +40,54 @@ fn caf_channel_label(label: ChannelLabel) -> CafChannelLabel {
     }
 }
 
+/// The `dwChannelMask` bit for a label, where one exists.
+const fn wave_channel_bit(label: ChannelLabel) -> Option<u32> {
+    Some(match label {
+        ChannelLabel::L => 0x1,       // FRONT_LEFT
+        ChannelLabel::R => 0x2,       // FRONT_RIGHT
+        ChannelLabel::C => 0x4,       // FRONT_CENTER
+        ChannelLabel::LFE => 0x8,     // LOW_FREQUENCY
+        ChannelLabel::Lb => 0x10,     // BACK_LEFT
+        ChannelLabel::Rb => 0x20,     // BACK_RIGHT
+        ChannelLabel::Cb => 0x100,    // BACK_CENTER
+        ChannelLabel::Ls => 0x200,    // SIDE_LEFT
+        ChannelLabel::Rs => 0x400,    // SIDE_RIGHT
+        ChannelLabel::Tc => 0x800,    // TOP_CENTER
+        ChannelLabel::Tfl => 0x1000,  // TOP_FRONT_LEFT
+        ChannelLabel::Tfr => 0x4000,  // TOP_FRONT_RIGHT
+        ChannelLabel::Tbl => 0x10000, // TOP_BACK_LEFT
+        ChannelLabel::Tbr => 0x40000, // TOP_BACK_RIGHT
+        _ => return None,
+    })
+}
+
+/// The `dwChannelMask` for a decoded order, or `None` where the format cannot state it.
+///
+/// A mask names which speakers are present, and the extensible header then *implies* the
+/// order: ascending bit order, with no way to say anything else. So a mask is written only
+/// where the decoder's own order already matches that, and the samples are never reordered
+/// to make one fit. A 5.1 stream carrying its surrounds before its centre, which is how
+/// DVD-Audio carries one, gets no mask rather than a wrong one.
+pub fn wave_channel_mask(labels: &[ChannelLabel]) -> Option<u32> {
+    if labels.is_empty() {
+        return None;
+    }
+
+    let mut mask = 0u32;
+    let mut previous = 0u32;
+
+    for &label in labels {
+        let bit = wave_channel_bit(label)?;
+        if bit <= previous {
+            return None;
+        }
+        previous = bit;
+        mask |= bit;
+    }
+
+    Some(mask)
+}
+
 pub fn caf_channel_labels(labels: &[ChannelLabel]) -> Vec<CafChannelLabel> {
     labels.iter().copied().map(caf_channel_label).collect()
 }
@@ -76,11 +124,18 @@ impl AudioWriter {
         Ok(AudioWriter::Caf(caf_writer))
     }
 
-    /// Wave64 here carries no channel mask, so it makes no claim about the order and
-    /// the samples are written in the decoder's own.
-    pub fn create_w64(path: PathBuf, sample_rate: u32, channel_count: u32) -> anyhow::Result<Self> {
+    /// Wave64 states the layout as a channel mask where the decoded order is one a mask
+    /// can describe, and says nothing otherwise. See [`wave_channel_mask`].
+    pub fn create_w64(
+        path: PathBuf,
+        sample_rate: u32,
+        channel_count: u32,
+        channel_labels: &[ChannelLabel],
+    ) -> anyhow::Result<Self> {
         let mut w64_writer = WAVWriter::new(File::create(path)?);
-        w64_writer.configure_audio_format(sample_rate, channel_count, 24)?;
+        let mask = wave_channel_mask(channel_labels)
+            .filter(|_| channel_labels.len() == channel_count as usize);
+        w64_writer.configure_audio_format(sample_rate, channel_count, 24, mask)?;
         w64_writer.write_header()?;
         Ok(AudioWriter::W64(w64_writer))
     }
@@ -211,5 +266,25 @@ mod tests {
         // The format itself is still described.
         let _ = PCMDataType::SignedInteger;
         assert!(buffer.windows(4).any(|w| w == b"desc"));
+    }
+
+    /// A mask states which speakers are there, and the order follows from the bits, so one
+    /// can only be written for an order that already ascends.
+    #[test]
+    fn a_mask_is_written_only_for_an_order_it_can_state() {
+        use ChannelLabel::*;
+
+        assert_eq!(wave_channel_mask(&[L, R]), Some(0x3));
+        assert_eq!(wave_channel_mask(&[L, R, C, LFE, Ls, Rs]), Some(0x60F));
+
+        // DVD-Audio carries 5.1 with its surrounds before the centre, and eight channels
+        // put the sides before the backs. Neither is the order a mask implies, so neither
+        // gets one: the alternative is mislabelling the samples.
+        assert_eq!(wave_channel_mask(&[L, R, Ls, Rs, C, LFE]), None);
+        assert_eq!(wave_channel_mask(&[L, R, C, LFE, Ls, Rs, Lb, Rb]), None);
+
+        // A channel with no mask bit of its own, and the empty case.
+        assert_eq!(wave_channel_mask(&[L, R, Lw]), None);
+        assert_eq!(wave_channel_mask(&[]), None);
     }
 }

@@ -1,5 +1,5 @@
 use super::handler::DecodeHandler;
-use crate::cli::command::{AudioFormat, DecodeArgs, WarpMode};
+use crate::cli::command::{AudioFormat, DecodeArgs, FrameRate, WarpMode};
 use crate::cli::evo::{EvoKey, EvoVerifier, hex};
 use crate::input::InputReader;
 use anyhow::{Result, anyhow};
@@ -127,6 +127,7 @@ pub fn run_threaded_pipeline(
         bed_conform: args.bed_conform,
         metadata_only: args.metadata_only,
         warp_mode: args.warp_mode,
+        frame_rate: args.frame_rate,
         probe_range: args.probe_range,
         start_time: Instant::now(),
     };
@@ -407,6 +408,7 @@ struct PresentationOutputs {
     bed_conform: bool,
     metadata_only: bool,
     warp_mode: Option<WarpMode>,
+    frame_rate: Option<FrameRate>,
     probe_range: u64,
     start_time: Instant,
 }
@@ -445,6 +447,7 @@ impl PresentationOutputs {
                 self.bed_conform && slot == 3,
                 self.metadata_only,
                 self.warp_mode,
+                self.frame_rate,
                 self.probe_range,
             );
             handler.start_time = self.start_time;

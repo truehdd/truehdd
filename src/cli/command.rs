@@ -145,6 +145,37 @@ pub enum WarpMode {
     LoRo,
 }
 
+/// Timecode frame rate to record in the Atmos master, for aligning it with picture.
+/// It describes the master, it does not resample the audio.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum FrameRate {
+    #[value(name = "23.976")]
+    R23_976,
+    #[value(name = "24")]
+    R24,
+    #[value(name = "25")]
+    R25,
+    #[value(name = "29.97")]
+    R29_97,
+    #[value(name = "29.97df")]
+    R29_97Df,
+    #[value(name = "30")]
+    R30,
+}
+
+impl From<FrameRate> for crate::damf::Fps {
+    fn from(frame_rate: FrameRate) -> Self {
+        match frame_rate {
+            FrameRate::R23_976 => Self::R23_976,
+            FrameRate::R24 => Self::R24,
+            FrameRate::R25 => Self::R25,
+            FrameRate::R29_97 => Self::R29_97,
+            FrameRate::R29_97Df => Self::R29_97df,
+            FrameRate::R30 => Self::R30,
+        }
+    }
+}
+
 impl From<WarpMode> for crate::damf::WarpMode {
     fn from(warp_mode: WarpMode) -> Self {
         match warp_mode {
@@ -276,6 +307,10 @@ pub struct DecodeArgs {
     /// Specify warp mode when not present in metadata
     #[arg(long, value_enum)]
     pub warp_mode: Option<WarpMode>,
+
+    /// Timecode frame rate recorded in the Atmos master [default: 24]
+    #[arg(long, value_enum, value_name = "RATE")]
+    pub frame_rate: Option<FrameRate>,
 
     /// Access units to probe for Atmos metadata with --bed-conform (12000 is about 10s at 48 kHz)
     #[arg(long, default_value_t = 12000)]

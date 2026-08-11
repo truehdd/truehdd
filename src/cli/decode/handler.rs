@@ -1,6 +1,6 @@
 use super::output::AudioWriter;
 use crate::caf::{CAFWriter, parse_caf_file};
-use crate::cli::command::{AudioFormat, WarpMode};
+use crate::cli::command::{AudioFormat, FrameRate, WarpMode};
 use crate::damf::{BedInstance, Configuration, Data, Event};
 use anyhow::Result;
 use indicatif::ProgressBar;
@@ -20,6 +20,7 @@ pub struct DecodeHandler {
     bed_conform: bool,
     metadata_only: bool,
     warp_mode: Option<WarpMode>,
+    frame_rate: Option<FrameRate>,
     audio_writer: Option<AudioWriter>,
     metadata_writer: Option<BufWriter<File>>,
     current_audio_path: Option<PathBuf>,
@@ -175,6 +176,7 @@ impl DecodeHandler {
         bed_conform: bool,
         metadata_only: bool,
         warp_mode: Option<WarpMode>,
+        frame_rate: Option<FrameRate>,
         atmos_probe_range: u64,
     ) -> Self {
         // Probing exists to name and conform the audio file, so it is only
@@ -188,6 +190,7 @@ impl DecodeHandler {
             bed_conform,
             metadata_only,
             warp_mode,
+            frame_rate,
             audio_writer: None,
             metadata_writer: None,
             current_audio_path: None,
@@ -289,12 +292,23 @@ impl DecodeHandler {
                                 &effective_base,
                                 oamd,
                                 self.warp_mode,
+                                self.frame_rate,
                             )?;
                         } else {
-                            create_damf_header_file(&effective_base, oamd, self.warp_mode)?;
+                            create_damf_header_file(
+                                &effective_base,
+                                oamd,
+                                self.warp_mode,
+                                self.frame_rate,
+                            )?;
                         }
                     } else {
-                        create_damf_header_file(&effective_base, oamd, self.warp_mode)?;
+                        create_damf_header_file(
+                            &effective_base,
+                            oamd,
+                            self.warp_mode,
+                            self.frame_rate,
+                        )?;
                     }
 
                     self.record_file(&create_path_with_suffix(&effective_base, "atmos"));
@@ -629,7 +643,12 @@ impl DecodeHandler {
                 &self.channel_labels,
             ),
             AudioFormat::Pcm => AudioWriter::create_pcm(path),
-            AudioFormat::W64 => AudioWriter::create_w64(path, sample_rate, channel_count as u32),
+            AudioFormat::W64 => AudioWriter::create_w64(
+                path,
+                sample_rate,
+                channel_count as u32,
+                &self.channel_labels,
+            ),
         }
     }
 
@@ -928,6 +947,16 @@ impl DecodeHandler {
     }
 }
 
+/// The master states the frame rate its timecode is in. The stream does not carry one, so
+/// it is written from the caller's choice and defaults to what it has always been.
+fn apply_frame_rate(damf_data: &mut Data, frame_rate: Option<FrameRate>) {
+    if let Some(frame_rate) = frame_rate
+        && let Some(presentation) = damf_data.presentations_mut().first_mut()
+    {
+        presentation.fps = Some(frame_rate.into());
+    }
+}
+
 fn apply_warp_mode_override(damf_data: &mut Data, warp_mode: Option<WarpMode>) {
     if let Some(cli_warp_mode) = warp_mode
         && let Some(presentation) = damf_data.presentations_mut().first_mut()
@@ -941,10 +970,12 @@ pub fn create_damf_header_file(
     base_path: &Path,
     oamd: &truehd::structs::oamd::ObjectAudioMetadataPayload,
     warp_mode: Option<WarpMode>,
+    frame_rate: Option<FrameRate>,
 ) -> Result<()> {
     let header_path = create_path_with_suffix(base_path, "atmos");
     let mut damf_data = Data::with_oamd_payload(oamd, base_path);
     apply_warp_mode_override(&mut damf_data, warp_mode);
+    apply_frame_rate(&mut damf_data, frame_rate);
     write_damf_header_to_file(&header_path, &damf_data)
 }
 
@@ -952,10 +983,12 @@ pub fn rewrite_damf_header_for_bed_conform(
     base_path: &Path,
     oamd: &truehd::structs::oamd::ObjectAudioMetadataPayload,
     warp_mode: Option<WarpMode>,
+    frame_rate: Option<FrameRate>,
 ) -> Result<()> {
     let header_path = create_path_with_suffix(base_path, "atmos");
     let mut damf_data = Data::with_oamd_payload_bed_conform(oamd, base_path);
     apply_warp_mode_override(&mut damf_data, warp_mode);
+    apply_frame_rate(&mut damf_data, frame_rate);
     write_damf_header_to_file(&header_path, &damf_data)
 }
 

@@ -100,7 +100,10 @@ impl Verification<'_> {
         // Where the extractor had reached, for the diagnostics that have no access unit.
         let mut extracted_end = 0;
 
+        let mut supplied = 0u64;
+
         let read = input.process_chunks(64 * 1024, |chunk| {
+            supplied += chunk.len() as u64;
             extractor.push_bytes(chunk);
 
             for frame in extractor.by_ref() {
@@ -122,6 +125,11 @@ impl Verification<'_> {
             code: crate::exit::INPUT,
             source,
         })?;
+
+        // Input has run out, so a partial access unit at the end is the end of the file
+        // arriving mid-unit rather than a chunk boundary, which is what the loop above
+        // treats it as while there is more to read.
+        self.facts.trailing_bytes = supplied.saturating_sub(extracted_end);
 
         self.facts.adopt_measurements(&parser);
 
@@ -267,6 +275,12 @@ impl Verification<'_> {
             Verdict::Unparseable if self.facts.access_units == 0 => {
                 anyhow::anyhow!("no access unit in the stream could be parsed")
             }
+            // How much is missing is unknowable, so the message says what was measured:
+            // where the input stopped, not how much of the stream it was.
+            Verdict::Unparseable if self.facts.trailing_bytes > 0 => anyhow::anyhow!(
+                "the stream ends {} bytes into an access unit, so it was not parsed to its end",
+                self.facts.trailing_bytes,
+            ),
             Verdict::Unparseable => anyhow::anyhow!("the stream could not be parsed to its end"),
             Verdict::NonConformant => anyhow::anyhow!(
                 "stream is non-conformant: {} diagnostics, worst {}",

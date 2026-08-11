@@ -86,6 +86,9 @@ pub struct StreamFacts {
     pub max_fifo_latency: usize,
     pub max_access_unit_size: usize,
     pub total_access_unit_bytes: usize,
+    /// Bytes the input ended with that never became an access unit, so the stream stops
+    /// part way through one. Zero for a stream that ends where an access unit does.
+    pub trailing_bytes: u64,
 }
 
 impl StreamFacts {
@@ -402,7 +405,7 @@ pub enum Verdict {
 
 impl Verdict {
     pub fn of(facts: &StreamFacts, tally: &Tally, fail_on: Severity, recovered: bool) -> Self {
-        if facts.access_units == 0 || !recovered {
+        if facts.access_units == 0 || !recovered || facts.trailing_bytes > 0 {
             Verdict::Unparseable
         } else if tally.worst().is_some_and(|worst| worst >= fail_on) {
             Verdict::NonConformant
@@ -1533,6 +1536,27 @@ mod tests {
         assert_eq!(
             Verdict::of(&facts(), &tally, Severity::Fatal, false),
             Verdict::Unparseable
+        );
+
+        // A file cut mid-access-unit parses everything before the cut and says nothing is
+        // wrong with it, which is true and beside the point: the rest was never read. The
+        // dangling bytes are all that can be measured, since how much was cut is unknowable.
+        let truncated = StreamFacts {
+            trailing_bytes: 12,
+            ..facts()
+        };
+        let verdict = Verdict::of(&truncated, &tally, Severity::Fatal, true);
+        assert_eq!(
+            verdict,
+            Verdict::Unparseable,
+            "no diagnostic, but incomplete"
+        );
+        assert_eq!(verdict.exit_code(), crate::exit::PARSE);
+
+        // A stream ending where an access unit does is complete, and stays conformant.
+        assert_eq!(
+            Verdict::of(&facts(), &tally, Severity::Fatal, true),
+            Verdict::Conformant
         );
     }
 
