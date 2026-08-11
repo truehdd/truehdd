@@ -792,7 +792,7 @@ impl ObjectRenderInfo {
                 reader.get()?
             };
 
-            render.pos3d = if render.b_differential_position_specified {
+            let [x, y, z] = if render.b_differential_position_specified {
                 let (prev_x, prev_y, prev_z) = (prev.pos3d[0], prev.pos3d[1], prev.pos3d[2]);
 
                 let x = prev_x + reader.get_s::<i8>(3)? as f64 / 62.0;
@@ -810,6 +810,10 @@ impl ObjectRenderInfo {
                 [x, y, z]
             };
 
+            // Each coordinate is a code clamped to its own range, and it is the clamped code
+            // the next block's differential applies to.
+            render.pos3d = [x.clamp(0.0, 1.0), y.clamp(0.0, 1.0), z.clamp(-1.0, 1.0)];
+
             render.b_object_distance_specified = reader.get()?;
 
             render.distance_factor = if render.b_object_distance_specified {
@@ -826,7 +830,11 @@ impl ObjectRenderInfo {
         }
 
         if object_render_info_bits & 2 != 0 {
-            render.zone_constraints_idx = reader.get_n(3)?;
+            // 7 is not a zone constraint; it is read and stored as 0.
+            render.zone_constraints_idx = match reader.get_n(3)? {
+                7 => 0,
+                idx => idx,
+            };
             render.b_enable_elevation = reader.get()?;
         }
 
@@ -1132,7 +1140,7 @@ impl ObjectDivergenceBlock {
     pub const OBJECT_DIV_TABLE_TABLE: [f64; 4] = [0.500755, 0.608529, 0.704833, 1.0]; // 26, 29, 32, 63
 
     pub const OBJECT_DIV_CODE_TABLE: [Option<f64>; 64] = [
-        None,           // 0: reserved
+        Some(0.0),      // 0
         Some(0.0),      // 1
         Some(0.004026), // 2
         Some(0.00716),  // 3
