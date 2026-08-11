@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `decode --evo-key` verifies Evolution frame protection against a supplied HMAC-SHA-256 key, given as hex or as `@FILE`. Mismatches warn and are counted as `evoChecked` and `evoFailed`, or abort under `--strict`
 
 ### Fixed
+- `info` reported nothing at all about trimming when a stream carries no high-resolution timing field, which reads the same as a stream that signals no trim. It now says the field is not signalled, so "starts at zero" and "does not say" are distinguishable
 - Building the Dolby Atmos metadata panicked on three OAMD shapes it does not yet handle: multiple object info blocks, multiple bed instances, and intermediate spatial format objects. Each now reports what is unsupported, and the decode exits 6 with output files finalized instead of aborting. Streams that decoded before are unaffected. This affected every version
 
 ## [0.5.3] - 2026-08-04

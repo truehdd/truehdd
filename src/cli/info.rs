@@ -230,6 +230,13 @@ impl AnalysisContext {
             pb.finish_and_clear();
         }
 
+        // A stream carrying no high-resolution timing field is legal, and says nothing
+        // either way about trimming. Distinguish that from a signalled zero.
+        if self.analysis_result.is_some() && !self.hires_timing_displayed {
+            println!("Trim detection              Not signalled by this stream");
+            println!();
+        }
+
         self.analysis_result
             .map(|result| (result, self.timestamp, self.frame_count, self.total_bytes))
     }
