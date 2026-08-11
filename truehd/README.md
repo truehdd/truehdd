@@ -11,7 +11,7 @@ A low-level parser and decoder for Dolby TrueHD audio bitstreams, implemented in
 
 ```toml
 [dependencies]
-truehd = "0.6.3"
+truehd = "0.7.0"
 ```
 
 Requires Rust 1.88.0 or later.
@@ -37,7 +37,7 @@ the two stages will disagree about the stream.
 |                 | CRC and parity validation     | 🟢     | High     | Essential    |                               |
 |                 | SMPTE timestamp               | 🟢     | Medium   | Optional     |                               |
 |                 | FBA hires output timing       | 🟢     | Medium   | Optional     |                               |
-|                 | Object audio metadata         | 🟡     | High     | Essential    | Mostly done                   |
+|                 | Object audio metadata         | 🟢     | High     | Essential    | Bed object element skipped    |
 |                 | FIFO conformance tests        | 🟢     | Medium   | Optional     |                               |
 |                 | FBA bitstream seeking         | 🔴     | Low      | Nice-to-have | Yes, it's possible            |
 | **Decoder**     | 31EA / 31EB sync substream    | 🟢     | High     | Essential    |                               |

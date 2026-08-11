@@ -31,6 +31,8 @@ struct OAMDParserState {
     object_element: Option<ObjectElement>,
     trim_element: Option<TrimElement>,
     extended_object_element: Option<ExtendedObjectElement>,
+    headphone_element: Option<HeadphoneElement>,
+    object_description_element: Option<ObjectDescriptionElement>,
 }
 
 impl Default for OAMDParserState {
@@ -45,6 +47,8 @@ impl Default for OAMDParserState {
             object_element: None,
             trim_element: None,
             extended_object_element: None,
+            headphone_element: None,
+            object_description_element: None,
         }
     }
 }
@@ -228,6 +232,8 @@ pub struct ObjectAudioMetadataPayload {
     pub object_element: Option<ObjectElement>,
     pub trim_element: Option<TrimElement>,
     pub extended_object_element: Option<ExtendedObjectElement>,
+    pub headphone_element: Option<HeadphoneElement>,
+    pub object_description_element: Option<ObjectDescriptionElement>,
     pub oa_element_md: Vec<OAElementMD>,
 }
 
@@ -280,6 +286,8 @@ impl ObjectAudioMetadataPayload {
             object_element: state.object_element.clone(),
             trim_element: state.trim_element.clone(),
             extended_object_element: state.extended_object_element.clone(),
+            headphone_element: state.headphone_element.clone(),
+            object_description_element: state.object_description_element.clone(),
             oa_element_md,
         };
 
@@ -398,6 +406,13 @@ impl OAElementMD {
             OAElementType::ExtendObject => {
                 let extended_object_element = ExtendedObjectElement::read(state, reader)?;
                 state.extended_object_element = Some(extended_object_element);
+            }
+            OAElementType::Headphone => {
+                state.headphone_element = Some(HeadphoneElement::read(state, reader)?);
+            }
+            OAElementType::ObjectDescription => {
+                state.object_description_element =
+                    Some(ObjectDescriptionElement::read(state, reader)?);
             }
             _ => {
                 warn!(
@@ -888,6 +903,182 @@ pub const TRIM_LUT: [f64; 16] = [
 ];
 
 // TODO: TrimElement & ExtendObjectElement
+/// One object's headphone rendering intent at one block, from `oa_element_id` 3.
+#[derive(Clone, Copy, Debug, Default)]
+#[repr(C)]
+pub struct HeadphoneBlock {
+    /// 0, 1 or 2. Values above 2 are not defined and are read as 2.
+    pub hp_render_mode: u8,
+    pub hp_head_track_disable: bool,
+}
+
+/// Headphone element, `oa_element_id` 3.
+///
+/// Four modes: three state one rendering intent for the whole payload, and the fourth
+/// codes it per object and block. A mode above 3 is not defined and reads nothing further,
+/// leaving the element empty.
+#[derive(Clone, Debug, Default)]
+#[repr(C)]
+pub struct HeadphoneElement {
+    pub hp_mode: u8,
+    pub num_obj_info_blocks: usize,
+    /// Indexed by object, then by block. Empty where the mode defines nothing.
+    pub headphone_data: Vec<Vec<HeadphoneBlock>>,
+}
+
+impl HeadphoneElement {
+    fn read(state: &mut OAMDParserState, reader: &mut BsIoSliceReader) -> Result<Self> {
+        let mut element = Self {
+            hp_mode: reader.get_n(3)?,
+            num_obj_info_blocks: reader.get_n::<u8>(3)? as usize + 1,
+            ..Default::default()
+        };
+
+        let (objects, blocks) = (state.object_count, element.num_obj_info_blocks);
+
+        // A mode this does not define reads nothing more, and the element carries no
+        // rendering intent rather than a guessed one.
+        let (mode, head_track_disable) = match element.hp_mode {
+            0 => (0, true),
+            1 | 2 => (element.hp_mode, reader.get()?),
+            3 => {
+                element.headphone_data = Self::read_per_object(state, reader, blocks)?;
+                return Ok(element);
+            }
+            _ => return Ok(element),
+        };
+
+        element.headphone_data = vec![
+            vec![
+                HeadphoneBlock {
+                    hp_render_mode: mode,
+                    hp_head_track_disable: head_track_disable,
+                };
+                blocks
+            ];
+            objects
+        ];
+
+        Ok(element)
+    }
+
+    /// Mode 3 codes every object, except that a run of consecutive ISF objects is coded
+    /// once and repeated: the objects of one ISF group share a rendering intent.
+    fn read_per_object(
+        state: &mut OAMDParserState,
+        reader: &mut BsIoSliceReader,
+        blocks: usize,
+    ) -> Result<Vec<Vec<HeadphoneBlock>>> {
+        let prog = &state.program_assignment;
+        let isf = prog.num_bed_objects..prog.num_bed_objects + prog.num_isf_objects;
+
+        let mut data: Vec<Vec<HeadphoneBlock>> = Vec::with_capacity(state.object_count);
+
+        for object_index in 0..state.object_count {
+            if isf.contains(&object_index)
+                && object_index != isf.start
+                && let Some(first) = data.get(isf.start).cloned()
+            {
+                data.push(first);
+                continue;
+            }
+
+            let mut object = Vec::with_capacity(blocks);
+            for _ in 0..blocks {
+                object.push(HeadphoneBlock {
+                    hp_render_mode: reader.get_n::<u8>(2)?.min(2),
+                    hp_head_track_disable: reader.get()?,
+                });
+            }
+            data.push(object);
+        }
+
+        Ok(data)
+    }
+}
+
+/// Object description element, `oa_element_id` 4, which says which objects are dialogue.
+#[derive(Clone, Debug, Default)]
+#[repr(C)]
+pub struct ObjectDescriptionElement {
+    pub num_obj_info_blocks: usize,
+    pub b_present: bool,
+    pub sub_mode: u8,
+    /// Indexed by object, then by block. Empty where the element states nothing.
+    pub object_dialog_indication: Vec<Vec<u8>>,
+}
+
+impl ObjectDescriptionElement {
+    /// The 2-bit code of sub-mode 1 is not the indication itself.
+    const DIALOG_MAP: [u8; 4] = [2, 1, 3, 0];
+
+    fn read(state: &mut OAMDParserState, reader: &mut BsIoSliceReader) -> Result<Self> {
+        let mut element = Self {
+            num_obj_info_blocks: reader.get_n::<u8>(3)? as usize + 1,
+            b_present: reader.get()?,
+            ..Default::default()
+        };
+
+        if !element.b_present {
+            return Ok(element);
+        }
+
+        element.sub_mode = reader.get_n(2)?;
+        let (objects, blocks) = (state.object_count, element.num_obj_info_blocks);
+
+        match element.sub_mode {
+            0 => {
+                element.object_dialog_indication = Self::per_object(
+                    objects,
+                    blocks,
+                    |r| Ok(if r.get()? { 1 } else { 2 }),
+                    reader,
+                )?;
+            }
+            1 => {
+                let b_extra = reader.get()?;
+                element.object_dialog_indication = Self::per_object(
+                    objects,
+                    blocks,
+                    |r| {
+                        let code = r.get_n::<u8>(2)? as usize;
+                        // Only that one code carries the five further bits, whose meaning is
+                        // not stated anywhere this was read from.
+                        if code == 2 && b_extra {
+                            r.skip_n(5)?;
+                        }
+                        Ok(Self::DIALOG_MAP[code])
+                    },
+                    reader,
+                )?;
+            }
+            // Reserved data rather than indications, so every object reads as 0.
+            _ => {
+                let mut size = reader.get_n::<u32>(5)? + 1;
+                if reader.get()? {
+                    size += reader.get_variable_bits_max(2, 3)?;
+                }
+
+                element.object_dialog_indication = vec![vec![0; blocks]; objects];
+                reader.skip_n(size * 8)?;
+            }
+        }
+
+        Ok(element)
+    }
+
+    fn per_object(
+        objects: usize,
+        blocks: usize,
+        mut one: impl FnMut(&mut BsIoSliceReader) -> Result<u8>,
+        reader: &mut BsIoSliceReader,
+    ) -> Result<Vec<Vec<u8>>> {
+        (0..objects)
+            .map(|_| (0..blocks).map(|_| one(reader)).collect())
+            .collect()
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 #[repr(C)]
 pub struct TrimElement {
@@ -1456,6 +1647,206 @@ mod tests {
     #[test]
     fn broken() -> Result<()> {
         let _ = ObjectAudioMetadataPayload::read(TEST_DATA_BROKEN)?;
+
+        Ok(())
+    }
+
+    /// Bits, most significant first, so a payload can be written the way it is read.
+    #[derive(Default)]
+    struct Bits {
+        data: Vec<u8>,
+        len: usize,
+    }
+
+    impl Bits {
+        fn push(&mut self, n: usize, value: u32) {
+            for i in (0..n).rev() {
+                if self.len.is_multiple_of(8) {
+                    self.data.push(0);
+                }
+                if (value >> i) & 1 == 1 {
+                    let last = self.data.len() - 1;
+                    self.data[last] |= 1 << (7 - (self.len & 7));
+                }
+                self.len += 1;
+            }
+        }
+    }
+
+    /// A payload carrying one element and nothing else: one dynamic object, no bed.
+    /// `body` writes the element's own bits, after the id, size and discard flag.
+    fn payload_with_element(id: u32, body: impl Fn(&mut Bits)) -> Vec<u8> {
+        let mut element = Bits::default();
+        body(&mut element);
+
+        let mut bits = Bits::default();
+        bits.push(2, 0); // oamd_version
+        bits.push(5, 0); // object_count - 1
+        bits.push(1, 1); // b_dyn_object_only_program
+        bits.push(1, 0); // b_lfe_present
+        bits.push(1, 0); // b_alternate_object_data_present
+        bits.push(4, 1); // oa_element_count
+        bits.push(4, id); // oa_element_id_idx
+
+        // oa_element_size is in bytes minus one, and must cover the element's own bits
+        // plus the discard flag that precedes them. It is a variable-bits field, so the
+        // four bits are followed by the bit that says whether another group follows.
+        let bytes = (element.len + 1).div_ceil(8) as u32;
+        bits.push(4, bytes - 1);
+        bits.push(1, 0); // no further size group
+        bits.push(1, 0); // b_discard_unknown_element
+
+        for i in 0..element.len {
+            bits.push(1, ((element.data[i / 8] >> (7 - (i % 8))) & 1) as u32);
+        }
+
+        bits.data
+    }
+
+    /// Mode 0 states one intent for everything and reads nothing further, so a payload
+    /// carrying only the two header fields is complete.
+    #[test]
+    fn headphone_element_mode_0_applies_to_every_object() -> Result<()> {
+        let data = payload_with_element(3, |b| {
+            b.push(3, 0); // hp_mode
+            b.push(3, 0); // num_obj_info_blocks - 1
+        });
+
+        let payload = ObjectAudioMetadataPayload::read(&data)?;
+        let element = payload.headphone_element.expect("a headphone element");
+
+        assert_eq!(element.hp_mode, 0);
+        assert_eq!(element.num_obj_info_blocks, 1);
+        assert_eq!(element.headphone_data.len(), 1, "one object");
+        assert_eq!(element.headphone_data[0][0].hp_render_mode, 0);
+        assert!(element.headphone_data[0][0].hp_head_track_disable);
+
+        Ok(())
+    }
+
+    /// Mode 1 reads one head-tracking bit and applies it everywhere.
+    #[test]
+    fn headphone_element_mode_1_reads_one_bit() -> Result<()> {
+        let data = payload_with_element(3, |b| {
+            b.push(3, 1); // hp_mode
+            b.push(3, 1); // two blocks
+            b.push(1, 0); // hp_head_track_disable
+        });
+
+        let element = ObjectAudioMetadataPayload::read(&data)?
+            .headphone_element
+            .expect("a headphone element");
+
+        assert_eq!(element.num_obj_info_blocks, 2);
+        assert_eq!(element.headphone_data[0].len(), 2);
+        for block in &element.headphone_data[0] {
+            assert_eq!(block.hp_render_mode, 1);
+            assert!(!block.hp_head_track_disable);
+        }
+
+        Ok(())
+    }
+
+    /// Mode 3 codes each object and block: two bits of render mode, then the bit.
+    #[test]
+    fn headphone_element_mode_3_codes_each_block() -> Result<()> {
+        let data = payload_with_element(3, |b| {
+            b.push(3, 3); // hp_mode
+            b.push(3, 1); // two blocks
+            b.push(2, 2); // block 0 render mode
+            b.push(1, 1); // block 0 head track disable
+            b.push(2, 3); // block 1 render mode, above the defined range
+            b.push(1, 0);
+        });
+
+        let element = ObjectAudioMetadataPayload::read(&data)?
+            .headphone_element
+            .expect("a headphone element");
+
+        assert_eq!(element.headphone_data[0][0].hp_render_mode, 2);
+        assert!(element.headphone_data[0][0].hp_head_track_disable);
+        // Only three modes are defined, and a fourth code reads as the highest.
+        assert_eq!(element.headphone_data[0][1].hp_render_mode, 2);
+        assert!(!element.headphone_data[0][1].hp_head_track_disable);
+
+        Ok(())
+    }
+
+    /// A mode the element does not define reads nothing further and states nothing.
+    #[test]
+    fn headphone_element_leaves_an_undefined_mode_empty() -> Result<()> {
+        let data = payload_with_element(3, |b| {
+            b.push(3, 7);
+            b.push(3, 0);
+        });
+
+        let element = ObjectAudioMetadataPayload::read(&data)?
+            .headphone_element
+            .expect("a headphone element");
+
+        assert_eq!(element.hp_mode, 7);
+        assert!(element.headphone_data.is_empty());
+
+        Ok(())
+    }
+
+    /// Sub-mode 0 codes one bit per object and block, and the bit is not the indication.
+    #[test]
+    fn object_description_sub_mode_0_maps_its_bit() -> Result<()> {
+        let data = payload_with_element(4, |b| {
+            b.push(3, 0); // num_obj_info_blocks - 1
+            b.push(1, 1); // b_present
+            b.push(2, 0); // sub_mode
+            b.push(1, 1); // the object's only block
+        });
+
+        let element = ObjectAudioMetadataPayload::read(&data)?
+            .object_description_element
+            .expect("an object description element");
+
+        assert!(element.b_present);
+        assert_eq!(element.object_dialog_indication, vec![vec![1]]);
+
+        Ok(())
+    }
+
+    /// Sub-mode 1 codes two bits and maps them, and code 2 carries five further bits
+    /// when the element says so, which must be consumed or the next object shifts.
+    #[test]
+    fn object_description_sub_mode_1_maps_and_consumes_the_extra() -> Result<()> {
+        let data = payload_with_element(4, |b| {
+            b.push(3, 1); // two blocks
+            b.push(1, 1); // b_present
+            b.push(2, 1); // sub_mode
+            b.push(1, 1); // b_extra
+            b.push(2, 2); // block 0: the code that carries more
+            b.push(5, 0x15); // and the five bits it carries
+            b.push(2, 3); // block 1
+        });
+
+        let element = ObjectAudioMetadataPayload::read(&data)?
+            .object_description_element
+            .expect("an object description element");
+
+        assert_eq!(element.object_dialog_indication, vec![vec![3, 0]]);
+
+        Ok(())
+    }
+
+    /// A payload with no element at all still parses, and states nothing.
+    #[test]
+    fn object_description_absent_when_not_present() -> Result<()> {
+        let data = payload_with_element(4, |b| {
+            b.push(3, 0);
+            b.push(1, 0); // b_present
+        });
+
+        let element = ObjectAudioMetadataPayload::read(&data)?
+            .object_description_element
+            .expect("an object description element");
+
+        assert!(!element.b_present);
+        assert!(element.object_dialog_indication.is_empty());
 
         Ok(())
     }
