@@ -2,6 +2,7 @@ use anyhow::Result;
 use chrono::TimeZone;
 use std::env;
 use std::fs;
+use std::path::Path;
 use std::process::Command;
 use vergen_gitcl::{Emitter, Gitcl};
 
@@ -49,6 +50,20 @@ fn main() -> Result<()> {
 
     // Tell cargo to rerun this build script if the truehd Cargo.toml changes
     println!("cargo:rerun-if-changed=truehd/Cargo.toml");
+
+    // ...and when HEAD moves, or the version string keeps describing the commit the
+    // binary was first built at. The ref file covers commits on a branch, HEAD covers
+    // checkouts, and packed-refs covers a ref that only exists packed.
+    let git_dir = Path::new(".git");
+    if git_dir.exists() {
+        println!("cargo:rerun-if-changed=.git/HEAD");
+        println!("cargo:rerun-if-changed=.git/packed-refs");
+        if let Ok(head) = fs::read_to_string(git_dir.join("HEAD"))
+            && let Some(reference) = head.strip_prefix("ref: ")
+        {
+            println!("cargo:rerun-if-changed=.git/{}", reference.trim());
+        }
+    }
 
     Ok(())
 }
