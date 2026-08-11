@@ -154,6 +154,8 @@ rule_ids! {
         FilterOrderTooHigh = "filter_order_too_high",
         CoeffQMismatch = "coeff_q_mismatch",
         HuffLsbsTooLarge = "huff_lsbs_too_large",
+        DrcStartUpGainTooLarge = "drc_start_up_gain_too_large",
+        HeavyDrcStartUpGainTooLarge = "heavy_drc_start_up_gain_too_large",
     }
     ExtraDataError => ExtraData / ExtraDataRule / "extra_data" {
         MisalignedExtraDataStart = "misaligned_extra_data_start",

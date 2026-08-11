@@ -6,7 +6,7 @@ use truehd::process::{EXAMPLE_DATA, MAX_PRESENTATIONS};
 use truehd::structs::sync::{MAJOR_SYNC_FBA, MAJOR_SYNC_FBB};
 use truehd::utils::crc::{CRC_MAJOR_SYNC_INFO_ALG, Crc16};
 use truehd::utils::diagnostic::{
-    AccessUnitRule, BlockRule, Diagnostic, DiagnosticMode, RestartHeaderRule, RuleId,
+    AccessUnitRule, BlockRule, ChannelRule, Diagnostic, DiagnosticMode, RestartHeaderRule, RuleId,
     SubstreamRule, SyncRule,
 };
 use truehd::utils::errors::{RestartHeaderError, SubstreamError};
@@ -27,6 +27,11 @@ const FBB_6CH: &[u8] = include_bytes!("assets/fbb_6ch.mlp");
 /// An FBB encode with one substream, `flags` 0x4000 and `substream_info` 0x05, so
 /// substream 0 alone is decodable.
 const FBB_COPY: &[u8] = include_bytes!("assets/fbb_copy.mlp");
+
+/// Two FBA encodes spliced end to end. Its substream directories carry DRC gain updates,
+/// and the second segment restates a `channel_meaning` whose `drc_start_up_gain` is louder
+/// than the gain those updates left the substreams running at.
+const FBA_SPLICED: &[u8] = include_bytes!("assets/fba_spliced.mlp");
 
 /// Overwrites `n` bits at bit offset `bit`, most significant bit first.
 fn set_bits(data: &mut [u8], bit: usize, n: usize, value: u32) {
@@ -326,6 +331,31 @@ fn the_formerly_untyped_checks_carry_a_rule() {
         assert_eq!(fired.severity, log::Level::Warn, "{fired}");
         assert!(fired.location.bit_offset.is_some(), "{fired}");
     }
+}
+
+/// A start-up gain is what a decoder that joins the stream at a major sync applies until
+/// the first gain update reaches it, so it may not be louder than the gain the substream
+/// is already running at. The spliced stream restates one that is.
+#[test]
+fn a_drc_start_up_gain_louder_than_the_running_gain_is_reported() {
+    let rule = RuleId::Channel(ChannelRule::DrcStartUpGainTooLarge);
+
+    let fired = diagnostics_of(FBA_SPLICED)
+        .into_iter()
+        .find(|diagnostic| diagnostic.rule == rule)
+        .expect("the second segment states a start-up gain above the running gain");
+
+    assert_eq!(fired.severity, log::Level::Warn, "{fired}");
+    assert!(fired.location.bit_offset.is_some(), "{fired}");
+
+    // The first segment states one that is not, and nothing has updated a gain when its
+    // channel_meaning is read, so no substream has a gain to be louder than.
+    assert!(
+        !diagnostics_of(&repeated_example(2))
+            .iter()
+            .any(|diagnostic| diagnostic.rule == rule),
+        "the example stream carries no gain updates"
+    );
 }
 
 /// The other two seamless-branch causes need no mutation: the repeated example splices

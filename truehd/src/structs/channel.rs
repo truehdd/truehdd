@@ -4,8 +4,7 @@
 //! processing parameters for individual channels in audio streams.
 
 use anyhow::{Result, anyhow, bail};
-use log::Level::Error;
-use log::warn;
+use log::Level::{Error, Warn};
 use std::fmt::Display;
 
 use crate::log_or_err;
@@ -245,24 +244,40 @@ impl FbaChannelMeaning {
             && let Some(substreams) = state.substreams
         {
             for i in 0..substreams {
-                let ss_state = state.substream_i_state_mut(i)?;
+                let ss_state = state.substream_i_state(i)?;
+                let (drc_active, drc_gain_update) = (ss_state.drc_active, ss_state.drc_gain_update);
+                let (heavy_drc_active, heavy_drc_gain_update) =
+                    (ss_state.heavy_drc_active, ss_state.heavy_drc_gain_update);
 
+                // What a decoder joining here applies until the first update reaches it,
+                // and it may not exceed the gain the substream already runs at.
                 let heavy_drc_startup_gain = (cm.heavy_drc_start_up_gain as f64 * 0.25).exp2();
-                let heavy_drc_update_gain =
-                    (ss_state.heavy_drc_gain_update as f64 * 0.03125).exp2();
-                if ss_state.heavy_drc_active && heavy_drc_startup_gain > heavy_drc_update_gain {
-                    warn!(
-                        "heavy_drc_start_up_gain too large, heavy_drc_start_up_gain={heavy_drc_startup_gain} (linear),\
-                             heavy_drc_update_gain[{i}]={heavy_drc_update_gain} (linear)."
+                let heavy_drc_update_gain = (heavy_drc_gain_update as f64 * 0.03125).exp2();
+                if heavy_drc_active && heavy_drc_startup_gain > heavy_drc_update_gain {
+                    log_or_err!(
+                        state,
+                        Warn,
+                        anyhow!(ChannelError::HeavyDrcStartUpGainTooLarge {
+                            index: i,
+                            start_up_gain: heavy_drc_startup_gain,
+                            update_gain: heavy_drc_update_gain,
+                        }),
+                        reader
                     );
                 }
 
                 let drc_startup_gain = (cm.drc_start_up_gain as f64 * 0.0625).exp2();
-                let drc_update_gain = (ss_state.drc_gain_update as f64 * 0.015625).exp2();
-                if ss_state.drc_active && drc_startup_gain > drc_update_gain {
-                    warn!(
-                        "drc_start_up_gain too large, drc_start_up_gain={drc_startup_gain} (linear),\
-                             drc_update_gain[{i}]={drc_update_gain} (linear)."
+                let drc_update_gain = (drc_gain_update as f64 * 0.015625).exp2();
+                if drc_active && drc_startup_gain > drc_update_gain {
+                    log_or_err!(
+                        state,
+                        Warn,
+                        anyhow!(ChannelError::DrcStartUpGainTooLarge {
+                            index: i,
+                            start_up_gain: drc_startup_gain,
+                            update_gain: drc_update_gain,
+                        }),
+                        reader
                     );
                 }
             }

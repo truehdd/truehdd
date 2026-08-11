@@ -221,6 +221,26 @@ pub enum ChannelError {
 
     #[error("huff_lsbs[{chan}] must be <= {max}, got {actual}")]
     HuffLsbsTooLarge { chan: usize, max: u32, actual: u32 },
+
+    #[error(
+        "drc_start_up_gain too large, drc_start_up_gain={start_up_gain} (linear), \
+         drc_update_gain[{index}]={update_gain} (linear)"
+    )]
+    DrcStartUpGainTooLarge {
+        index: usize,
+        start_up_gain: f64,
+        update_gain: f64,
+    },
+
+    #[error(
+        "heavy_drc_start_up_gain too large, heavy_drc_start_up_gain={start_up_gain} (linear), \
+         heavy_drc_update_gain[{index}]={update_gain} (linear)"
+    )]
+    HeavyDrcStartUpGainTooLarge {
+        index: usize,
+        start_up_gain: f64,
+        update_gain: f64,
+    },
 }
 
 #[derive(thiserror::Error, Debug)]

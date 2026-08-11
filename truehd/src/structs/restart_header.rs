@@ -386,8 +386,8 @@ impl RestartHeader {
 
         reader.skip_n(2)?;
 
+        // Reserved unless flags bit 13 says the stream carries heavy DRC.
         if state.flags & 0x2000 != 0 {
-            //TODO: implement
             rh.heavy_drc_present = reader.get()?;
 
             if state.format_sync == MAJOR_SYNC_FBA {
@@ -416,8 +416,8 @@ impl RestartHeader {
             reader.skip_n(1)?;
         }
 
-        // prev
-        if state.substream_state_mut()?.heavy_drc_present {
+        // The bit this header carries decides the twelve after it, not the one before.
+        if rh.heavy_drc_present {
             if state.format_sync == MAJOR_SYNC_FBB {
                 // The field is FBA-only, so nothing follows it here; report and read on.
                 log_or_err!(
@@ -695,9 +695,9 @@ mod tests {
     }
 
     /// A one-channel restart header that states nothing, with a CRC that matches so it
-    /// reads to the end. `heavy_drc_fields` is the twelve bits of heavy DRC gain and time
-    /// update, which only an FBA stream carries.
-    fn crafted_restart_header(heavy_drc_fields: usize) -> Vec<u8> {
+    /// `heavy_drc_present` is the field; `heavy_drc_fields` the twelve bits after it, a gain
+/// and time update in FBA and reserved otherwise.
+    fn crafted_restart_header(heavy_drc_present: u32, heavy_drc_fields: usize) -> Vec<u8> {
         let mut bits = Bits::default();
 
         bits.push(14, 0x31EA); // restart_sync_word
@@ -715,7 +715,7 @@ mod tests {
         bits.push(8, 0); // lossless_check
         bits.push(1, 0); // hires_output_timing
         bits.push(2, 0);
-        bits.push(1, 0); // heavy_drc_present
+        bits.push(1, heavy_drc_present);
         bits.push(heavy_drc_fields, 0);
         bits.push(6, 0); // ch_assign[0]
 
@@ -735,6 +735,7 @@ mod tests {
     /// checks that fired.
     fn checks_over_crafted_header(
         format_sync: u32,
+        heavy_drc_present: u32,
         heavy_drc_fields: usize,
         setup: impl FnOnce(&mut ParserState),
     ) -> Vec<RuleId> {
@@ -746,7 +747,7 @@ mod tests {
         };
         setup(&mut state);
 
-        let data = crafted_restart_header(heavy_drc_fields);
+        let data = crafted_restart_header(heavy_drc_present, heavy_drc_fields);
         let reader = &mut BsIoSliceReader::from_slice(&data);
 
         RestartHeader::read(&mut state, reader).expect("the crafted header reads");
@@ -766,7 +767,7 @@ mod tests {
 
         // heavy_drc_time_update 0 promises an update at every restart header, and this is
         // the second one to pass without one.
-        let fired = checks_over_crafted_header(MAJOR_SYNC_FBA, 12, |state| {
+        let fired = checks_over_crafted_header(MAJOR_SYNC_FBA, 0, 12, |state| {
             state.flags = 0x2000;
             let ss_state = &mut state.substream_state[0];
             ss_state.heavy_drc_active = true;
@@ -776,7 +777,7 @@ mod tests {
         assert!(fired.contains(&rule), "{fired:?}");
 
         // One update per two restart headers, and this is the first to pass without one.
-        let quiet = checks_over_crafted_header(MAJOR_SYNC_FBA, 12, |state| {
+        let quiet = checks_over_crafted_header(MAJOR_SYNC_FBA, 0, 12, |state| {
             state.flags = 0x2000;
             let ss_state = &mut state.substream_state[0];
             ss_state.heavy_drc_active = true;
@@ -786,19 +787,36 @@ mod tests {
         assert!(!quiet.contains(&rule), "{quiet:?}");
     }
 
-    /// heavy DRC is an FBA field. An FBB stream whose previous restart header claimed it
-    /// is reported, and read on from where the field would not have been.
+    /// The field is FBA-only, so an FBB header that sets it is reported and read on past.
     #[test]
     fn heavy_drc_carried_into_an_fbb_stream_is_reported() {
         let rule = RuleId::RestartHeader(RestartHeaderRule::HeavyDrcPresentInFbb);
 
-        let fired = checks_over_crafted_header(MAJOR_SYNC_FBB, 0, |state| {
-            state.substream_state[0].heavy_drc_present = true;
+        let fired = checks_over_crafted_header(MAJOR_SYNC_FBB, 1, 0, |state| {
+            state.flags = 0x2000;
         });
         assert!(fired.contains(&rule), "{fired:?}");
 
-        let quiet = checks_over_crafted_header(MAJOR_SYNC_FBB, 12, |state| {
-            state.substream_state[0].heavy_drc_present = false;
+        let quiet = checks_over_crafted_header(MAJOR_SYNC_FBB, 0, 12, |state| {
+            state.flags = 0x2000;
+        });
+        assert!(!quiet.contains(&rule), "{quiet:?}");
+
+        // Reserved here, and still read.
+        let stale = checks_over_crafted_header(MAJOR_SYNC_FBB, 0, 12, |state| {
+            state.flags = 0x2000;
+            state.substream_state[0].heavy_drc_present = true;
+        });
+        assert!(!stale.contains(&rule), "{stale:?}");
+    }
+
+    /// With flags bit 13 clear the bit and the twelve after it are reserved.
+    #[test]
+    fn heavy_drc_is_not_read_where_the_flags_do_not_declare_it() {
+        let rule = RuleId::RestartHeader(RestartHeaderRule::HeavyDrcPresentInFbb);
+
+        let quiet = checks_over_crafted_header(MAJOR_SYNC_FBB, 1, 12, |state| {
+            state.substream_state[0].heavy_drc_present = true;
         });
         assert!(!quiet.contains(&rule), "{quiet:?}");
     }
