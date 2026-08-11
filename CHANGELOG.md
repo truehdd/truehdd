@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `truehdd verify <input>` parses a whole stream and reports every conformance check that fires, rather than stopping at the first like `decode --strict` does. Each diagnostic prints its rule ID, severity, access unit and byte.bit position, followed by a summary with a per-rule tally, the stream's format and FIFO peaks against their caps, and a verdict
+- `verify --fail-on <fatal|error|warning|info>` sets the worst severity that still exits 0, default `error`. A stream that parses but violates a rule at or above it exits with the new code 7; a stream that cannot be parsed to its end exits 4
+- `verify --max-per-rule <N>` stops printing after N diagnostics of one rule, default 20, `0` for no limit. Every diagnostic is counted whatever the limit, so the tally, the summary and the exit code do not change with it. Each limited rule prints one line naming how many were shown and suppressed and the first and last access unit
+- `verify --json` writes JSON Lines: one object per diagnostic, one per rate-limited rule, and a final summary object
+- `verify --summary-only` prints the summary alone
+- The global `--strict` acts as `--fail-on warning` under `verify`. It does not lower the parser's fail level as it does under `decode` and `info`, which would end the access unit at the first warning and hide every check after it
+- `verify` silences the library's own logging, which would otherwise print every check a second time and bury the report. `--loglevel debug` or higher restores it
 - `decode --evo-key` verifies Evolution frame protection against a supplied HMAC-SHA-256 key, given as hex or as `@FILE`. Mismatches warn and are counted as `evoChecked` and `evoFailed`, or abort under `--strict`
 
 ### Fixed

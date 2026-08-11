@@ -3,6 +3,7 @@ use clap::Parser as ClapParser;
 use cli::command::{Cli, Commands, LogFormat};
 use cli::decode::cmd_decode;
 use cli::info::cmd_info;
+use cli::verify::cmd_verify;
 use indicatif::MultiProgress;
 use indicatif_log_bridge::LogWrapper;
 use log::info;
@@ -42,6 +43,11 @@ fn run() -> Result<()> {
 
     let mut env_builder = env_logger::Builder::from_default_env();
     env_builder.filter_level(base_level);
+    // verify reports every check itself, so the library logging the same checks would
+    // bury the report. Raising the log level past info asks for the internals anyway.
+    if matches!(cli.command, Commands::Verify(_)) && base_level <= log::LevelFilter::Info {
+        env_builder.filter_module("truehd", log::LevelFilter::Off);
+    }
     match cli.log_format {
         LogFormat::Plain => {
             env_builder.format_timestamp_secs();
@@ -74,6 +80,7 @@ fn run() -> Result<()> {
     match cli.command {
         Commands::Decode(ref args) => cmd_decode(args, &cli, pb)?,
         Commands::Info(ref args) => cmd_info(args, &cli, pb)?,
+        Commands::Verify(ref args) => cmd_verify(args, &cli, pb)?,
     }
 
     Ok(())

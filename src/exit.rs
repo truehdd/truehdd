@@ -27,6 +27,10 @@ pub const DECODE: i32 = 5;
 /// Output could not be written.
 pub const WRITE: i32 = 6;
 
+/// The stream parsed, but violates the conformance rules at or above the
+/// severity the caller asked to fail on.
+pub const NONCONFORMANT: i32 = 7;
+
 /// An error that carries the code the process should exit with.
 #[derive(Debug)]
 pub struct ExitError {

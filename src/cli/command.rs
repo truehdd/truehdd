@@ -47,6 +47,9 @@ pub enum Commands {
 
     /// Print stream information
     Info(InfoArgs),
+
+    /// Check the specified TrueHD stream against the conformance rules.
+    Verify(VerifyArgs),
 }
 
 #[derive(Debug, Args)]
@@ -54,6 +57,30 @@ pub struct InfoArgs {
     /// Input TrueHD bitstream.
     #[arg(value_name = "INPUT")]
     pub input: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct VerifyArgs {
+    /// Input TrueHD bitstream (use "-" for stdin).
+    #[arg(value_name = "INPUT")]
+    pub input: PathBuf,
+
+    /// Worst severity that still exits 0.
+    #[arg(long, value_enum, value_name = "SEVERITY", default_value_t = crate::cli::verify::Severity::Error)]
+    pub fail_on: crate::cli::verify::Severity,
+
+    /// Stop printing after this many diagnostics of the same rule; 0 prints them all.
+    /// Every diagnostic is counted either way.
+    #[arg(long, value_name = "N", default_value_t = 20)]
+    pub max_per_rule: u64,
+
+    /// Print one JSON object per line instead of the human-readable report
+    #[arg(long)]
+    pub json: bool,
+
+    /// Print the summary only, without the per-diagnostic lines
+    #[arg(long)]
+    pub summary_only: bool,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
