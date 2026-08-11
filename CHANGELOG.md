@@ -7,9 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-11
+
 ### Added
 - `decode --frame-rate <23.976|24|25|29.97|29.97df|30>` records a timecode frame rate in the Atmos master, which was fixed at 24. It states what rate the master's timecode is in and nothing else: no audio is resampled and no metadata is retimed, so a master authored at one rate does not become a master at another by relabelling it
 - `decode --format w64` states the channel layout as a `dwChannelMask`, in the extensible form, where the decoded order is one a mask can describe. A mask names the speakers and the header then implies their order, ascending by bit, so an order that does not ascend cannot be stated: a DVD-Audio 5.1 presentation, whose surrounds precede its centre, and an 8-channel presentation, whose sides precede its backs, are written as before with no mask rather than a wrong one. Samples are never reordered to fit a mask
+- `verify` reports a stream that ends part way through an access unit. The extractor hands over whole access units and waits for the rest of a partial one, which is right at a chunk boundary and wrong at the end of the input, so a file cut mid-access-unit verified clean: everything before the cut parses, nothing says the rest was never read. The bytes left over at the end are now measured, and a stream carrying any is `UNPARSEABLE`, exit 4. How much of the stream is missing cannot be known, so the message states where the input stopped rather than how much it lost. A stream ending where an access unit does is unaffected
 - `truehdd verify <input>` parses a whole stream and reports every conformance check that fires, rather than stopping at the first like `decode --strict` does. Each diagnostic prints its rule ID, severity, access unit and byte.bit position, followed by a summary with a per-rule tally, the stream's format and FIFO peaks against their caps, and a verdict
 - `verify --fail-on <fatal|error|warning|info>` sets the worst severity that still exits 0, default `error`. A stream that parses but violates a rule at or above it exits with the new code 7; a stream that cannot be parsed to its end exits 4
 - `verify --max-per-rule <N>` stops printing after N diagnostics of one rule, default 20, `0` for no limit. Every diagnostic is counted whatever the limit, so the tally, the summary and the exit code do not change with it. Each limited rule prints one line naming how many were shown and suppressed and the first and last access unit

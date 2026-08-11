@@ -18,6 +18,7 @@ Dolby TrueHD 音频流解码工具
 ## 项目简介
 
 `truehdd` 基于 [truehd](truehd/) 库构建，为 Dolby TrueHD 音频流提供命令行解码方案。
+它同样可以读取 DVD-Audio 所用的 Meridian Lossless Packing 流，并通过 `verify` 按一致性规则检查两者。
 
 ## 安装配置
 
@@ -41,6 +42,7 @@ truehdd [全局选项] <子命令>
 子命令:
   decode    解码 TrueHD 流为 PCM 音频
   info      分析并显示流信息
+  verify    按一致性规则检查 TrueHD 流
   help      显示帮助信息
 
 全局选项:
@@ -79,6 +81,48 @@ truehdd [全局选项] <子命令>
 ```bash
 # 分析 TrueHD 文件结构
 truehdd info movie.thd
+```
+
+### `verify` - 一致性检查
+
+解析整个流，报告所有触发的一致性检查，而不是在第一个问题处停止。每条诊断都会给出规则 ID、
+严重级别、访问单元以及 byte.bit 位置；随后的摘要包含按规则统计的数量、流的格式、FIFO 峰值
+与其上限的对比、拼接留下的分支点、该流可用于哪些光盘格式，以及最终判定。
+
+一个流可以是合规的比特流，却不被任何光盘格式接受。这种情况报告为
+`CONFORMANT, NOT DISC-AUTHORABLE`，退出码为 0：光盘规则与编解码器规则是两套不同的规则。
+
+**用法:** `truehdd verify [OPTIONS] <INPUT>`
+
+```
+Arguments:
+  <INPUT>  Input TrueHD bitstream (use "-" for stdin)
+
+Options:
+      --fail-on <SEVERITY>       Worst severity that still exits 0 [default: error]
+                                 [possible values: info, warning, error, fatal]
+      --max-per-rule <N>         Stop printing after this many diagnostics of the same
+                                 rule; 0 prints them all [default: 20]
+      --json                     Print one JSON object per line instead of the report
+      --summary-only             Print the summary alone
+      --loglevel <LOGLEVEL>      Set the log level [default: info]
+                                 [possible values: off, error, warn, info, debug, trace]
+      --strict                   Treat warnings as fatal errors (fail on first warning)
+      --log-format <LOG_FORMAT>  Log output format [default: plain] [possible values: plain, json]
+      --progress                 Show progress bars during operations
+  -h, --help                     Print help (see more with '--help')
+```
+
+**示例:**
+```bash
+# 按一致性规则检查流
+truehdd verify movie.thd
+
+# 将警告及以上视为失败
+truehdd verify --fail-on warning movie.thd
+
+# 每条诊断输出一个 JSON 对象，便于工具处理
+truehdd verify --json movie.thd
 ```
 
 ### `decode` - 音频解码
@@ -172,6 +216,7 @@ truehdd info movie.thd
 | 4 | 无法解析码流 |
 | 5 | 无法解码音频 |
 | 6 | 无法写出输出文件 |
+| 7 | 码流不合规（仅 `verify`） |
 
 使用 `--strict` 时，跳过的帧也会被视为失败。
 

@@ -19,6 +19,7 @@ Dolby TrueHD ビットストリームをデコードするコマンドライン�
 ## 概要
 
 `truehdd` は [truehd](truehd/) ライブラリの CLI frontend で、Dolby TrueHD 音声ビットストリームのデコード機能を提供する。
+DVD-Audio が用いる Meridian Lossless Packing ストリームも読み取り、`verify` でいずれも適合性ルールと照合できる。
 
 ## インストール
 
@@ -42,6 +43,7 @@ truehdd [オプション] <コマンド>
 コマンド:
   decode    TrueHD ストリームを PCM 音声にデコード
   info      ストリーム情報を表示
+  verify    TrueHD ストリームを適合性ルールと照合
   help      このメッセージまたは指定されたサブコマンドのヘルプを表示する
 
 オプション:
@@ -80,6 +82,50 @@ TrueHD ストリームを解析し、デコードを行わずにその構造と�
 ```bash
 # TrueHD ファイルを解析
 truehdd info movie.thd
+```
+
+### `verify` - 適合性チェック
+
+ストリーム全体を解析し、最初の問題で停止せずに、発火したすべての適合性チェックを報告します。
+各診断にはルール ID、深刻度、アクセスユニット、byte.bit 位置が付きます。続く要約では、ルール
+ごとの集計、ストリームの形式、上限に対する FIFO ピーク、スプライスが残した分岐点、ストリーム
+が適合するディスク形式、そして判定を表示します。
+
+ビットストリームとしては適合していても、どのディスク形式にも収録できない場合があります。これは
+`CONFORMANT, NOT DISC-AUTHORABLE` として報告され、終了コードは 0 です。ディスクの規則とコー
+デックの規則は別物だからです。
+
+**使用方法:** `truehdd verify [OPTIONS] <INPUT>`
+
+```
+Arguments:
+  <INPUT>  Input TrueHD bitstream (use "-" for stdin)
+
+Options:
+      --fail-on <SEVERITY>       Worst severity that still exits 0 [default: error]
+                                 [possible values: info, warning, error, fatal]
+      --max-per-rule <N>         Stop printing after this many diagnostics of the same
+                                 rule; 0 prints them all [default: 20]
+      --json                     Print one JSON object per line instead of the report
+      --summary-only             Print the summary alone
+      --loglevel <LOGLEVEL>      Set the log level [default: info]
+                                 [possible values: off, error, warn, info, debug, trace]
+      --strict                   Treat warnings as fatal errors (fail on first warning)
+      --log-format <LOG_FORMAT>  Log output format [default: plain] [possible values: plain, json]
+      --progress                 Show progress bars during operations
+  -h, --help                     Print help (see more with '--help')
+```
+
+**使用例:**
+```bash
+# 適合性ルールと照合する
+truehdd verify movie.thd
+
+# 警告以上を失敗として扱う
+truehdd verify --fail-on warning movie.thd
+
+# 診断ごとに 1 つの JSON オブジェクトを出力する
+truehdd verify --json movie.thd
 ```
 
 ### `decode` - オーディオデコード
@@ -173,6 +219,7 @@ TrueHD ストリームを PCM 音声にデコードする。
 | 4 | ビットストリームを解析できない |
 | 5 | 音声をデコードできない |
 | 6 | 出力を書き出せない |
+| 7 | ストリームが適合していない（`verify` のみ） |
 
 `--strict` を使用した場合、スキップされたフレームも失敗として扱う。
 

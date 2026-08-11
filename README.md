@@ -20,6 +20,7 @@ A command-line tool for decoding Dolby TrueHD audio streams.
 ## Overview
 
 `truehdd` is a command-line interface for the [truehd](truehd/) library, enabling decoding of Dolby TrueHD audio streams.
+It also reads the Meridian Lossless Packing streams DVD-Audio carries, and checks either against the conformance rules with `verify`.
 
 ## Installation
 
@@ -43,6 +44,7 @@ truehdd [OPTIONS] <COMMAND>
 Commands:
   decode    Decode the specified TrueHD stream into PCM audio
   info      Print stream information
+  verify    Check the specified TrueHD stream against the conformance rules
   help      Print this message or the help of the given subcommand(s)
 
 Options:
@@ -81,6 +83,51 @@ Options:
 ```bash
 # Analyze a TrueHD file
 truehdd info movie.thd
+```
+
+### `verify` - Conformance Checking
+
+Parses a whole stream and reports every conformance check that fires, rather than stopping
+at the first. Each diagnostic prints its rule ID, severity, access unit and byte.bit
+position, followed by a summary: a per-rule tally, the stream's format and FIFO peaks
+against their caps, the branch points a splice leaves behind, which disc formats the stream
+is legal for, and a verdict.
+
+A stream can be a conformant bitstream and still be inadmissible on every disc format, which
+is reported as `CONFORMANT, NOT DISC-AUTHORABLE` and exits 0: the disc rules and the codec
+rules are different rules.
+
+**Usage:** `truehdd verify [OPTIONS] <INPUT>`
+
+```
+Arguments:
+  <INPUT>  Input TrueHD bitstream (use "-" for stdin)
+
+Options:
+      --fail-on <SEVERITY>       Worst severity that still exits 0 [default: error]
+                                 [possible values: info, warning, error, fatal]
+      --max-per-rule <N>         Stop printing after this many diagnostics of the same
+                                 rule; 0 prints them all [default: 20]
+      --json                     Print one JSON object per line instead of the report
+      --summary-only             Print the summary alone
+      --loglevel <LOGLEVEL>      Set the log level [default: info]
+                                 [possible values: off, error, warn, info, debug, trace]
+      --strict                   Treat warnings as fatal errors (fail on first warning)
+      --log-format <LOG_FORMAT>  Log output format [default: plain] [possible values: plain, json]
+      --progress                 Show progress bars during operations
+  -h, --help                     Print help (see more with '--help')
+```
+
+**Examples:**
+```bash
+# Check a stream against the conformance rules
+truehdd verify movie.thd
+
+# Treat anything at or above a warning as a failure
+truehdd verify --fail-on warning movie.thd
+
+# One JSON object per diagnostic, for tooling
+truehdd verify --json movie.thd
 ```
 
 ### `decode` - Audio Decoding
@@ -188,6 +235,7 @@ The exit code identifies which stage failed:
 | 4 | Bitstream could not be parsed |
 | 5 | Audio could not be decoded |
 | 6 | Output could not be written |
+| 7 | Stream is non-conformant (`verify` only) |
 
 With `--strict`, skipped frames are treated as a failure as well.
 

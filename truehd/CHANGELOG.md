@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-11
+
 ### Added
 - `truehd/tests/assets/fba_atmos_dimtrim.mlp`, a stream whose object metadata carries the dimensional trim and extended object elements, which most encodes leave out. The two were only exercised by crafted payloads before
 - `HeadphoneElement` and `ObjectDescriptionElement`, the OAMD elements with `oa_element_id` 3 and 4, which were skipped with a warning. The first carries a headphone rendering mode and a head-tracking flag per object and block, stated once for the payload in three of its four modes and coded per block in the fourth, where a run of ISF objects shares one intent. The second carries `object_dialog_indication`, in two coded forms and a reserved form that states nothing. Both are read from `ObjectAudioMetadataPayload`. An element the payload does not carry is `None`, and `oa_element_id` 6 is still skipped
