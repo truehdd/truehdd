@@ -143,11 +143,13 @@ impl RestartHeader {
             state.output_timing = rh.output_timing as usize;
 
             if !state.has_parsed_au {
-                state.first_output_timing = state.output_timing;
-
                 if state.output_timing < state.input_timing {
                     state.output_timing += 0x10000;
                 }
+
+                // Recorded unwrapped, so the value seeding the FIFO output clock is the
+                // adjusted one. The 16-bit consumers are unaffected.
+                state.first_output_timing = state.output_timing;
 
                 trace!(
                     "AU {}: first output_timing adjusted to {}",

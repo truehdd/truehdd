@@ -8,5 +8,6 @@ pub mod buffer_pool;
 pub mod crc;
 pub mod dither;
 pub mod errors;
+pub mod fifo;
 pub mod perf;
 pub mod timing;

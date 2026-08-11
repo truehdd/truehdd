@@ -347,3 +347,43 @@ fn every_presentation_of_the_example_stream_decodes() {
         assert_eq!(frames, 2, "presentation {presentation}");
     }
 }
+
+/// Each accumulator is gated on its own `substream_info` bit. Here bit 3 is clear, so the
+/// 6-channel accumulator counts nothing at all rather than falling back to substream 0,
+/// while bit 4 gates the substream-0 region into the 8-channel sum.
+#[test]
+fn fifo_depth_gates_each_accumulator_on_substream_info() {
+    use extract::Extractor;
+    use parse::Parser;
+
+    let mut extractor = Extractor::default();
+    extractor.push_bytes(EXAMPLE_DATA);
+
+    let mut parser = Parser::default();
+    for frame in extractor.flatten() {
+        parser.parse(&frame).expect("example data must parse");
+    }
+
+    assert_eq!(parser.fifo_depth_peaks(), [104, 0, 104, 0, 104]);
+}
+
+/// FBB never computes the 8-channel accumulator. The 6-channel one still gates on bit 3 of
+/// `substream_info` (0b00001101 here, so it counts substreams 0 and 1), and the 16-channel
+/// one needs a fourth substream FBB cannot have.
+#[test]
+fn fbb_skips_the_eightch_accumulator_rather_than_capping_it() {
+    use extract::Extractor;
+    use parse::Parser;
+
+    let mut extractor = Extractor::default();
+    extractor.push_bytes(EXAMPLE_DATA_FBB);
+
+    let mut parser = Parser::default();
+    for frame in extractor.flatten() {
+        parser.parse(&frame).expect("FBB example data must parse");
+    }
+
+    let peaks = parser.fifo_depth_peaks();
+    assert_eq!(peaks, [172, 482, 0, 0, 482]);
+    assert_eq!(peaks[2], 0, "FBB must never accumulate an 8-channel depth");
+}

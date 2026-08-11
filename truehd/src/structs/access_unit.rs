@@ -11,7 +11,8 @@ use crate::structs::extra_data::ExtraData;
 use crate::structs::substream::{SubstreamDirectory, SubstreamSegment};
 use crate::structs::sync::{MAJOR_SYNC_FBA, MAJOR_SYNC_FBB, MajorSyncInfo};
 use crate::utils::bitstream_io::BsIoSliceReader;
-use crate::utils::errors::AccessUnitError;
+use crate::utils::errors::{AccessUnitError, FifoError};
+use crate::utils::fifo::{ACCUMULATORS, Accumulator};
 use crate::utils::perf::Timer;
 
 /// A parsed access unit containing structured audio data and metadata.
@@ -236,6 +237,8 @@ impl AccessUnit {
                 ))
             );
         }
+
+        Self::check_fifo_depth(state, &au)?;
 
         state.au_counter += 1; // TODO: migrate to gap check, should reset on sync check
 
@@ -462,6 +465,170 @@ impl AccessUnit {
             major_sync_info.update_decoder_state(state)?;
         } else if !state.valid {
             return Ok(());
+        }
+
+        Ok(())
+    }
+
+    /// Byte-domain FIFO depth check. Contributions are priced in bits from the directory
+    /// end pointers and fixed header sizes, summed per decoder, and divided by eight
+    /// once at the end. See [`crate::utils::fifo`] for the window semantics.
+    fn check_fifo_depth(state: &mut ParserState, au: &AccessUnit) -> Result<()> {
+        if !state.check_fifo {
+            return Ok(());
+        }
+
+        let is_fba = state.format_sync == MAJOR_SYNC_FBA;
+
+        if !is_fba && state.format_sync != MAJOR_SYNC_FBB {
+            return Ok(());
+        }
+
+        let Some(substreams) = state.substreams else {
+            return Ok(());
+        };
+
+        // The header is priced at fixed sizes rather than measured from the parsed bits:
+        // 32 for the access unit header, 224 more for a major sync, plus the extra
+        // channel meaning block when an FBA major sync carries one.
+        let base: u64 = 32
+            + match &au.major_sync_info {
+                Some(ms) => {
+                    224 + match &ms.channel_meaning.extra_channel_meaning {
+                        Some(ecm) if is_fba => 16 * (ecm.extra_channel_meaning_length as u64 + 1),
+                        _ => 0,
+                    }
+                }
+                None => 0,
+            };
+
+        // EXTRA_DATA costs its 16-bit header word plus its payload words, in every sum.
+        let extra_bits: u64 = match &au.extra_data {
+            Some(extra) if extra.extra_data_length != 0 => 16 * extra.extra_data_length as u64 + 16,
+            _ => 0,
+        };
+
+        // A substream region is its directory entry (one word, two with the extra word)
+        // plus its payload, priced as the difference of cumulative end pointers.
+        let mut region = [0u64; MAX_PRESENTATIONS];
+        let mut previous_end = 0u64;
+
+        // Only `substreams` directory entries are populated; the remaining
+        // fixed-array slots are default zeros, and pricing them would wrap the
+        // cumulative end-pointer difference.
+        for (i, directory) in au.substream_directory.iter().enumerate().take(substreams) {
+            let end = directory.substream_end_ptr as u64;
+            let words: u64 = if directory.extra_substream_word {
+                32
+            } else {
+                16
+            };
+            region[i] = words + 16 * end.wrapping_sub(previous_end);
+            previous_end = end;
+        }
+
+        let info = state.substream_info;
+        let mut bits = [0u64; ACCUMULATORS];
+
+        bits[0] = base + region[0] + extra_bits;
+
+        // The 6-channel decoder reads substreams 0 and 1, and counts nothing at all
+        // unless substream_info says a second substream carries the 6-channel mix.
+        if info & 0x08 != 0 {
+            bits[1] = base + region[0] + region[1] + extra_bits;
+        }
+
+        if is_fba {
+            // The 8-channel decoder gates every region on its own substream_info bit.
+            // FBB skips this accumulator entirely.
+            let mut sum = base;
+
+            for (bit, r) in [(0x10, 0), (0x20, 1), (0x40, 2)] {
+                if info & bit != 0 {
+                    sum += region[r];
+                }
+            }
+
+            bits[2] = sum + extra_bits;
+
+            // The 16-channel decoder reads the top region down to the one selected by
+            // extended_substream_info.
+            if info & 0x80 != 0 && substreams >= 4 {
+                let lowest = 3 - (state.extended_substream_info & 3) as usize;
+                bits[3] = base + region[lowest..=3].iter().sum::<u64>() + extra_bits;
+            }
+        }
+
+        let mut contribution = [0usize; ACCUMULATORS];
+
+        for (k, item) in bits.iter().enumerate() {
+            contribution[k] = (item / 8) as usize;
+        }
+
+        contribution[4] = state.access_unit_length << 1;
+
+        // Time is priced with a synthetic output clock: the unwrapped output timing of
+        // the first access unit, advanced one access unit per access unit ever after and
+        // never re-synchronised, not even across a seamless branch, which adjusts the
+        // input clock instead. A record drains once the input clock passes its output
+        // time by strictly more than one access unit.
+        let samples_per_au = state.samples_per_au;
+        let output_clock = match state.fifo_output_clock {
+            Some(clock) => clock + samples_per_au,
+            None => state.first_output_timing,
+        };
+        state.fifo_output_clock = Some(output_clock);
+
+        let report = state.fifo_depth.push(
+            state.unwrapped_input_timing,
+            output_clock + samples_per_au,
+            contribution,
+        );
+
+        trace!(
+            "AU {}: fifo depth {:?} over {} access units",
+            state.au_counter,
+            report.depths,
+            state.fifo_depth.buffered()
+        );
+
+        if let Some(index) = report.underrun {
+            log_or_err!(state, Warn, anyhow!(FifoError::Underrun { index }));
+        }
+
+        for (k, accumulator) in Accumulator::ALL.iter().enumerate() {
+            let cap = if is_fba {
+                // The 16-channel cap only applies when the stream has a 16-channel
+                // presentation and a fourth substream to carry it
+                if *accumulator == Accumulator::Sixteench && (info & 0x80 == 0 || substreams <= 3) {
+                    continue;
+                }
+
+                accumulator.fba_cap()
+            } else {
+                match accumulator.fbb_cap(info) {
+                    Some(cap) => cap,
+                    None => continue,
+                }
+            };
+
+            let depth = report.depths[k];
+
+            if depth <= cap {
+                continue;
+            }
+
+            let error = match accumulator {
+                Accumulator::Substream0 => FifoError::Substream0DepthExceeded { depth, cap },
+                Accumulator::WholeStream => FifoError::WholeStreamDepthExceeded { depth, cap },
+                _ => FifoError::GroupDepthExceeded {
+                    group: accumulator.group(),
+                    depth,
+                    cap,
+                },
+            };
+
+            log_or_err!(state, Warn, anyhow!(error));
         }
 
         Ok(())

@@ -9,6 +9,7 @@ use crate::utils::crc::{
     CRC_MAJOR_SYNC_INFO_ALG, CRC_RESTART_BLOCK_HEADER_ALG, CRC_SUBSTREAM_ALG, Crc8, Crc16,
 };
 use crate::utils::errors::ParseError;
+use crate::utils::fifo::{ACCUMULATORS, FifoDepthState};
 // Re-exported so the type is nameable where the method returning it lives
 pub use crate::utils::perf::ParserPerfStats;
 use crate::utils::timing::HiresOutputTimingState;
@@ -80,6 +81,15 @@ impl Parser {
     /// - `log::Level::Warn`: Fail on Warning level and above (strict mode)
     pub fn set_fail_level(&mut self, level: log::Level) {
         self.state.fail_level = level;
+    }
+
+    /// Deepest each byte-domain FIFO accumulator has been, in bytes.
+    ///
+    /// Indexed by [`Accumulator`](crate::utils::fifo::Accumulator): substream 0, the
+    /// substream sums the 6-, 8- and 16-channel decoders read, then the whole stream.
+    /// All zero unless FIFO checks are enabled.
+    pub fn fifo_depth_peaks(&self) -> [usize; ACCUMULATORS] {
+        self.state.fifo_depth.peaks()
     }
 
     /// Resets stream state after a fatal parse failure.
@@ -222,6 +232,10 @@ pub struct ParserState {
     pub last_major_sync_index: usize,
     pub au_counter: usize,
     pub is_major_sync: bool,
+    pub fifo_depth: FifoDepthState,
+    /// Synthetic output clock for the FIFO model: the unwrapped output timing of the
+    /// first access unit, advanced one access unit per access unit, never re-synchronised.
+    pub fifo_output_clock: Option<usize>,
     pub has_parsed_au: bool,
 
     pub au_start_pos: usize,
@@ -312,6 +326,8 @@ impl Default for ParserState {
             last_major_sync_index: 0,
             au_counter: 0,
             is_major_sync: false,
+            fifo_depth: FifoDepthState::default(),
+            fifo_output_clock: None,
             has_parsed_au: false,
 
             au_start_pos: 0,

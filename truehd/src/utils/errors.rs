@@ -491,3 +491,28 @@ pub enum TimestampError {
     #[error("parse_bcd16: Invalid BCD digit")]
     InvalidBcdDigit,
 }
+
+#[derive(thiserror::Error, Debug)]
+pub enum FifoError {
+    #[error(
+        "FIFO depth for substream 0 and stream overheads must be less than 15000 bytes per \
+        channel. Depth = {depth}, limit {cap}"
+    )]
+    Substream0DepthExceeded { depth: usize, cap: usize },
+
+    #[error(
+        "FIFO depth for the sum of substreams used by {group} must be less than {cap} bytes. \
+        Depth = {depth}"
+    )]
+    GroupDepthExceeded {
+        group: &'static str,
+        depth: usize,
+        cap: usize,
+    },
+
+    #[error("FIFO depth for the whole stream must be less than {cap} bytes. Depth = {depth}")]
+    WholeStreamDepthExceeded { depth: usize, cap: usize },
+
+    #[error("FIFO underrun: accumulator {index} holds fewer bytes than the access unit leaving it")]
+    Underrun { index: usize },
+}
