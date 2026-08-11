@@ -436,6 +436,9 @@ impl DecoderState {
         let ss_state = &mut self.substream_state[self.substream_index];
         *ss_state = DecoderSubstreamState {
             lossless_check_i32_prev_au: ss_state.lossless_check_i32_prev_au,
+            // The labels are only assigned when decoding starts or the layout
+            // changes; a restart header must not erase them.
+            channel_labels: std::mem::take(&mut ss_state.channel_labels),
             ..Default::default()
         }
     }

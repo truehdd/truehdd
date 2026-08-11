@@ -47,7 +47,7 @@ the two stages will disagree about the stream.
 |                 | Dynamic range control         | 🔴     | Low      | Optional     | State parsed, not applied     |
 |                 | Intermediate spatial format   | 🔴     | Low      | Out-of-scope | I have no idea                |
 | **Other TODOs** | Documentation                 | 🟡     | High     | Essential    | With kind support from Claude |
-|                 | Unit tests                    | 🟡     | High     | Essential    | Partially done                |
+|                 | Unit tests                    | 🟢     | High     | Essential    |                               |
 |                 | Benchmarking                  | 🔴     | Medium   | Important    |                               |
 |                 | Metadata interpolation        | 🔴     | Low      | Nice-to-have |                               |
 |                 | Bitstream editing             | 🔴     | Low      | Nice-to-have |                               |

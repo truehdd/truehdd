@@ -25,6 +25,8 @@ Thumbs.db
 *.mlp
 *.thd
 *.wav
+# ...except the committed test fixtures, which must survive a fresh clone
+!truehd/tests/assets/*.mlp
 test_*.out
 output.*
 Run_*.collapsed

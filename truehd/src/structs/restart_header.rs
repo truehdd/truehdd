@@ -461,7 +461,11 @@ impl RestartHeader {
     pub fn update_decoder_state(&self, state: &mut DecoderState) -> Result<()> {
         let valid = state.valid;
 
-        if valid && state.substream_index == state.presentation {
+        // Compare the lossless check for every presentation being decoded, not
+        // only the highest one: the accumulator is maintained per effective
+        // presentation, and a multi-presentation decode would otherwise leave
+        // the lower presentations' PCM unverified.
+        if valid && state.effective_presentations[state.substream_index] {
             let substream_info = state.substream_info;
             if match state.substream_index {
                 0 => true,
