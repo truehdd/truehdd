@@ -1,41 +1,69 @@
+# Supply-chain policy for the workspace, checked with cargo-deny.
+#
+# Run it with `cargo deny check`. Everything here is derived from what this workspace
+# actually resolves to, so a finding means the graph changed, not that the policy is
+# aspirational. cargo-deny warns about entries that stop matching, which is what keeps the
+# skips and exceptions below from rotting.
+
 [graph]
-# cargo-deny is really only ever intended to run on the "normal" tier-1 targets
+# The targets the release workflow actually builds. musl and Windows on ARM are shipped
+# too, and a dependency that only appears on one of them is exactly the kind this wants
+# to catch, so they belong here even though cargo-deny's own template omits them.
 targets = [
     "aarch64-apple-darwin",
     "x86_64-apple-darwin",
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
     "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
 ]
+# `evo-protection` is optional and brings in the only BSD-licensed crate in the graph, so
+# checking without it would miss the one license question this workspace has.
 all-features = true
 
 [advisories]
+yanked = "deny"
+# Only for what the workspace itself depends on. An unmaintained crate buried deep in a
+# build-time tree is a fact to know, not a reason to fail a build that cannot act on it.
 unmaintained = "workspace"
+
+[licenses]
+# The whole graph resolves to MIT or Apache-2.0 apart from the two exceptions below.
+allow = [
+    "MIT",
+    "Apache-2.0",
+]
+
+# Scoped to the crate, so the next dependency arriving under either licence has to be
+# looked at rather than silently inheriting a blanket allow.
+exceptions = [
+    # Its licence is "(MIT OR Apache-2.0) AND Unicode-3.0": the Unicode terms are not an
+    # alternative, they apply on top, so allowing MIT does not cover it.
+    { allow = ["Unicode-3.0"], crate = "unicode-ident" },
+    # BSD-3-Clause and nothing else. Reached through hmac and sha2 from `evo-protection`.
+    { allow = ["BSD-3-Clause"], crate = "subtle" },
+]
 
 [bans]
 multiple-versions = "deny"
-wildcards = 'allow'
-skip = [
-    {crate = "windows-sys"},
-    {crate = "windows-targets"},
-    {crate = "windows_x86_64_gnu"},
-    {crate = "windows_x86_64_msvc"},
+# No dependency here is specified as "*", and none should be.
+wildcards = "deny"
 
+# Two versions of one crate is worth failing over, because for anything linked into the
+# binary it is duplicated code. The exceptions are proc-macro and build-script trees,
+# which run at build time and reach no shipped byte. Each is named rather than allowed by
+# pattern, so a duplicate that is not one of these still fails.
+skip = [
+    # truehdd-macros is on darling 0.24, bon-macros (through vergen) on 0.23.
+    { crate = "darling", reason = "proc-macro only, build time" },
+    { crate = "darling_core", reason = "proc-macro only, build time" },
+    { crate = "darling_macro", reason = "proc-macro only, build time" },
+    # syn 3 has begun to appear alongside 2 across the proc-macro crates.
+    { crate = "syn", reason = "proc-macro only, build time" },
 ]
 
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-
-[licenses]
-confidence-threshold = 0.93
-
-allow = [
-    "Apache-2.0",
-    "MIT",
-]
-
-exceptions = [
-    { allow = ["Unicode-3.0"], crate = "unicode-ident" },
-]
-
