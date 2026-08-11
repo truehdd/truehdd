@@ -182,7 +182,13 @@ jobs:
       attestations: write
 
     steps:
+      # Full history so the previous tag can be resolved for the release notes
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      # Sets RELEASE_PKG_VERSION and ARCHIVE_PREFIX. GITHUB_ENV does not cross jobs, so
+      # this job has to derive them the same way the build jobs did, from the manifest.
+      - uses: ./.github/actions/setup-release-env
 
       - name: Download artifacts
         uses: actions/download-artifact@v8
@@ -192,13 +198,64 @@ jobs:
 
       # Asset names are part of the download contract for tools that fetch
       # releases automatically; do not rename them between releases.
+      - name: Check the artifacts are the ones the release claims
+        shell: bash
+        run: |
+          .github/artifacts.sh > "${RUNNER_TEMP}/artifacts.txt"
+
+          status=0
+          expected=""
+
+          while IFS='|' read -r _platform _cpu file; do
+            expected="${expected} ${file}"
+            found=$(find . -maxdepth 2 -type f -name "${file}")
+
+            if [ -z "${found}" ]; then
+              echo "missing: ${file}"
+              status=1
+              continue
+            fi
+
+            if [ ! -f "${found}.sha256" ]; then
+              echo "missing checksum: ${file}.sha256"
+              status=1
+              continue
+            fi
+
+            recorded=$(tr -d '[:space:]' < "${found}.sha256")
+            actual=$(sha256sum "${found}" | cut -d' ' -f1)
+
+            if [ "${recorded}" != "${actual}" ]; then
+              echo "checksum does not match the archive: ${file}"
+              echo "  recorded ${recorded}"
+              echo "  actual   ${actual}"
+              status=1
+            fi
+          done < "${RUNNER_TEMP}/artifacts.txt"
+
+          # An archive nobody expected means a target was added to a build job and not to
+          # the list, so the release would carry a file the notes never mention.
+          while read -r built; do
+            case " ${expected} " in
+              *" $(basename "${built}") "*) ;;
+              *) echo "not in the list: ${built}"; status=1 ;;
+            esac
+          done < <(find . -maxdepth 2 -type f \( -name '*.zip' -o -name '*.tar.gz' \))
+
+          if [ "${status}" -ne 0 ]; then
+            echo "the built artifacts and the release notes disagree" >&2
+            exit 1
+          fi
+
+          echo "every expected artifact is present, with a checksum that matches"
+
       - name: Compose release notes
         shell: bash
         run: |
-          # Each crate is versioned on its own, so read both manifests
-          VERSION=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          # Each crate is versioned on its own, so read the library manifest too. The
+          # binary's version is already resolved, and is what the archives are named with.
+          VERSION="${{ env.RELEASE_PKG_VERSION }}"
           LIB_VERSION=$(grep -m1 '^version = ' truehd/Cargo.toml | cut -d'"' -f2)
-          PREFIX="${{ env.RELEASE_BIN }}-${VERSION}"
 
           # Everything released since the previous tag, so versions that were
           # tagged but never published are included
@@ -236,13 +293,11 @@ jobs:
             echo
             echo "| Platform | CPU | File |"
             echo "| --- | --- | --- |"
-            echo "| Windows | Intel or AMD (almost all PCs) | \`${PREFIX}-x86_64-pc-windows-msvc.zip\` |"
-            echo "| Windows | ARM (Snapdragon, Windows on ARM) | \`${PREFIX}-aarch64-pc-windows-msvc.zip\` |"
-            echo "| macOS | Intel and Apple Silicon (universal) | \`${PREFIX}-universal-macOS.zip\` |"
-            echo "| Linux | Intel or AMD | \`${PREFIX}-x86_64-unknown-linux-gnu.tar.gz\` |"
-            echo "| Linux | Intel or AMD, static build | \`${PREFIX}-x86_64-unknown-linux-musl.tar.gz\` |"
-            echo "| Linux | ARM | \`${PREFIX}-aarch64-unknown-linux-gnu.tar.gz\` |"
-            echo "| Linux | ARM, static build | \`${PREFIX}-aarch64-unknown-linux-musl.tar.gz\` |"
+            # The same list the artifacts were checked against, so the table cannot promise
+            # a file the release does not carry.
+            while IFS='|' read -r platform cpu file; do
+              echo "| ${platform} | ${cpu} | \`${file}\` |"
+            done < "${RUNNER_TEMP}/artifacts.txt"
             echo
             echo "The static Linux builds run on distributions with an older or different C library."
             echo "Each archive ships a matching \`.sha256\` file for verification."

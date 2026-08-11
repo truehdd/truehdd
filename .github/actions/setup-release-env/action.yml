@@ -16,4 +16,4 @@ runs:
     - name: Create artifacts directory
       shell: bash
       run: |
-        mkdir ${{ env.RELEASE_DIR }}
+        mkdir -p ${{ env.RELEASE_DIR }}
