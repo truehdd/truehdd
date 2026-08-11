@@ -3,8 +3,11 @@
 use truehd::process::extract::Extractor;
 use truehd::process::parse::Parser;
 use truehd::process::{EXAMPLE_DATA, MAX_PRESENTATIONS};
+use truehd::structs::sync::{MAJOR_SYNC_FBA, MAJOR_SYNC_FBB};
+use truehd::utils::crc::{CRC_MAJOR_SYNC_INFO_ALG, Crc16};
 use truehd::utils::diagnostic::{
-    AccessUnitRule, BlockRule, Diagnostic, DiagnosticMode, RestartHeaderRule, RuleId, SubstreamRule,
+    AccessUnitRule, BlockRule, Diagnostic, DiagnosticMode, RestartHeaderRule, RuleId,
+    SubstreamRule, SyncRule,
 };
 use truehd::utils::errors::{RestartHeaderError, SubstreamError};
 
@@ -16,6 +19,14 @@ const FBA_2CH: &[u8] = include_bytes!("assets/fba_2ch.mlp");
 /// independent presentation, so a presentation mask can leave three of them unparsed.
 /// Its sixteen elements are all bed, so every presentation maps to source channels.
 const FBA_ATMOS_CBI: &[u8] = include_bytes!("assets/fba_atmos_cbi.mlp");
+
+/// An FBB (DVD-Audio) encode with two substreams, `flags` 0x4000 and `substream_info`
+/// 0x0D, so substream 1 is also to be decoded.
+const FBB_6CH: &[u8] = include_bytes!("assets/fbb_6ch.mlp");
+
+/// An FBB encode with one substream, `flags` 0x4000 and `substream_info` 0x05, so
+/// substream 0 alone is decodable.
+const FBB_COPY: &[u8] = include_bytes!("assets/fbb_copy.mlp");
 
 /// Overwrites `n` bits at bit offset `bit`, most significant bit first.
 fn set_bits(data: &mut [u8], bit: usize, n: usize, value: u32) {
@@ -444,4 +455,251 @@ fn fail_fast_stays_the_default() {
     }
 
     assert!(parser.diagnostics().is_empty());
+}
+
+/// Both syntaxes place the major sync info CRC in the last two of 28 bytes from the
+/// format_sync, unless an FBA stream carries an extra channel meaning block. None of
+/// these fixtures does.
+const MAJOR_SYNC_INFO_BYTES: usize = 28;
+
+/// Byte offsets of every major sync, matched on the format sync and on the signature
+/// that follows it four bytes of format_info later.
+fn major_syncs(data: &[u8], format_sync: u32) -> Vec<usize> {
+    let sync = format_sync.to_be_bytes();
+
+    (0..data.len().saturating_sub(MAJOR_SYNC_INFO_BYTES))
+        .filter(|&i| data[i..i + 4] == sync && data[i + 8..i + 10] == [0xB7, 0x52])
+        .collect()
+}
+
+/// Rewrites a mutated major sync info's CRC, so the mutated field is judged on its own
+/// rather than behind a CRC failure.
+fn repair_major_sync_crc(data: &mut [u8], at: usize) {
+    let crc = Crc16::new(&CRC_MAJOR_SYNC_INFO_ALG);
+    let end = at + MAJOR_SYNC_INFO_BYTES - 2;
+    let value = crc.update(crc.init, &data[at..end]);
+
+    data[end..end + 2].copy_from_slice(&value.to_be_bytes());
+}
+
+/// Applies `edit` to every major sync from the `skip`th onwards, repairing each CRC.
+fn edit_major_syncs(
+    data: &[u8],
+    format_sync: u32,
+    skip: usize,
+    edit: impl Fn(&mut [u8], usize),
+) -> Vec<u8> {
+    let syncs = major_syncs(data, format_sync);
+    assert!(syncs.len() > skip, "the fixture has a major sync to edit");
+
+    let mut out = data.to_vec();
+
+    for at in syncs.into_iter().skip(skip) {
+        edit(&mut out, at);
+        repair_major_sync_crc(&mut out, at);
+    }
+
+    out
+}
+
+/// `flags` is the sixteen bits ten bytes into the major sync info.
+fn map_flags(data: &[u8], format_sync: u32, skip: usize, f: impl Fn(u16) -> u16) -> Vec<u8> {
+    edit_major_syncs(data, format_sync, skip, |out, at| {
+        let flags = u16::from_be_bytes([out[at + 10], out[at + 11]]);
+        out[at + 10..at + 12].copy_from_slice(&f(flags).to_be_bytes());
+    })
+}
+
+/// The four bits before `substream_info`, and `substream_info` itself.
+fn set_substream_info(data: &[u8], format_sync: u32, before: u8, substream_info: u8) -> Vec<u8> {
+    edit_major_syncs(data, format_sync, 0, |out, at| {
+        out[at + 16] = (out[at + 16] & 0xF0) | (before & 0xF);
+        out[at + 17] = substream_info;
+    })
+}
+
+fn fired(diagnostics: &[Diagnostic], rule: RuleId) -> bool {
+    diagnostics.iter().any(|diagnostic| diagnostic.rule == rule)
+}
+
+/// A conformant DVD-Audio stream must raise nothing about its major sync. Both fixtures
+/// were judged by FBA-only rules and failed a reserved-bits check on every major sync.
+///
+/// `fbb_6ch` still trips the substream 0 FIFO cap, which its `substream_info` selects as
+/// zero. That is a separate question about the FBB cap tables, so this only asserts over
+/// the major sync itself.
+#[test]
+fn a_conformant_fbb_stream_raises_nothing_about_its_major_sync() {
+    for (name, data) in [("fbb_6ch", FBB_6CH), ("fbb_copy", FBB_COPY)] {
+        let diagnostics = diagnostics_of(data);
+        let sync: Vec<_> = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.rule.domain() == "sync")
+            .collect();
+
+        assert!(sync.is_empty(), "{name}: {sync:?}");
+    }
+
+    assert!(
+        diagnostics_of(FBB_COPY).is_empty(),
+        "fbb_copy is silent end to end"
+    );
+}
+
+/// Bit 14 of `flags` marks which syntax the stream is, so the same value is a violation
+/// in one and mandatory in the other.
+#[test]
+fn flags_bit_14_marks_the_syntax() {
+    let marker = RuleId::Sync(SyncRule::InvalidFlagsSyntaxMarker);
+    let crc = RuleId::Sync(SyncRule::MajorSyncCrcMismatch);
+
+    let fbb = diagnostics_of(&map_flags(FBB_COPY, MAJOR_SYNC_FBB, 0, |flags| {
+        flags & !0x4000
+    }));
+    assert!(fired(&fbb, marker), "FBB must set bit 14: {fbb:?}");
+    assert!(!fired(&fbb, crc), "the edit repairs the CRC: {fbb:?}");
+
+    let fba = diagnostics_of(&map_flags(FBA_2CH, MAJOR_SYNC_FBA, 0, |flags| {
+        flags | 0x4000
+    }));
+    assert!(fired(&fba, marker), "FBA must leave bit 14 clear: {fba:?}");
+    assert!(!fired(&fba, crc), "the edit repairs the CRC: {fba:?}");
+}
+
+/// The reserved masks differ: bit 11 selects a restricted eight-channel presentation in
+/// FBA and is reserved in FBB.
+#[test]
+fn flags_reserved_bits_are_syntax_specific() {
+    let reserved = RuleId::Sync(SyncRule::ReservedFlagsNonZero);
+
+    let fbb = diagnostics_of(&map_flags(FBB_COPY, MAJOR_SYNC_FBB, 0, |flags| {
+        flags | 0x0800
+    }));
+    assert!(fired(&fbb, reserved), "bit 11 is reserved in FBB: {fbb:?}");
+
+    let fba = diagnostics_of(&map_flags(FBA_2CH, MAJOR_SYNC_FBA, 0, |flags| {
+        flags | 0x0800
+    }));
+    assert!(
+        !fired(&fba, reserved),
+        "bit 11 is meaningful in FBA: {fba:?}"
+    );
+}
+
+/// Only the meaningful bits have to be constant. A reserved bit that changes between
+/// major syncs is a reserved-bit violation, not a change of configuration.
+#[test]
+fn flags_constancy_covers_only_the_meaningful_bits() {
+    let mismatch = RuleId::Sync(SyncRule::FlagsMismatch);
+
+    let reserved_bit = diagnostics_of(&map_flags(FBB_COPY, MAJOR_SYNC_FBB, 1, |flags| flags | 1));
+    assert!(
+        fired(&reserved_bit, RuleId::Sync(SyncRule::ReservedFlagsNonZero)),
+        "{reserved_bit:?}"
+    );
+    assert!(!fired(&reserved_bit, mismatch), "{reserved_bit:?}");
+
+    let meaningful_bit = diagnostics_of(&map_flags(FBB_COPY, MAJOR_SYNC_FBB, 1, |flags| {
+        flags | 0x8000
+    }));
+    assert!(fired(&meaningful_bit, mismatch), "{meaningful_bit:?}");
+}
+
+/// FBB defines only the low nibble of `substream_info`, and only four of its sixteen
+/// values. 0x05 is one of them, and used to be read as FBA reserved bits.
+#[test]
+fn fbb_substream_info_is_a_low_nibble_whitelist() {
+    let invalid = RuleId::Sync(SyncRule::InvalidSubstreamInfo);
+
+    assert!(!fired(
+        &diagnostics_of(FBB_COPY),
+        RuleId::Sync(SyncRule::ReservedSubstreamInfo)
+    ));
+
+    let upper = diagnostics_of(&set_substream_info(FBB_COPY, MAJOR_SYNC_FBB, 0, 0xF5));
+    assert!(
+        upper.is_empty(),
+        "the upper nibble carries nothing: {upper:?}"
+    );
+
+    for value in [0x06, 0x08, 0x0C] {
+        let diagnostics = diagnostics_of(&set_substream_info(FBB_COPY, MAJOR_SYNC_FBB, 0, value));
+        assert!(
+            fired(&diagnostics, invalid),
+            "{value:#04X}: {diagnostics:?}"
+        );
+    }
+
+    for value in [0x04, 0x07] {
+        let diagnostics = diagnostics_of(&set_substream_info(FBB_COPY, MAJOR_SYNC_FBB, 0, value));
+        assert!(
+            !fired(&diagnostics, invalid),
+            "{value:#04X}: {diagnostics:?}"
+        );
+    }
+}
+
+/// Bit 3 is the only presence bit in FBB: it says substream 1 is also to be decoded, so
+/// the stream has to carry one.
+#[test]
+fn fbb_substream_info_bit_3_needs_a_second_substream() {
+    let rule = RuleId::Sync(SyncRule::SubstreamCountInsufficient);
+
+    let one_substream = diagnostics_of(&set_substream_info(FBB_COPY, MAJOR_SYNC_FBB, 0, 0x0D));
+    assert!(fired(&one_substream, rule), "{one_substream:?}");
+
+    assert!(
+        !fired(&diagnostics_of(FBB_6CH), rule),
+        "fbb_6ch carries the substream it claims"
+    );
+}
+
+/// FBB has no `extended_substream_info`: the four bits before `substream_info` are
+/// wholly reserved. Reading them as one made a conformant stream look incompatible with
+/// itself.
+#[test]
+fn fbb_has_no_extended_substream_info() {
+    let diagnostics = diagnostics_of(&set_substream_info(FBB_COPY, MAJOR_SYNC_FBB, 0x1, 0x05));
+
+    assert!(
+        fired(
+            &diagnostics,
+            RuleId::Sync(SyncRule::ReservedBeforeSubstreamInfo)
+        ),
+        "{diagnostics:?}"
+    );
+    assert!(
+        !fired(
+            &diagnostics,
+            RuleId::Sync(SyncRule::SubstreamInfoInCompatible)
+        ),
+        "{diagnostics:?}"
+    );
+    assert!(
+        !fired(
+            &diagnostics,
+            RuleId::Sync(SyncRule::ReservedExtendedSubstreamInfo)
+        ),
+        "{diagnostics:?}"
+    );
+
+    // It describes the configuration, so it is reported once and not per major sync.
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+}
+
+/// `hdcd_process` and the six bits after it are one block the syntax expects to be zero.
+/// Finding it needs the FBB `channel_meaning` layout: under the FBA one those bits are
+/// the tail of `eightch_source_format`.
+#[test]
+fn fbb_channel_meaning_reserved_block_is_reported() {
+    let data = edit_major_syncs(FBB_COPY, MAJOR_SYNC_FBB, 0, |out, at| out[at + 24] |= 0x80);
+    let diagnostics = diagnostics_of(&data);
+
+    assert!(
+        fired(
+            &diagnostics,
+            RuleId::Sync(SyncRule::ReservedChannelMeaningNonZero)
+        ),
+        "{diagnostics:?}"
+    );
 }

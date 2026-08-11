@@ -709,6 +709,34 @@ mod tests {
         assert_eq!(ms.format_info.sampling_frequency_1().unwrap(), 48000);
     }
 
+    /// The FBB `channel_meaning` is its own 64-bit structure. It is the same width as the
+    /// FBA one and in the same place, so the CRC and everything after it come out right
+    /// either way; only the field values say which layout was read.
+    #[test]
+    fn fbb_channel_meaning_is_read_with_the_fbb_layout() {
+        let au = first_au(crate::process::EXAMPLE_DATA_FBB).expect("an access unit");
+        let ms = au.major_sync_info.as_ref().expect("a major sync");
+
+        assert!(ms.channel_meaning.fba().is_none(), "not the FBA layout");
+        let cm = ms.channel_meaning.fbb().expect("the FBB layout");
+
+        assert_eq!(cm.fs, 10);
+        assert_eq!(cm.wordwidth, 24);
+        assert_eq!(cm.channel_occupancy, 0x3F);
+        assert_eq!(cm.mlp_multi_channel_type, 0);
+        assert_eq!(cm.speaker_layout, 0);
+        assert_eq!(cm.copy_protection, 0);
+        assert_eq!(cm.level_control, 0x8080);
+        assert!(!cm.hdcd_process);
+        assert_eq!(cm.reserved2, 0);
+        assert_eq!(cm.source_format, 0);
+        assert_eq!(cm.summary_info, 0);
+
+        // The last bit of the block is the last bit of summary_info, not the FBA
+        // extra_channel_meaning_present, so nothing follows it but the CRC.
+        assert!(ms.channel_meaning.extra_channel_meaning().is_none());
+    }
+
     /// FBA is unaffected by the FBB work.
     #[test]
     fn fba_stream_still_parses() {
@@ -717,15 +745,17 @@ mod tests {
         assert_eq!(ms.format_sync, crate::structs::sync::MAJOR_SYNC_FBA);
     }
 
-    /// A six-channel copy-of two-channel FBB access unit. It carries `substream_info` 0x05
-    /// (masked 0x04) and sets `extra_channel_meaning_present`, both of which are FBA-only
-    /// rules: applying them rejected 0x04 and read the extra channel meaning block past
-    /// the major sync info CRC, so no frame came out at all.
+    /// A single-substream FBB access unit carrying `substream_info` 0x05. Judged by the
+    /// FBA rules, its low two bits looked like reserved bits set and the last bit of its
+    /// channel_meaning looked like `extra_channel_meaning_present`, which read the block
+    /// that follows past the major sync info CRC, so no frame came out at all.
     #[test]
     fn fbb_unextractable_stream_extracts() {
         let au = first_au(crate::process::EXAMPLE_DATA_FBB_UNEXTRACTABLE).expect("an access unit");
         let ms = au.major_sync_info.as_ref().expect("a major sync");
         assert_eq!(ms.format_sync, crate::structs::sync::MAJOR_SYNC_FBB);
+        assert_eq!(ms.substream_info, 0x05);
+        assert_eq!(ms.channel_meaning.fbb().expect("the FBB layout").fs, 10);
     }
 
     /// The major-sync repetition limit differs by format: 128 access units for FBA, 32 for

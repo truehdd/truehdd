@@ -521,6 +521,12 @@ pub enum SyncError {
     ReservedFlagsNonZero(u16),
 
     #[error(
+        "Bit 14 of flags marks the syntax: it must be clear in an FBA stream and set in an \
+        FBB one. Read {0:#04X}"
+    )]
+    InvalidFlagsSyntaxMarker(u16),
+
+    #[error(
         "Flags must be constant throughout the stream. Read {read:#04X}, expected {expected:#04X}"
     )]
     FlagsMismatch { read: u16, expected: u16 },
@@ -549,6 +555,15 @@ pub enum SyncError {
 
     #[error("Reserved bits in extended_substream_info should be 0. Read {0:#02X}")]
     ReservedExtendedSubstreamInfo(u8),
+
+    #[error(
+        "The four bits before substream_info are reserved in an FBB stream and should be 0. \
+        Read {0:#X}"
+    )]
+    ReservedBeforeSubstreamInfo(u8),
+
+    #[error("Reserved bits in channel_meaning should be 0. Read {0:#04X}")]
+    ReservedChannelMeaningNonZero(u8),
 
     #[error(
         "extended_substream_info must be constant throughout the FBA stream. Read {read:#X}, expected {expected:#X}"

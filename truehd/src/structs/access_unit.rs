@@ -287,10 +287,7 @@ impl AccessUnit {
             )
             .ok(),
             3 => {
-                let ext_meaning = major_sync_info
-                    .channel_meaning
-                    .extra_channel_meaning
-                    .as_ref()?;
+                let ext_meaning = major_sync_info.channel_meaning.extra_channel_meaning()?;
 
                 if ext_meaning.dyn_object_only && ext_meaning.lfe_present || ext_meaning.lfe_only {
                     Some(vec![ChannelLabel::LFE])
@@ -540,7 +537,7 @@ impl AccessUnit {
         let base: u64 = 32
             + match &au.major_sync_info {
                 Some(ms) => {
-                    224 + match &ms.channel_meaning.extra_channel_meaning {
+                    224 + match ms.channel_meaning.extra_channel_meaning() {
                         Some(ecm) if is_fba => 16 * (ecm.extra_channel_meaning_length as u64 + 1),
                         _ => 0,
                     }

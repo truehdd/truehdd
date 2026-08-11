@@ -11,7 +11,8 @@ use truehd::process::{
     parse::Parser,
 };
 use truehd::structs::access_unit::AccessUnit;
-use truehd::structs::channel::{ChannelGroup, ChannelLabel};
+use truehd::structs::channel::{ChannelGroup, ChannelLabel, FbaChannelMeaning, FbbChannelMeaning};
+use truehd::structs::sync::MAJOR_SYNC_FBB;
 
 pub fn cmd_info(args: &InfoArgs, cli: &Cli, multi: Option<&MultiProgress>) -> Result<()> {
     log::info!("Analyzing TrueHD stream: {}", args.input.display());
@@ -281,6 +282,7 @@ struct StreamInfo {
     peak_data_rate: u32,
     substreams: usize,
     is_atmos: bool,
+    fbb_channel_meaning: Option<FbbChannelMeaning>,
 }
 
 impl StreamInfo {
@@ -293,7 +295,11 @@ impl StreamInfo {
                 * major_sync.format_info.sampling_frequency_1()?)
                 / 16000,
             substreams: major_sync.substreams,
-            is_atmos: major_sync.substream_info >> 7 != 0,
+            // Bit 7 of substream_info selects the object presentation in FBA; in FBB the
+            // upper nibble carries nothing.
+            is_atmos: major_sync.format_sync != MAJOR_SYNC_FBB
+                && major_sync.substream_info >> 7 != 0,
+            fbb_channel_meaning: major_sync.channel_meaning.fbb().cloned(),
         })
     }
 }
@@ -307,6 +313,29 @@ fn display_stream_info(info: &StreamInfo) {
     println!("  Number of substreams      {}", info.substreams);
     println!("  Dolby Atmos               {}", info.is_atmos);
     println!();
+
+    if let Some(cm) = &info.fbb_channel_meaning {
+        display_fbb_channel_meaning(cm);
+    }
+}
+
+/// The FBB `channel_meaning` block, printed under the field names the bitstream uses.
+///
+/// Only `hdcd_process` has an agreed reading; the rest are reported raw rather than
+/// mapped onto a table this crate cannot demonstrate.
+fn display_fbb_channel_meaning(cm: &FbbChannelMeaning) {
+    println!("Channel Meaning (DVD-Audio)");
+    println!("  fs                        {}", cm.fs);
+    println!("  wordwidth                 {}", cm.wordwidth);
+    println!("  channel_occupancy         {:#04X}", cm.channel_occupancy);
+    println!("  mlp_multi_channel_type    {}", cm.mlp_multi_channel_type);
+    println!("  speaker_layout            {:#05X}", cm.speaker_layout);
+    println!("  copy_protection           {}", cm.copy_protection);
+    println!("  level_control             {:#06X}", cm.level_control);
+    println!("  hdcd_process              {}", cm.hdcd_process);
+    println!("  source_format             {}", cm.source_format);
+    println!("  summary_info              {:#04X}", cm.summary_info);
+    println!();
 }
 
 #[derive(Default, Clone)]
@@ -318,8 +347,9 @@ struct PresentationInfo {
     sixch_ex: Option<String>,
     assignments: Vec<ChannelLabel>,
     control: Option<bool>,
-    dialogue_level: i8,
-    mix_level: u8,
+    // Absent for a syntax whose channel_meaning carries no per-presentation levels.
+    dialogue_level: Option<i8>,
+    mix_level: Option<u8>,
     // 16ch
     chan_distribution: Option<bool>,
 }
@@ -378,11 +408,13 @@ fn display_audio_control_info(info: &PresentationInfo) {
         println!("    DRC on by default       {control}");
     }
 
-    println!(
-        "    Dialogue Level          {:>3} dBFS",
-        info.dialogue_level
-    );
-    println!("    Mix Level               {:>3} dB", info.mix_level);
+    if let Some(dialogue_level) = info.dialogue_level {
+        println!("    Dialogue Level          {dialogue_level:>3} dBFS");
+    }
+
+    if let Some(mix_level) = info.mix_level {
+        println!("    Mix Level               {mix_level:>3} dB");
+    }
 
     if let Some(chan_distribution) = &info.chan_distribution {
         println!("    Channel distribution    {chan_distribution}");
@@ -413,7 +445,8 @@ impl<'a> PresentationBuilder<'a> {
         major_sync: &'a truehd::structs::sync::MajorSyncInfo,
         access_unit: &'a AccessUnit,
     ) -> Self {
-        let presentation_map = PresentationMap::with_substream_info(
+        let presentation_map = PresentationMap::for_format_sync(
+            major_sync.format_sync,
             major_sync.substream_info,
             major_sync.extended_substream_info,
         );
@@ -426,6 +459,10 @@ impl<'a> PresentationBuilder<'a> {
     }
 
     fn build_all_presentations(&self) -> Vec<PresentationInfo> {
+        if self.major_sync.format_sync == MAJOR_SYNC_FBB {
+            return self.build_fbb_presentations();
+        }
+
         let mut presentations = Vec::new();
         let mut last_presentation = PresentationInfo::default();
 
@@ -444,14 +481,42 @@ impl<'a> PresentationBuilder<'a> {
         presentations
     }
 
+    /// FBB declares one presentation, or two when substream 1 is also to be decoded.
+    ///
+    /// None of the FBA per-presentation metadata (channel modifiers, dialogue norm, mix
+    /// level, Surround EX) exists in this syntax, so a presentation is just its channel
+    /// count and where it sits in the map.
+    fn build_fbb_presentations(&self) -> Vec<PresentationInfo> {
+        let declared = if self.major_sync.substream_info & 8 != 0 {
+            2
+        } else {
+            1
+        };
+
+        (0..declared.min(self.major_sync.substreams))
+            .map(|index| {
+                let presentation = PresentationInfo {
+                    channels: self.channels_of_substream(index),
+                    ..Default::default()
+                };
+
+                self.finalize_presentation(presentation, index)
+            })
+            .collect()
+    }
+
+    fn channels_of_substream(&self, index: usize) -> u8 {
+        self.access_unit.substream_segment[index].block[0]
+            .restart_header
+            .as_ref()
+            .unwrap()
+            .max_matrix_chan
+            + 1
+    }
+
     fn build_presentation_for_substream(&self, index: usize) -> PresentationInfo {
         let mut presentation = PresentationInfo {
-            channels: self.access_unit.substream_segment[index].block[0]
-                .restart_header
-                .as_ref()
-                .unwrap()
-                .max_matrix_chan
-                + 1,
+            channels: self.channels_of_substream(index),
             ..Default::default()
         };
 
@@ -466,20 +531,30 @@ impl<'a> PresentationBuilder<'a> {
         presentation
     }
 
+    /// The per-presentation metadata below is the FBA `channel_meaning`, which an FBB
+    /// stream does not carry; those presentations are built by
+    /// [`build_fbb_presentations`](Self::build_fbb_presentations) instead.
+    fn fba_channel_meaning(&self) -> &FbaChannelMeaning {
+        self.major_sync
+            .channel_meaning
+            .fba()
+            .expect("an FBA major sync carries the FBA channel_meaning")
+    }
+
     fn configure_twoch_presentation(&self, presentation: &mut PresentationInfo) {
         let format_info = &self.major_sync.format_info;
-        let channel_meaning = &self.major_sync.channel_meaning;
+        let channel_meaning = self.fba_channel_meaning();
 
         presentation.twoch_format =
             Some(ChannelGroup::from_modifier(format_info.twoch_decoder_channel_modifier).unwrap());
         presentation.control = Some(channel_meaning.twoch_control_enabled);
-        presentation.dialogue_level = -(channel_meaning.twoch_dialogue_norm as i8);
-        presentation.mix_level = channel_meaning.twoch_mix_level + 70;
+        presentation.dialogue_level = Some(-(channel_meaning.twoch_dialogue_norm as i8));
+        presentation.mix_level = Some(channel_meaning.twoch_mix_level + 70);
     }
 
     fn configure_sixch_presentation(&self, presentation: &mut PresentationInfo) {
         let format_info = &self.major_sync.format_info;
-        let channel_meaning = &self.major_sync.channel_meaning;
+        let channel_meaning = self.fba_channel_meaning();
 
         let assignment = format_info.sixch_decoder_channel_assignment;
         if assignment == 1 {
@@ -503,13 +578,13 @@ impl<'a> PresentationBuilder<'a> {
         presentation.assignments =
             ChannelLabel::from_sixch_channel(format_info.sixch_decoder_channel_assignment).unwrap();
         presentation.control = Some(channel_meaning.sixch_control_enabled);
-        presentation.dialogue_level = -(channel_meaning.sixch_dialogue_norm as i8);
-        presentation.mix_level = channel_meaning.sixch_mix_level + 70;
+        presentation.dialogue_level = Some(-(channel_meaning.sixch_dialogue_norm as i8));
+        presentation.mix_level = Some(channel_meaning.sixch_mix_level + 70);
     }
 
     fn configure_eightch_presentation(&self, presentation: &mut PresentationInfo) {
         let format_info = &self.major_sync.format_info;
-        let channel_meaning = &self.major_sync.channel_meaning;
+        let channel_meaning = self.fba_channel_meaning();
 
         presentation.assignments = ChannelLabel::from_eightch_channel(
             format_info.eightch_decoder_channel_assignment,
@@ -517,19 +592,22 @@ impl<'a> PresentationBuilder<'a> {
         )
         .unwrap();
         presentation.control = Some(channel_meaning.eightch_control_enabled);
-        presentation.dialogue_level = -(channel_meaning.eightch_dialogue_norm as i8);
-        presentation.mix_level = channel_meaning.eightch_mix_level + 70;
+        presentation.dialogue_level = Some(-(channel_meaning.eightch_dialogue_norm as i8));
+        presentation.mix_level = Some(channel_meaning.eightch_mix_level + 70);
     }
 
     fn configure_sixteench_presentation(&self, presentation: &mut PresentationInfo) {
-        let channel_meaning = &self.major_sync.channel_meaning;
+        // The object presentation reports levels even when the block that carries them is
+        // absent, in which case they are the neutral pair.
+        presentation.dialogue_level = Some(0);
+        presentation.mix_level = Some(70);
 
-        let Some(extra) = &channel_meaning.extra_channel_meaning else {
+        let Some(extra) = self.major_sync.channel_meaning.extra_channel_meaning() else {
             return;
         };
 
-        presentation.dialogue_level = -(extra.sixteench_dialogue_norm as i8);
-        presentation.mix_level = extra.sixteench_mix_level + 70;
+        presentation.dialogue_level = Some(-(extra.sixteench_dialogue_norm as i8));
+        presentation.mix_level = Some(extra.sixteench_mix_level + 70);
 
         if extra.dyn_object_only && extra.lfe_present {
             presentation.assignments = vec![ChannelLabel::LFE];

@@ -59,8 +59,10 @@ impl Accumulator {
     ///
     /// FBB indexes its cap tables with `substream_info - 4` and never checks the 8- or
     /// 16-channel sums; the 8-channel contribution is not even accumulated for FBB.
+    ///
+    /// Only the low nibble of `substream_info` is defined in FBB, so only it selects a cap.
     pub fn fbb_cap(&self, substream_info: u8) -> Option<usize> {
-        let index = (substream_info as usize).wrapping_sub(4);
+        let index = (substream_info as usize & 0xF).wrapping_sub(4);
 
         match self {
             Accumulator::Substream0 => Some(FBB_SUBSTREAM0_CAP.get(index).copied().unwrap_or(0)),

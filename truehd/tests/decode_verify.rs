@@ -31,11 +31,11 @@ const FBA_ATMOS_CBI_SLICE: &[u8] = include_bytes!("assets/fba_atmos_cbi.mlp");
 /// 88 access units, 3520 samples at 48 kHz.
 const FBB_6CH_SLICE: &[u8] = include_bytes!("assets/fbb_6ch.mlp");
 
-/// Access units 512..600 of an FBB (MLP) encode with one substream: a
-/// two-channel independent presentation whose six- and eight-channel
-/// presentations are copies of it (substream_info 0x04). Its channel_meaning
-/// sets the bit FBA uses as extra_channel_meaning_present, so it regresses the
-/// FBB major sync handling. 88 access units, 3520 samples at 48 kHz.
+/// Access units 512..600 of an FBB (MLP) encode with one substream and
+/// substream_info 0x05, so it declares exactly one decodable substream. The
+/// last bit of its channel_meaning is the one FBA reads as
+/// extra_channel_meaning_present, so it regresses the FBB major sync handling.
+/// 88 access units, 3520 samples at 48 kHz.
 const FBB_COPY_SLICE: &[u8] = include_bytes!("assets/fbb_copy.mlp");
 
 /// FNV-1a 64 digest of decoded PCM: every valid sample of every decoded
@@ -347,11 +347,11 @@ fn fbb_six_channel_slice_is_lossless() {
     assert_eq!(p0.digest, 0x4646_6525_2D6E_4F3E, "downmix PCM changed");
 }
 
-/// FBB stream whose higher presentations are copies of the two-channel one
-/// and whose channel_meaning sets the bit FBA reads as
-/// extra_channel_meaning_present. The extractor used to find no frames in it
-/// at all. It must extract, parse, decode bit-exact against the source WAVs,
-/// and resolve a request for the copy presentation to the copied one.
+/// FBB stream declaring one decodable substream, whose channel_meaning sets
+/// the bit FBA reads as extra_channel_meaning_present. The extractor used to
+/// find no frames in it at all. It must extract, parse, decode bit-exact
+/// against the source WAVs, and resolve a request for a presentation it does
+/// not declare to the one it does.
 #[test]
 fn fbb_copy_of_two_slice_decodes() {
     let mut extractor = Extractor::default();
@@ -365,7 +365,7 @@ fn fbb_copy_of_two_slice_decodes() {
     assert_eq!(p0.samples, 3520);
     assert_eq!(p0.digest, 0x9ABC_9B5F_237F_2DEE, "PCM differs from source");
 
-    // Requesting presentation 1 (a copy of 0) must decode presentation 0.
+    // Requesting a presentation this stream does not declare must decode the one it does.
     let copy = decode_stream(FBB_COPY_SLICE, require(&[1]), None).unwrap();
     assert!(copy[1].is_none());
     let resolved = copy[0].as_ref().unwrap();

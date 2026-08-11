@@ -13,9 +13,9 @@ use crate::process::decode::DecoderState;
 use crate::process::parse::ParserState;
 use crate::structs::filter::{CoeffType, FilterCoeffs};
 use crate::structs::restart_header::GuardsField;
-use crate::structs::sync::MAJOR_SYNC_FBA;
+use crate::structs::sync::MAJOR_SYNC_FBB;
 use crate::utils::bitstream_io::BsIoSliceReader;
-use crate::utils::errors::ChannelError;
+use crate::utils::errors::{ChannelError, SyncError};
 
 /// Extended channel meaning information for 16-channel presentations.
 ///
@@ -93,8 +93,12 @@ impl ExtraChannelMeaning {
     }
 }
 
+/// The `channel_meaning` block of an FBA (Dolby TrueHD) major sync.
+///
+/// 64 bits of presentation-level metadata, optionally followed by an
+/// [`ExtraChannelMeaning`] block.
 #[derive(Debug, Clone, Default)]
-pub struct ChannelMeaning {
+pub struct FbaChannelMeaning {
     pub heavy_drc_start_up_gain: i8,
     pub twoch_control_enabled: bool,
     pub sixch_control_enabled: bool,
@@ -114,9 +118,110 @@ pub struct ChannelMeaning {
     pub extra_channel_meaning: Option<ExtraChannelMeaning>,
 }
 
+/// The `channel_meaning` block of an FBB (DVD-Audio) major sync.
+///
+/// Also 64 bits, and in the same place as [`FbaChannelMeaning`], but an entirely
+/// different structure: it describes the PCM source the packing was applied to rather
+/// than a set of decoder presentations. Because the two are the same width, reading the
+/// wrong one still leaves the bit reader aligned and the major sync CRC intact, so the
+/// syntax has to be dispatched on rather than discovered.
+#[derive(Debug, Clone, Default)]
+pub struct FbbChannelMeaning {
+    pub fs: u8,
+    pub wordwidth: u8,
+    pub channel_occupancy: u8,
+    pub mlp_multi_channel_type: u8,
+    pub speaker_layout: u16,
+    pub copy_protection: u8,
+    pub level_control: u16,
+
+    /// The source PCM carries control data in its least significant bits.
+    pub hdcd_process: bool,
+
+    pub reserved2: u8,
+    pub source_format: u8,
+    pub summary_info: u8,
+}
+
+impl FbbChannelMeaning {
+    fn read(state: &mut ParserState, reader: &mut BsIoSliceReader) -> Result<Self> {
+        let cm = FbbChannelMeaning {
+            fs: reader.get_n(5)?,
+            wordwidth: reader.get_n(5)?,
+            channel_occupancy: reader.get_n(6)?,
+            mlp_multi_channel_type: reader.get_n(3)?,
+            speaker_layout: reader.get_n(10)?,
+            copy_protection: reader.get_n(3)?,
+            level_control: reader.get_n(16)?,
+            hdcd_process: reader.get()?,
+            reserved2: reader.get_n(6)?,
+            source_format: reader.get_n(4)?,
+            summary_info: reader.get_n(5)?,
+        };
+
+        // hdcd_process and the six bits after it form one block expected to be zero, so a
+        // set hdcd_process is reported the same way a reserved bit is.
+        let reserved = u8::from(cm.hdcd_process) << 6 | cm.reserved2;
+
+        if reserved != 0 {
+            log_or_err!(
+                state,
+                log::Level::Debug,
+                anyhow!(SyncError::ReservedChannelMeaningNonZero(reserved)),
+                reader
+            );
+        }
+
+        Ok(cm)
+    }
+}
+
+/// The `channel_meaning` block, in whichever of the two layouts the syntax calls for.
+#[derive(Debug, Clone)]
+pub enum ChannelMeaning {
+    Fba(FbaChannelMeaning),
+    Fbb(FbbChannelMeaning),
+}
+
+impl Default for ChannelMeaning {
+    fn default() -> Self {
+        Self::Fba(FbaChannelMeaning::default())
+    }
+}
+
 impl ChannelMeaning {
     pub fn read(state: &mut ParserState, reader: &mut BsIoSliceReader) -> Result<Self> {
-        let mut cm = ChannelMeaning {
+        match state.format_sync {
+            MAJOR_SYNC_FBB => Ok(Self::Fbb(FbbChannelMeaning::read(state, reader)?)),
+            _ => Ok(Self::Fba(FbaChannelMeaning::read(state, reader)?)),
+        }
+    }
+
+    /// The FBA block, or `None` for a stream whose syntax does not carry one.
+    pub fn fba(&self) -> Option<&FbaChannelMeaning> {
+        match self {
+            Self::Fba(cm) => Some(cm),
+            Self::Fbb(_) => None,
+        }
+    }
+
+    /// The FBB block, or `None` for a stream whose syntax does not carry one.
+    pub fn fbb(&self) -> Option<&FbbChannelMeaning> {
+        match self {
+            Self::Fbb(cm) => Some(cm),
+            Self::Fba(_) => None,
+        }
+    }
+
+    /// The extra channel meaning block, which only the FBA syntax can carry.
+    pub fn extra_channel_meaning(&self) -> Option<&ExtraChannelMeaning> {
+        self.fba()?.extra_channel_meaning.as_ref()
+    }
+}
+
+impl FbaChannelMeaning {
+    fn read(state: &mut ParserState, reader: &mut BsIoSliceReader) -> Result<Self> {
+        let mut cm = FbaChannelMeaning {
             heavy_drc_start_up_gain: reader.get_s(6)?,
             twoch_control_enabled: reader.get()?,
             sixch_control_enabled: reader.get()?,
@@ -163,12 +268,7 @@ impl ChannelMeaning {
             }
         }
 
-        // The extra channel meaning block carries the 16-channel / object presentation, an
-        // FBA-only feature. An FBB major sync info ends with this bit, so reading the block
-        // would consume the major_sync_info CRC as payload and fail the CRC check.
-        if cm.extra_channel_meaning_present
-            && state.format_sync == MAJOR_SYNC_FBA
-        {
+        if cm.extra_channel_meaning_present {
             cm.extra_channel_meaning = Some(ExtraChannelMeaning::read(state, reader)?);
 
             // is this even needed?

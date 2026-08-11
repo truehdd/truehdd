@@ -8,7 +8,12 @@
 //! ## Format Types
 //!
 //! - **FBA Format** (0xF8726FBA): Dolby TrueHD format
-//! - **FBB Format** (0xF8726FBB): Meridian format (not implemented)
+//! - **FBB Format** (0xF8726FBB): Meridian MLP, as carried on DVD-Audio
+//!
+//! The two syntaxes share the layout of the major sync but not its meaning. `flags`, the
+//! twelve bits before `channel_meaning`, `channel_meaning` itself and the presentation map
+//! derived from `substream_info` all differ, and none of the differences changes a field
+//! width, so a reader that does not dispatch on the format sync still passes the CRC.
 //!
 //! ## Sample Counts
 //!
@@ -36,6 +41,20 @@ pub const MAJOR_SYNC_FBA: u32 = 0xF8_72_6F_BA;
 /// 32-bit sync word (0xF8726FBB) identifying Meridian MLP streams.
 pub const MAJOR_SYNC_FBB: u32 = 0xF8_72_6F_BB;
 
+/// Bit 14 of `flags`, which marks which of the two syntaxes the stream is.
+pub const FLAGS_SYNTAX_MARKER: u16 = 0x4000;
+
+/// Bits of `flags` an FBA stream must leave clear: 0-10 and 13.
+pub const FBA_FLAGS_RESERVED: u16 = 0x27FF;
+
+/// Bits of `flags` an FBB stream must leave clear: 0-13.
+pub const FBB_FLAGS_RESERVED: u16 = 0x3FFF;
+
+/// Bits of `flags` that must be constant throughout an FBA stream: 11, 12, 14 and 15.
+pub const FBA_FLAGS_CONSTANT: u16 = 0xD800;
+
+/// Bits of `flags` that must be constant throughout an FBB stream: 14 and 15.
+pub const FBB_FLAGS_CONSTANT: u16 = 0xC000;
 
 /// Base sampling rate for CD-family rates (44.1kHz, 88.2kHz, 176.4kHz).
 pub const BASE_SAMPLING_RATE_CD: u32 = 44100;
@@ -220,8 +239,20 @@ impl MajorSyncInfo {
 
         ms.flags = reader.get_n(16)?;
 
-        // check with bit-14
-        if ms.flags & 0x67FF != 0 {
+        let is_fbb = state.format_sync == MAJOR_SYNC_FBB;
+
+        // Which bits of flags mean anything is syntax-specific, and the two sets are
+        // complementary within each syntax: every bit is either reserved or meaningful and
+        // constant. Bits 11 (restricted eight-channel presentation) and 12 (EVO frame in
+        // EXTRA_DATA) carry meaning in FBA only; bit 14 marks the syntax itself and must be
+        // clear in FBA and set in FBB; bits 13 and 15 behave the same either way.
+        let (reserved_mask, constant_mask) = if is_fbb {
+            (FBB_FLAGS_RESERVED, FBB_FLAGS_CONSTANT)
+        } else {
+            (FBA_FLAGS_RESERVED, FBA_FLAGS_CONSTANT)
+        };
+
+        if ms.flags & reserved_mask != 0 {
             log_or_err!(
                 state,
                 Warn,
@@ -230,7 +261,18 @@ impl MajorSyncInfo {
             )
         }
 
-        if state.has_parsed_au && state.flags != ms.flags {
+        if (ms.flags & FLAGS_SYNTAX_MARKER != 0) != is_fbb {
+            log_or_err!(
+                state,
+                Error,
+                anyhow!(SyncError::InvalidFlagsSyntaxMarker(ms.flags)),
+                reader
+            )
+        }
+
+        // Only the meaningful bits have to stay constant; a reserved bit that changes is
+        // already covered by the reserved test above.
+        if state.has_parsed_au && (state.flags ^ ms.flags) & constant_mask != 0 {
             log_or_err!(
                 state,
                 Warn,
@@ -293,11 +335,18 @@ impl MajorSyncInfo {
             state.substreams = Some(ms.substreams);
         }
 
-        // reserved(2) field is part of extended_substream_info
+        // FBA splits these four bits into reserved(2) and extended_substream_info(2). FBB
+        // reserves all four and has no extended_substream_info; the field is kept so the
+        // raw bits stay reportable.
         ms.extended_substream_info = reader.get_n(4)?;
         ms.substream_info = reader.get_n(8)?;
 
         'check_substream_info: {
+            if is_fbb {
+                Self::check_fbb_substream_info(state, reader, &ms)?;
+                break 'check_substream_info;
+            }
+
             if ms.extended_substream_info >> 2 != 0 {
                 log_or_err!(
                     state,
@@ -469,8 +518,11 @@ impl MajorSyncInfo {
             };
         }
 
-        let presentation_map =
-            PresentationMap::with_substream_info(ms.substream_info, ms.extended_substream_info);
+        let presentation_map = PresentationMap::for_format_sync(
+            state.format_sync,
+            ms.substream_info,
+            ms.extended_substream_info,
+        );
 
         // TODO: check mismatch
         state.presentation_map = Some(presentation_map);
@@ -505,6 +557,81 @@ impl MajorSyncInfo {
         Ok(ms)
     }
 
+    /// The FBB rules for the twelve bits before `channel_meaning`.
+    ///
+    /// FBB has no `extended_substream_info`, no reserved bits inside `substream_info` and
+    /// no presentation derivation from its upper bits. Only the low nibble is defined, it
+    /// must be constant, and only four of its sixteen values are legal.
+    ///
+    /// Everything here describes the stream's configuration rather than the access unit, so
+    /// it is checked once and again whenever the configuration changes, not per major sync.
+    fn check_fbb_substream_info(
+        state: &mut ParserState,
+        reader: &mut BsIoSliceReader,
+        ms: &Self,
+    ) -> Result<()> {
+        let substream_info = ms.substream_info & 0xF;
+
+        if state.has_parsed_au {
+            let changed = substream_info != state.substream_info & 0xF
+                || ms.extended_substream_info != state.extended_substream_info;
+
+            if !changed {
+                return Ok(());
+            }
+
+            state.has_parsed_au = false;
+            state.has_substream_info_changed = true;
+            state.reset_for_branch();
+
+            if substream_info != state.substream_info & 0xF {
+                log_or_err!(
+                    state,
+                    Warn,
+                    anyhow!(SyncError::SubstreamInfoMismatch {
+                        read: ms.substream_info,
+                        expected: state.substream_info
+                    }),
+                    reader
+                )
+            }
+        }
+
+        if ms.extended_substream_info != 0 {
+            log_or_err!(
+                state,
+                log::Level::Debug,
+                anyhow!(SyncError::ReservedBeforeSubstreamInfo(
+                    ms.extended_substream_info
+                )),
+                reader
+            );
+        }
+
+        if !matches!(substream_info, 4 | 5 | 7 | 13) {
+            log_or_err!(
+                state,
+                Error,
+                anyhow!(SyncError::InvalidSubstreamInfo(substream_info)),
+                reader
+            )
+        }
+
+        // Bit 3 is the only presence bit: it says substream 1 is also to be decoded.
+        if substream_info & 8 != 0 && ms.substreams < 2 {
+            log_or_err!(
+                state,
+                Warn,
+                anyhow!(SyncError::SubstreamCountInsufficient { min: 2, bit: 3 }),
+                reader
+            )
+        }
+
+        debug!("substream_info={substream_info:#04X}");
+
+        Ok(())
+    }
+
     pub fn update_decoder_state(&self, state: &mut DecoderState) -> Result<()> {
         self.format_info.update_decoder_state(state)?;
         if state.valid && state.substreams != self.substreams {
@@ -534,7 +661,8 @@ impl MajorSyncInfo {
         state.substream_info = self.substream_info;
         state.extended_substream_info = self.extended_substream_info;
 
-        state.presentation_map = Some(PresentationMap::with_substream_info(
+        state.presentation_map = Some(PresentationMap::for_format_sync(
+            self.format_sync,
             self.substream_info,
             self.extended_substream_info,
         ));

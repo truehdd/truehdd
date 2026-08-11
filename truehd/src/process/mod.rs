@@ -92,6 +92,21 @@ pub struct PresentationMap {
 }
 
 impl PresentationMap {
+    /// The map a major sync declares, derived by the rules of its own syntax.
+    pub fn for_format_sync(
+        format_sync: u32,
+        substream_info: u8,
+        extended_substream_info: u8,
+    ) -> Self {
+        if format_sync == crate::structs::sync::MAJOR_SYNC_FBB {
+            Self::with_fbb_substream_info(substream_info)
+        } else {
+            Self::with_substream_info(substream_info, extended_substream_info)
+        }
+    }
+
+    /// The FBA derivation: `substream_info` bits 2-7 and `extended_substream_info` select
+    /// the 2-, 6-, 8- and 16-channel presentations.
     pub fn with_substream_info(substream_info: u8, extended_substream_info: u8) -> Self {
         Self {
             masks: [
@@ -100,6 +115,19 @@ impl PresentationMap {
                 (substream_info >> 4) & 7,
                 ((substream_info >> 4) & 8) | (7 ^ (7 >> (extended_substream_info & 3))),
             ],
+        }
+    }
+
+    /// The FBB derivation, which shares nothing with the FBA one.
+    ///
+    /// Only the low nibble of `substream_info` is defined, and within it only bit 3 says
+    /// anything about presentations: set, substream 1 is also to be decoded and there is a
+    /// second presentation over substreams 0 and 1; clear, substream 0 alone is decodable
+    /// and the stream declares exactly one presentation. There is no `extended_substream_info`
+    /// and no 8- or 16-channel presentation.
+    pub fn with_fbb_substream_info(substream_info: u8) -> Self {
+        Self {
+            masks: [1, if substream_info & 8 != 0 { 3 } else { 0 }, 0, 0],
         }
     }
 
@@ -272,7 +300,7 @@ fn copy_of_points_down_and_downmix_of_points_up() {
     assert_eq!(fba.presentation_type_by_index(3), PresentationType::Invalid);
 
     // EXAMPLE_DATA_FBB: substream_info 0b00001101, a two-channel downmix of the six-channel
-    let fbb = PresentationMap::with_substream_info(0b00001101, 0);
+    let fbb = PresentationMap::with_fbb_substream_info(0b00001101);
     assert_eq!(fbb.masks, [1, 3, 0, 0]);
     assert_eq!(fbb.max_independent_presentation().unwrap(), 1);
     match fbb.presentation_type_by_index(0) {
@@ -284,6 +312,43 @@ fn copy_of_points_down_and_downmix_of_points_up() {
     assert_eq!(
         fbb.presentation_type_by_index(1),
         PresentationType::Independent
+    );
+}
+
+/// FBB derives its presentations from bit 3 of `substream_info` alone: set, substream 1 is
+/// also to be decoded and there is a second presentation; clear, the stream declares
+/// exactly one. The FBA derivation would instead read `substream_info & 0x0C` as a second
+/// presentation that is a copy of the first, and 0x05 is a value only FBB has.
+#[test]
+fn the_fbb_presentation_map_is_not_the_fba_one() {
+    let one = PresentationMap::with_fbb_substream_info(0x05);
+    assert_eq!(one.masks, [1, 0, 0, 0]);
+    assert_eq!(one.max_independent_presentation(), Some(0));
+    assert_eq!(
+        one.presentation_type_by_index(0),
+        PresentationType::Independent
+    );
+    assert_eq!(one.presentation_type_by_index(1), PresentationType::Invalid);
+
+    // so a decode that asks for the highest presentation gets the only one there is
+    assert_eq!(
+        one.effective_presentations(&[false, false, false, true])
+            .unwrap(),
+        [true, false, false, false]
+    );
+
+    let two = PresentationMap::with_fbb_substream_info(0x0D);
+    assert_eq!(two.masks, [1, 3, 0, 0]);
+    assert_eq!(two.max_independent_presentation(), Some(1));
+
+    // the FBA derivation of the same value, which is what used to be applied
+    assert_eq!(
+        PresentationMap::with_substream_info(0x05, 0).masks,
+        [1, 1, 0, 0]
+    );
+    assert_eq!(
+        PresentationMap::for_format_sync(crate::structs::sync::MAJOR_SYNC_FBB, 0x05, 0).masks,
+        one.masks
     );
 }
 
