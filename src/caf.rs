@@ -1,5 +1,7 @@
 use std::io::{self, Read, Seek, SeekFrom, Write};
 
+use log::debug;
+
 use crate::byteorder::{WriteBytesBe, WriteBytesLe};
 use crate::impl_u32_enum;
 use truehdd_macros::{ToBytes, caf_chunk_type};
@@ -39,12 +41,59 @@ pub struct AudioFormat {
     pub bits_per_channel: u32,
 }
 
+/// The `chan` chunk.
+///
+/// The description count is part of the chunk even when no descriptions follow it;
+/// a reader that does not find it treats the whole chunk as malformed and ignores
+/// the layout, tag and all.
 #[derive(Debug, ToBytes)]
 #[caf_chunk_type(b"chan")]
 pub struct ChannelLayout {
     pub channel_layout_tag: ChannelLayoutTag,
     pub channel_bitmap: ChannelBitmap,
-    pub chennel_description: Vec<ChennelDescription>,
+    pub number_channel_descriptions: u32,
+    pub channel_descriptions: Vec<ChannelDescription>,
+}
+
+impl ChannelLayout {
+    /// A layout named by one of the standard tags.
+    pub fn with_tag(channel_layout_tag: ChannelLayoutTag) -> Self {
+        Self {
+            channel_layout_tag,
+            channel_bitmap: ChannelBitmap::Unused,
+            number_channel_descriptions: 0,
+            channel_descriptions: Vec::new(),
+        }
+    }
+
+    /// A layout spelled out channel by channel, for orders no standard tag names.
+    pub fn with_descriptions(labels: &[ChannelLabel]) -> Self {
+        Self {
+            channel_layout_tag: ChannelLayoutTag::UseChannelDescriptions,
+            channel_bitmap: ChannelBitmap::Unused,
+            number_channel_descriptions: labels.len() as u32,
+            channel_descriptions: labels
+                .iter()
+                .map(|&channel_label| ChannelDescription {
+                    channel_label,
+                    channel_flags: 0,
+                    coordinates: [0.0; 3],
+                })
+                .collect(),
+        }
+    }
+
+    /// The layout that describes `labels`: the standard tag whose channel order they
+    /// match exactly, or a description of each channel when no tag does.
+    ///
+    /// The samples are never reordered to fit a tag, so a stream whose order no tag
+    /// names is described rather than relabelled.
+    pub fn for_channel_labels(labels: &[ChannelLabel]) -> Self {
+        match ChannelLayoutTag::for_channel_labels(labels) {
+            Some(tag) => Self::with_tag(tag),
+            None => Self::with_descriptions(labels),
+        }
+    }
 }
 
 #[allow(non_camel_case_types)]
@@ -83,7 +132,7 @@ pub enum ChannelLayoutTag {
     Pentagonal = (109 << 16) | 5,
     /// Hexagonal (left, right, rear left, rear right, center, rear)
     Hexagonal = (110 << 16) | 6,
-    /// Octagonal (front left, front right, rear left, rear right, front center, rear center, side left, side right)
+    /// Octagonal (left, right, rear left, rear right, center, rear center, wide left, wide right)
     Octagonal = (111 << 16) | 8,
     /// Cube (left, right, rear left, rear right, top left, top right, top rear left, top rear right)
     Cube = (112 << 16) | 8,
@@ -104,7 +153,7 @@ pub enum ChannelLayoutTag {
     MPEG_6_1_A = (125 << 16) | 7,        // L R C LFE Ls Rs Cs
     MPEG_7_1_A = (126 << 16) | 8,        // L R C LFE Ls Rs Lc Rc
     MPEG_7_1_B = (127 << 16) | 8,        // C Lc Rc L R Ls Rs LFE
-    MPEG_7_1_C = (128 << 16) | 8,        // L R C LFE Ls R Rls Rrs
+    MPEG_7_1_C = (128 << 16) | 8,        // L R C LFE Ls Rs Rls Rrs
     EmagicDefault_7_1 = (129 << 16) | 8, // L R Ls Rs C LFE Lc Rc
     SMPTE_DTV = (130 << 16) | 8,         // L R C LFE Ls Rs Lt Rt
 
@@ -139,6 +188,8 @@ pub enum ChannelLayoutTag {
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelBitmap {
+    /// No bitmap: the layout tag or the channel descriptions define the mapping.
+    Unused = 0,
     Left = 1 << 0,
     Right = 1 << 1,
     Center = 1 << 2,
@@ -168,7 +219,7 @@ pub enum ChannelBitmap {
 }
 
 #[derive(Debug, Clone, ToBytes)]
-pub struct ChennelDescription {
+pub struct ChannelDescription {
     pub channel_label: ChannelLabel,
     pub channel_flags: u32,
     pub coordinates: [f32; 3],
@@ -227,6 +278,11 @@ pub enum ChannelLabel {
     /// back center, non diffuse
     CenterSurroundDirect = 44,
 
+    /// Between `VerticalHeightLeft` (top front) and `TopBackLeft` (top rear)
+    LeftTopMiddle = 49,
+    /// Between `VerticalHeightRight` (top front) and `TopBackRight` (top rear)
+    RightTopMiddle = 51,
+
     // first order ambisonic channels
     AmbisonicW = 200,
     AmbisonicX = 201,
@@ -251,6 +307,281 @@ pub enum ChannelLabel {
 impl_u32_enum!(ChannelLayoutTag);
 impl_u32_enum!(ChannelBitmap);
 impl_u32_enum!(ChannelLabel);
+
+/// The channel order each standard layout tag stands for.
+///
+/// A tag is a name for one exact sequence of channels, so it may only be written when
+/// the data is in that sequence. Tags that name the same sequence are listed with the
+/// most conventional one first, which is the one a lookup returns.
+const STANDARD_LAYOUTS: &[(ChannelLayoutTag, &[ChannelLabel])] = {
+    use ChannelLabel::*;
+    use ChannelLayoutTag as Tag;
+
+    &[
+        (Tag::Mono, &[Center]),
+        (Tag::Stereo, &[Left, Right]),
+        (Tag::StereoHeadphones, &[HeadphonesLeft, HeadphonesRight]),
+        (Tag::MatrixStereo, &[LeftTotal, RightTotal]),
+        (Tag::MidSide, &[MSMid, MSSide]),
+        (Tag::XY, &[XYX, XYY]),
+        (
+            Tag::AmbisonicBFormat,
+            &[AmbisonicW, AmbisonicX, AmbisonicY, AmbisonicZ],
+        ),
+        (
+            Tag::Quadraphonic,
+            &[Left, Right, LeftSurround, RightSurround],
+        ),
+        (
+            Tag::Pentagonal,
+            &[Left, Right, LeftSurround, RightSurround, Center],
+        ),
+        (
+            Tag::Hexagonal,
+            &[
+                Left,
+                Right,
+                LeftSurround,
+                RightSurround,
+                Center,
+                CenterSurround,
+            ],
+        ),
+        (
+            Tag::Octagonal,
+            &[
+                Left,
+                Right,
+                LeftSurround,
+                RightSurround,
+                Center,
+                CenterSurround,
+                LeftWide,
+                RightWide,
+            ],
+        ),
+        (Tag::MPEG_3_0_A, &[Left, Right, Center]),
+        (Tag::MPEG_3_0_B, &[Center, Left, Right]),
+        (Tag::MPEG_4_0_A, &[Left, Right, Center, CenterSurround]),
+        (Tag::MPEG_4_0_B, &[Center, Left, Right, CenterSurround]),
+        (
+            Tag::MPEG_5_0_A,
+            &[Left, Right, Center, LeftSurround, RightSurround],
+        ),
+        (
+            Tag::MPEG_5_0_B,
+            &[Left, Right, LeftSurround, RightSurround, Center],
+        ),
+        (
+            Tag::MPEG_5_0_C,
+            &[Left, Center, Right, LeftSurround, RightSurround],
+        ),
+        (
+            Tag::MPEG_5_0_D,
+            &[Center, Left, Right, LeftSurround, RightSurround],
+        ),
+        (
+            Tag::MPEG_5_1_A,
+            &[Left, Right, Center, LFEScreen, LeftSurround, RightSurround],
+        ),
+        (
+            Tag::MPEG_5_1_B,
+            &[Left, Right, LeftSurround, RightSurround, Center, LFEScreen],
+        ),
+        (
+            Tag::MPEG_5_1_C,
+            &[Left, Center, Right, LeftSurround, RightSurround, LFEScreen],
+        ),
+        (
+            Tag::MPEG_5_1_D,
+            &[Center, Left, Right, LeftSurround, RightSurround, LFEScreen],
+        ),
+        (
+            Tag::MPEG_6_1_A,
+            &[
+                Left,
+                Right,
+                Center,
+                LFEScreen,
+                LeftSurround,
+                RightSurround,
+                CenterSurround,
+            ],
+        ),
+        (
+            Tag::MPEG_7_1_A,
+            &[
+                Left,
+                Right,
+                Center,
+                LFEScreen,
+                LeftSurround,
+                RightSurround,
+                LeftCenter,
+                RightCenter,
+            ],
+        ),
+        (
+            Tag::MPEG_7_1_B,
+            &[
+                Center,
+                LeftCenter,
+                RightCenter,
+                Left,
+                Right,
+                LeftSurround,
+                RightSurround,
+                LFEScreen,
+            ],
+        ),
+        (
+            Tag::MPEG_7_1_C,
+            &[
+                Left,
+                Right,
+                Center,
+                LFEScreen,
+                LeftSurround,
+                RightSurround,
+                RearSurroundLeft,
+                RearSurroundRight,
+            ],
+        ),
+        (
+            Tag::EmagicDefault_7_1,
+            &[
+                Left,
+                Right,
+                LeftSurround,
+                RightSurround,
+                Center,
+                LFEScreen,
+                LeftCenter,
+                RightCenter,
+            ],
+        ),
+        (
+            Tag::SMPTE_DTV,
+            &[
+                Left,
+                Right,
+                Center,
+                LFEScreen,
+                LeftSurround,
+                RightSurround,
+                LeftTotal,
+                RightTotal,
+            ],
+        ),
+        (Tag::ITU_2_1, &[Left, Right, CenterSurround]),
+        (Tag::ITU_2_2, &[Left, Right, LeftSurround, RightSurround]),
+        (Tag::DVD_4, &[Left, Right, LFEScreen]),
+        (Tag::DVD_5, &[Left, Right, LFEScreen, CenterSurround]),
+        (
+            Tag::DVD_6,
+            &[Left, Right, LFEScreen, LeftSurround, RightSurround],
+        ),
+        (Tag::DVD_10, &[Left, Right, Center, LFEScreen]),
+        (
+            Tag::DVD_11,
+            &[Left, Right, Center, LFEScreen, CenterSurround],
+        ),
+        (
+            Tag::DVD_18,
+            &[Left, Right, LeftSurround, RightSurround, LFEScreen],
+        ),
+        (
+            Tag::DVD_20,
+            &[
+                Left,
+                Right,
+                LeftSurround,
+                RightSurround,
+                Center,
+                CenterSurround,
+            ],
+        ),
+        (
+            Tag::DVD_21,
+            &[
+                Left,
+                Right,
+                LeftSurround,
+                RightSurround,
+                Center,
+                RearSurroundLeft,
+                RearSurroundRight,
+            ],
+        ),
+        (
+            Tag::AAC_6_0,
+            &[
+                Center,
+                Left,
+                Right,
+                LeftSurround,
+                RightSurround,
+                CenterSurround,
+            ],
+        ),
+        (
+            Tag::AAC_6_1,
+            &[
+                Center,
+                Left,
+                Right,
+                LeftSurround,
+                RightSurround,
+                CenterSurround,
+                LFEScreen,
+            ],
+        ),
+        (
+            Tag::AAC_7_0,
+            &[
+                Center,
+                Left,
+                Right,
+                LeftSurround,
+                RightSurround,
+                RearSurroundLeft,
+                RearSurroundRight,
+            ],
+        ),
+        (
+            Tag::AAC_Octagonal,
+            &[
+                Center,
+                Left,
+                Right,
+                LeftSurround,
+                RightSurround,
+                RearSurroundLeft,
+                RearSurroundRight,
+                CenterSurround,
+            ],
+        ),
+    ]
+};
+
+impl ChannelLayoutTag {
+    /// The standard tag naming exactly this channel order, if one does.
+    pub fn for_channel_labels(labels: &[ChannelLabel]) -> Option<Self> {
+        if labels.is_empty() {
+            return None;
+        }
+
+        STANDARD_LAYOUTS
+            .iter()
+            .find(|(_, order)| *order == labels)
+            .map(|&(tag, _)| tag)
+    }
+
+    /// Channels the tag covers, from its low half.
+    pub fn channel_count(self) -> u32 {
+        self as u32 & 0xFFFF
+    }
+}
 
 /// PCM data type (integer vs floating point)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -630,25 +961,28 @@ impl<W: Write + Seek> CAFWriter<W> {
         self.channel_layout = Some(layout);
     }
 
-    /// Create a basic channel layout for common configurations
-    pub fn set_basic_channel_layout(&mut self, channels: u32) -> io::Result<()> {
-        let layout_tag = match channels {
-            1 => ChannelLayoutTag::Mono,
-            2 => ChannelLayoutTag::Stereo,
-            3 => ChannelLayoutTag::MPEG_3_0_A, // L R C
-            4 => ChannelLayoutTag::Quadraphonic,
-            5 => ChannelLayoutTag::MPEG_5_0_A, // L R C Ls Rs
-            6 => ChannelLayoutTag::MPEG_5_1_A, // L R C LFE Ls Rs
-            8 => ChannelLayoutTag::MPEG_7_1_A, // L R C LFE Ls Rs Lc Rc
-            _ => return Ok(()),                // No standard layout for this channel count
-        };
+    /// Describe the channel order the samples are actually in.
+    ///
+    /// `labels` must name every channel, in the order they are interleaved. A layout is
+    /// only written when it does: with nothing to go on, the file makes no claim rather
+    /// than a guess a player would act on.
+    pub fn set_channel_layout_for_labels(&mut self, labels: &[ChannelLabel], channels: u32) {
+        if labels.len() != channels as usize {
+            if !labels.is_empty() {
+                debug!(
+                    "{} channel label(s) for {channels} channels; writing no channel layout",
+                    labels.len()
+                );
+            }
+            self.channel_layout = None;
+            return;
+        }
 
-        self.channel_layout = Some(ChannelLayout {
-            channel_layout_tag: layout_tag,
-            channel_bitmap: ChannelBitmap::Left, // Not used when layout_tag is set
-            chennel_description: Vec::new(),
-        });
-        Ok(())
+        let layout = ChannelLayout::for_channel_labels(labels);
+        if layout.channel_layout_tag == ChannelLayoutTag::UseChannelDescriptions {
+            debug!("No standard channel layout tag for {labels:?}; describing each channel");
+        }
+        self.channel_layout = Some(layout);
     }
 
     /// Begin writing the CAF file. Must be called before write_data.
@@ -758,17 +1092,20 @@ pub struct CAFWriterStats {
 /// Helper methods for working with TrueHD streams
 impl<W: Write + Seek> CAFWriter<W> {
     /// Configure the writer from TrueHD stream parameters
+    ///
+    /// `channel_labels` is the order the decoder produced, one per channel; an empty
+    /// slice leaves the file without a channel layout.
     pub fn configure_audio_format(
         &mut self,
         sample_rate: u32,
         channels: u32,
         bits_per_channel: u32,
+        channel_labels: &[ChannelLabel],
     ) -> io::Result<()> {
         // Set audio format
         self.set_audio_format(sample_rate as f64, channels, bits_per_channel)?;
 
-        // Set basic channel layout based on channel count
-        self.set_basic_channel_layout(channels)?;
+        self.set_channel_layout_for_labels(channel_labels, channels);
 
         Ok(())
     }
@@ -819,7 +1156,7 @@ mod tests {
 
         // Configure for stereo 24-bit at 48kHz
         writer.set_audio_format(48000.0, 2, 24)?;
-        writer.set_basic_channel_layout(2)?;
+        writer.set_channel_layout_for_labels(&[ChannelLabel::Left, ChannelLabel::Right], 2);
         writer.write_header()?;
 
         // Write some dummy audio data
@@ -845,7 +1182,7 @@ mod tests {
         let cursor = Cursor::new(buffer);
         let mut writer = CAFWriter::new(cursor);
 
-        writer.configure_audio_format(48000, 2, 24)?;
+        writer.configure_audio_format(48000, 2, 24, &[])?;
         writer.write_header()?;
 
         // Test PCM conversion
@@ -1026,7 +1363,7 @@ mod tests {
         let cursor = Cursor::new(buffer);
         let mut writer = CAFWriter::new(cursor);
 
-        writer.configure_audio_format(48000, 2, 24)?;
+        writer.configure_audio_format(48000, 2, 24, &[])?;
         writer.write_header()?;
 
         // Write some data

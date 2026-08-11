@@ -345,6 +345,16 @@ fn fbb_six_channel_slice_is_lossless() {
     assert_eq!(p0.channels, 2);
     assert_eq!(p0.samples, 3520);
     assert_eq!(p0.digest, 0x4646_6525_2D6E_4F3E, "downmix PCM changed");
+
+    // A two-channel FBB presentation is a stereo pair whichever arrangement it
+    // belongs to. The six-channel one carries an arrangement whose order has not
+    // been measured against this decoder, so it stays unstated rather than assumed.
+    assert_eq!(p0.channel_labels, [ChannelLabel::L, ChannelLabel::R]);
+    assert!(
+        p1.channel_labels.is_empty(),
+        "an unmeasured arrangement must not be described: {:?}",
+        p1.channel_labels
+    );
 }
 
 /// FBB stream declaring one decodable substream, whose channel_meaning sets

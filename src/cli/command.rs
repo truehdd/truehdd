@@ -123,11 +123,11 @@ pub enum LogFormat {
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq)]
 pub enum AudioFormat {
-    /// Core Audio Format.
+    /// Core Audio Format. Records the decoded channel order.
     Caf,
-    /// Raw PCM format (24-bit little-endian).
+    /// Raw PCM format (24-bit little-endian). Channels in decoded order.
     Pcm,
-    /// Wave64 format (.wav extension).
+    /// Wave64 format (.wav extension). Channels in decoded order.
     W64,
 }
 

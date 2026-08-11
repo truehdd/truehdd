@@ -16,6 +16,9 @@ use crate::utils::errors::{AccessUnitError, FifoError};
 use crate::utils::fifo::{ACCUMULATORS, Accumulator};
 use crate::utils::perf::Timer;
 
+/// The one FBB `fbb_channel_assignment` whose decoded channel order has been measured.
+const MEASURED_ARRANGEMENT_SURROUND_FIRST: u8 = 20;
+
 /// A parsed access unit containing structured audio data and metadata.
 ///
 /// Access units are the fundamental structural elements of TrueHD bitstreams.
@@ -254,22 +257,20 @@ impl AccessUnit {
         Ok(au)
     }
 
+    /// Channels of a presentation, in the order the decoder outputs them.
+    ///
+    /// `None` where the syntax does not say, so that a caller describing the audio
+    /// leaves the order unstated rather than assuming one.
     pub fn get_channel_labels(&self, presentation_index: usize) -> Option<Vec<ChannelLabel>> {
         let major_sync_info = self.major_sync_info.as_ref()?;
 
+        if major_sync_info.format_sync == MAJOR_SYNC_FBB {
+            return self.fbb_channel_labels(major_sync_info, presentation_index);
+        }
+
         match presentation_index {
             0 => {
-                if self
-                    .substream_segment
-                    .as_ref()
-                    .first()?
-                    .block
-                    .first()?
-                    .restart_header
-                    .as_ref()?
-                    .max_matrix_chan
-                    == 0
-                {
+                if self.presentation_channel_count(0)? == 1 {
                     Some(vec![ChannelLabel::C])
                 } else {
                     Some(vec![ChannelLabel::L, ChannelLabel::R])
@@ -298,6 +299,57 @@ impl AccessUnit {
             }
             _ => None,
         }
+    }
+
+    /// Channels of an FBB presentation, where this decoder's output has been measured.
+    ///
+    /// FBB names its whole channel arrangement with one `fbb_channel_assignment` index
+    /// instead of describing the channels, and what an index stands for is not
+    /// recoverable from the bitstream. Only what has been measured against this
+    /// decoder's own output is reported, so that an unmeasured arrangement leaves the
+    /// order unstated rather than assumed.
+    fn fbb_channel_labels(
+        &self,
+        major_sync_info: &MajorSyncInfo,
+        presentation_index: usize,
+    ) -> Option<Vec<ChannelLabel>> {
+        use ChannelLabel::*;
+
+        let channels = self.presentation_channel_count(presentation_index)?;
+
+        // Measured channel for channel against this decoder's own output for a
+        // six-channel DVD-Audio stream carrying arrangement 20: its surround pair comes
+        // out before the centre and the LFE, not in the conventional 5.1 order. No
+        // other arrangement has been measured, including the other six-channel ones,
+        // which this deliberately does not cover.
+        if major_sync_info.format_info.fbb_channel_assignment == MEASURED_ARRANGEMENT_SURROUND_FIRST
+            && channels == 6
+        {
+            return Some(vec![L, R, Ls, Rs, C, LFE]);
+        }
+
+        // Whatever the arrangement, its first substream is a plain mono or stereo
+        // presentation when that is all it decodes.
+        match (presentation_index, channels) {
+            (0, 1) => Some(vec![C]),
+            (0, 2) => Some(vec![L, R]),
+            _ => None,
+        }
+    }
+
+    /// Channels a presentation decodes, as its restart header states.
+    fn presentation_channel_count(&self, presentation_index: usize) -> Option<usize> {
+        Some(
+            self.substream_segment
+                .as_ref()
+                .get(presentation_index)?
+                .block
+                .first()?
+                .restart_header
+                .as_ref()?
+                .max_matrix_chan as usize
+                + 1,
+        )
     }
 
     /// Access units between this major sync and the previous one.

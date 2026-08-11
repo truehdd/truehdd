@@ -9,6 +9,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+use truehd::structs::channel::ChannelLabel;
 
 const EMPTY_BED_INDICES: &[usize] = &[];
 const TARGET_BED_CHANNELS: usize = 10;
@@ -43,9 +44,15 @@ pub struct DecodeHandler {
     atmos_probing: bool,               // Whether we're still probing for Atmos
     buffered_channel_count: usize,     // Channel count of buffered samples
     buffered_sample_rate: u32,         // Sample rate of buffered samples
+    buffered_channel_labels: Vec<ChannelLabel>, // Channel order of buffered samples
 
     // Cached channel count to avoid recalculation
     effective_channel_count: Option<usize>, // Final channel count for audio writer
+
+    /// Channel order the decoder produced, as the audio writer should describe it.
+    /// Empty once the written channels stop being the decoded ones, which is what
+    /// bed conformance does.
+    channel_labels: Vec<ChannelLabel>,
 
     // Cached bed conformance parameters to avoid recalculation during audio writes
     cached_bed_indices: Option<Vec<usize>>, // Resolved bed indices for performance
@@ -115,6 +122,23 @@ impl ChannelInfo {
             object_channels: 0,
             is_bed_conformed: false,
         }
+    }
+}
+
+/// The channel order to describe in the output file.
+///
+/// The decoder's labels only describe the file while the written channels are the
+/// decoded ones. Bed conformance rewrites the layout around a full 7.1.2 bed, so the
+/// labels no longer say where anything ended up and none are reported.
+fn describing_labels(
+    decoded_labels: &[ChannelLabel],
+    decoded_channels: usize,
+    written_channels: usize,
+) -> Vec<ChannelLabel> {
+    if written_channels == decoded_channels {
+        decoded_labels.to_vec()
+    } else {
+        Vec::new()
     }
 }
 
@@ -188,9 +212,11 @@ impl DecodeHandler {
             atmos_probing,
             buffered_channel_count: 0,
             buffered_sample_rate: 48000,
+            buffered_channel_labels: Vec::new(),
 
             // Cached channel count
             effective_channel_count: None,
+            channel_labels: Vec::new(),
 
             // Cached bed conformance parameters
             cached_bed_indices: None,
@@ -238,6 +264,7 @@ impl DecodeHandler {
                     if self.buffered_channel_count == 0 {
                         self.buffered_channel_count = decoded.channel_count;
                         self.buffered_sample_rate = decoded.sampling_frequency;
+                        self.buffered_channel_labels = decoded.channel_labels.clone();
                     }
 
                     // Add current frame to buffer before finalizing
@@ -330,7 +357,9 @@ impl DecodeHandler {
             self.bed_conform && self.format == AudioFormat::Caf && !self.metadata_only;
         self.buffered_channel_count = 0;
         self.buffered_sample_rate = 48000;
+        self.buffered_channel_labels.clear();
         self.effective_channel_count = None; // Reset cached channel count
+        self.channel_labels.clear();
         self.cached_bed_indices = None; // Reset cached bed conformance parameters
         self.cached_num_object_channels = 0;
         self.cached_bed_channel_map = None;
@@ -370,6 +399,7 @@ impl DecodeHandler {
         if self.buffered_channel_count == 0 {
             self.buffered_channel_count = decoded.channel_count;
             self.buffered_sample_rate = decoded.sampling_frequency;
+            self.buffered_channel_labels = decoded.channel_labels.clone();
             info!(
                 "Starting Atmos probe buffering: {} channels, {} Hz (range: {} AUs)",
                 decoded.channel_count, decoded.sampling_frequency, self.atmos_probe_range
@@ -400,6 +430,11 @@ impl DecodeHandler {
         // Get channel info and cache the count
         let channel_info = self.get_channel_info(self.buffered_channel_count);
         self.effective_channel_count = Some(channel_info.total_channels);
+        self.channel_labels = describing_labels(
+            &self.buffered_channel_labels,
+            self.buffered_channel_count,
+            channel_info.total_channels,
+        );
 
         // Create audio writer with correct channel count
         if let Some(ref base_path) = self.output_path {
@@ -587,7 +622,12 @@ impl DecodeHandler {
         channel_count: usize,
     ) -> Result<AudioWriter> {
         match self.format {
-            AudioFormat::Caf => AudioWriter::create_caf(path, sample_rate, channel_count as u32),
+            AudioFormat::Caf => AudioWriter::create_caf(
+                path,
+                sample_rate,
+                channel_count as u32,
+                &self.channel_labels,
+            ),
             AudioFormat::Pcm => AudioWriter::create_pcm(path),
             AudioFormat::W64 => AudioWriter::create_w64(path, sample_rate, channel_count as u32),
         }
@@ -600,11 +640,17 @@ impl DecodeHandler {
         if self.effective_channel_count.is_none() {
             let channel_info = self.get_channel_info(decoded.channel_count);
             self.effective_channel_count = Some(channel_info.total_channels);
+            self.channel_labels = describing_labels(
+                &decoded.channel_labels,
+                decoded.channel_count,
+                channel_info.total_channels,
+            );
 
             // Also store original channel info for buffering purposes
             if self.buffered_channel_count == 0 {
                 self.buffered_channel_count = decoded.channel_count;
                 self.buffered_sample_rate = decoded.sampling_frequency;
+                self.buffered_channel_labels = decoded.channel_labels.clone();
             }
         }
     }

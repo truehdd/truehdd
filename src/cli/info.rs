@@ -497,6 +497,14 @@ impl<'a> PresentationBuilder<'a> {
             .map(|index| {
                 let presentation = PresentationInfo {
                     channels: self.channels_of_substream(index),
+                    // FBB carries no per-presentation channel assignment, so the order
+                    // comes from the stream's arrangement, the same way the decoder
+                    // takes it. Absent when the arrangement does not cover the
+                    // presentation, so nothing is claimed about it.
+                    assignments: self
+                        .access_unit
+                        .get_channel_labels(index)
+                        .unwrap_or_default(),
                     ..Default::default()
                 };
 
