@@ -1,3 +1,4 @@
+use anyhow::{Result, bail};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::Display;
 use std::path::Path;
@@ -172,6 +173,11 @@ impl TrimOptions {
         let Some(trim) = trim else {
             return None;
         };
+
+        // An auto trim carries no coded values; the renderer derives them.
+        if trim.b_default_trim {
+            return None;
+        }
 
         Some(Self {
             center_trim: trim.trim_centre,
@@ -368,13 +374,13 @@ impl Configuration {
         oamd: &ObjectAudioMetadataPayload,
         sample_rate: u32,
         sample_pos: u64,
-    ) -> Self {
+    ) -> Result<Self> {
         let object_count = oamd.object_count;
         let Some(object_element) = &oamd.object_element else {
-            return Self {
+            return Ok(Self {
                 sample_rate: Some(sample_rate),
                 events: vec![],
-            };
+            });
         };
 
         let pos_vec = oamd.get_damf_pos();
@@ -392,21 +398,17 @@ impl Configuration {
         };
 
         // TODO: implement
-        assert_eq!(
-            object_element.md_update_info.num_obj_info_blocks, 1,
-            "Found multiple update blocks, please submit a sample"
-        );
+        if object_element.md_update_info.num_obj_info_blocks != 1 {
+            bail!("multiple update blocks are not supported yet, please submit a sample");
+        }
 
-        assert_eq!(
-            oamd.program_assignment.bed_assignment.len(),
-            1,
-            "Found multiple bed instances, please submit a sample"
-        );
+        if oamd.program_assignment.bed_assignment.len() != 1 {
+            bail!("multiple bed instances are not supported yet, please submit a sample");
+        }
 
-        assert_eq!(
-            oamd.program_assignment.num_isf_objects, 0,
-            "Found ISF objects, please submit a sample"
-        );
+        if oamd.program_assignment.num_isf_objects != 0 {
+            bail!("ISF objects are not supported yet, please submit a sample");
+        }
 
         let sample_offset = object_element.md_update_info.sample_offset as u64;
         let ramp_duration =
@@ -479,10 +481,10 @@ impl Configuration {
             events.push(event);
         }
 
-        Self {
+        Ok(Self {
             sample_rate: Some(sample_rate),
             events,
-        }
+        })
     }
 }
 
@@ -925,6 +927,8 @@ fn keeps_damf_bare_values() {
         "{serialized}"
     );
 
-    let events = Configuration::with_oamd_payload(&oamd, 48000, 0).serialize_events(false);
+    let events = Configuration::with_oamd_payload(&oamd, 48000, 0)
+        .unwrap()
+        .serialize_events(false);
     assert!(events.contains("\n    gain: 0\n"), "{events}");
 }

@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ExtraData::verify_evo_protection` checks an Evolution frame's primary protection word against a supplied key, returning `EvoProtectionStatus`. Behind the optional `evo-protection` feature, off by default
 - `ExtraData::evo_hmac_message` returns the bytes the protection digest covers, with `ExtraData::extra_data_offset` and `EvoFrame::protection_offset`
 
+### Fixed
+- `ObjectAudioMetadataPayload::read` panicked on any `oamd_version` other than 0, and again on `intermediate_spatial_format_idx` 6 or 7 while indexing a six-entry table. Both are reachable from arbitrary stream bytes. An unknown version is now an error; the two reserved ISF indices carry no objects and parse as such. This affected every version
+- A trim element with `b_default_trim` set was dropped instead of stored, so a renderer-derived trim was indistinguishable from an absent one
+
+### Changed
+- `ISF_COUNT_LIST` covers all eight values of the 3-bit index rather than six, and `MAX_OBJ_INFO_BLOCKS` is exposed alongside `MAX_OBJECT_COUNT`
+
 ## [0.6.3] - 2026-08-04
 
 ### Fixed

@@ -7,10 +7,12 @@ use std::default::Default;
 use std::mem::transmute;
 
 use crate::utils::bitstream_io::BsIoSliceReader;
-use anyhow::Result;
+use anyhow::{Result, bail};
 use log::{trace, warn};
 
 pub const MAX_OBJECT_COUNT: usize = 159;
+/// Upper bound of `num_obj_info_blocks`, which is coded as a 3-bit minus-1 field.
+pub const MAX_OBJ_INFO_BLOCKS: usize = 8;
 pub const GAIN_MINUS_INFINITY: i8 = -128; // -inf gain
 
 #[derive(Clone, Debug)]
@@ -20,7 +22,9 @@ struct OAMDParserState {
     program_assignment: ProgramAssignment,
     b_alternate_object_data_present: bool,
 
-    prev_object_gain: [i8; MAX_OBJECT_COUNT],
+    /// Predictor for `object_gain_code == 0b11`, holding the last gain decoded at
+    /// each block index (i.e. the previous object's gain at that block).
+    prev_object_gain: [i8; MAX_OBJ_INFO_BLOCKS],
     prev_object_basic_info: ObjectBasicInfo,
     prev_object_render_info: ObjectRenderInfo,
 
@@ -35,7 +39,7 @@ impl Default for OAMDParserState {
             object_count: 0,
             program_assignment: ProgramAssignment::default(),
             b_alternate_object_data_present: false,
-            prev_object_gain: [0; MAX_OBJECT_COUNT],
+            prev_object_gain: [0; MAX_OBJ_INFO_BLOCKS],
             prev_object_basic_info: ObjectBasicInfo::default(),
             prev_object_render_info: ObjectRenderInfo::default(),
             object_element: None,
@@ -113,7 +117,9 @@ pub const STD_BED_LIST: [&[usize]; 10] = [
     &[16],
 ];
 
-pub const ISF_COUNT_LIST: [usize; 6] = [4, 8, 10, 14, 15, 30];
+/// Indexed by the 3-bit `intermediate_spatial_format_idx`. Indices 6 and 7 are
+/// reserved and yield zero objects.
+pub const ISF_COUNT_LIST: [usize; 8] = [4, 8, 10, 14, 15, 30, 0, 0];
 
 #[derive(Clone, Debug, Default)]
 #[repr(C)]
@@ -236,7 +242,10 @@ impl ObjectAudioMetadataPayload {
             oamd_version += reader.get_n::<u8>(3)?;
         }
 
-        assert_eq!(oamd_version, 0, "Unsupported OAMD version {oamd_version}");
+        // Field layout below is only defined for version 0.
+        if oamd_version != 0 {
+            bail!("unsupported OAMD version {oamd_version}");
+        }
 
         let mut object_count_bits = reader.get_n::<u8>(5)?;
 
@@ -926,6 +935,9 @@ impl TrimElement {
                 };
 
                 if t.b_default_trim {
+                    // Renderer derives this trim itself. Distinct from "disabled" and
+                    // from "element absent", so record it rather than leaving it None.
+                    *trim = Some(t);
                     continue;
                 }
 
