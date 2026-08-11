@@ -41,13 +41,7 @@ impl Tally {
     /// Counts one diagnostic and answers whether it should be printed.
     ///
     /// `max_per_rule` of 0 prints every occurrence.
-    pub fn record(
-        &mut self,
-        rule: &str,
-        severity: Severity,
-        au: u64,
-        max_per_rule: u64,
-    ) -> bool {
+    pub fn record(&mut self, rule: &str, severity: Severity, au: u64, max_per_rule: u64) -> bool {
         self.total += 1;
         self.by_severity[severity as usize] += 1;
         self.worst = Some(self.worst.map_or(severity, |worst| worst.max(severity)));
@@ -92,7 +86,9 @@ impl Tally {
     }
 
     pub fn rules(&self) -> impl Iterator<Item = (&str, &RuleTally)> {
-        self.rules.iter().map(|(rule, tally)| (rule.as_str(), tally))
+        self.rules
+            .iter()
+            .map(|(rule, tally)| (rule.as_str(), tally))
     }
 
     /// Rules that fired more often than they were printed.

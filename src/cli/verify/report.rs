@@ -517,12 +517,7 @@ impl Section {
 }
 
 /// Everything the summary states, before any of it is laid out.
-pub fn sections(
-    input: &str,
-    facts: &StreamFacts,
-    tally: &Tally,
-    verdict: Verdict,
-) -> Vec<Section> {
+pub fn sections(input: &str, facts: &StreamFacts, tally: &Tally, verdict: Verdict) -> Vec<Section> {
     let mut sections = vec![stream_information(input, facts), measurements(facts)];
 
     if facts.format_sync.is_some() {
@@ -589,10 +584,9 @@ fn render(sections: &[Section]) -> String {
 
             match &row.note {
                 // A note stands in for the cells, over the width they would have filled.
-                Some(note) if !section.headings.is_empty() => out.push_str(&format!(
-                    "{note:>width$}",
-                    width = widths.iter().sum()
-                )),
+                Some(note) if !section.headings.is_empty() => {
+                    out.push_str(&format!("{note:>width$}", width = widths.iter().sum()))
+                }
                 Some(note) => out.push_str(note),
                 None if section.headings.is_empty() => {
                     out.push_str(row.cells.first().map_or("", String::as_str))
@@ -684,18 +678,16 @@ fn measurements(facts: &StreamFacts) -> Section {
         ));
     }
 
-    section
-        .push(match facts.max_fifo_latency_ms() {
-            Some(ms) => Row::value(
-                "Maximum FIFO latency",
-                format_args!("{} samples ({ms:.3} ms)", facts.max_fifo_latency),
-            ),
-            None => Row::value(
-                "Maximum FIFO latency",
-                format_args!("{} samples", facts.max_fifo_latency),
-            ),
-        })
-        ;
+    section.push(match facts.max_fifo_latency_ms() {
+        Some(ms) => Row::value(
+            "Maximum FIFO latency",
+            format_args!("{} samples ({ms:.3} ms)", facts.max_fifo_latency),
+        ),
+        None => Row::value(
+            "Maximum FIFO latency",
+            format_args!("{} samples", facts.max_fifo_latency),
+        ),
+    });
 
     section
 }
@@ -765,7 +757,11 @@ fn cumulative_fifo(facts: &StreamFacts) -> Section {
 
     for (index, label) in FIFO_LABELS.iter().enumerate() {
         // A decoder the stream does not carry has nothing to say in any column.
-        if index == 0 && facts.substream0_channels().is_some_and(|channels| channels != 2) {
+        if index == 0
+            && facts
+                .substream0_channels()
+                .is_some_and(|channels| channels != 2)
+        {
             section.push(Row::cells(*label, vec!["-".to_owned(); 4]));
 
             continue;
@@ -814,10 +810,14 @@ fn disc_validity(validity: &DiscValidity) -> Section {
     let mut section = Section::new("Disc Format Validity");
 
     section
-        .push(match (validity.dvd_audio, validity.dvd_audio_needs_decode) {
-            (true, true) => Row::value("DVD-Audio", "yes, if the 6-channel downmix does not clip"),
-            (legal, _) => Row::value("DVD-Audio", yes_no(legal)),
-        })
+        .push(
+            match (validity.dvd_audio, validity.dvd_audio_needs_decode) {
+                (true, true) => {
+                    Row::value("DVD-Audio", "yes, if the 6-channel downmix does not clip")
+                }
+                (legal, _) => Row::value("DVD-Audio", yes_no(legal)),
+            },
+        )
         .push(Row::value("HD DVD-Video", yes_no(validity.hd_dvd_video)))
         .push(Row::value("BluRay", yes_no(validity.bluray)));
 
@@ -847,7 +847,12 @@ fn branch_points(facts: &StreamFacts) -> Section {
                     .sample_time(branch.sample)
                     .map_or_else(|| branch.sample.to_string(), time_str),
                 branch.advance.to_string(),
-                if branch.is_valid() { "valid" } else { "invalid" }.to_owned(),
+                if branch.is_valid() {
+                    "valid"
+                } else {
+                    "invalid"
+                }
+                .to_owned(),
             ],
         ));
 
@@ -1005,8 +1010,7 @@ mod tests {
 
     /// FBB carrying all six channels in substream 0, `substream_info` 0x04, so the stream
     /// has no two-channel decoder at all.
-    const FBB_6CH_SINGLE: &[u8] =
-        include_bytes!("../../../truehd/tests/assets/fbb_6ch_single.mlp");
+    const FBB_6CH_SINGLE: &[u8] = include_bytes!("../../../truehd/tests/assets/fbb_6ch_single.mlp");
 
     /// FBB over one substream of two channels, `substream_info` 0x05.
     const FBB_COPY: &[u8] = include_bytes!("../../../truehd/tests/assets/fbb_copy.mlp");
@@ -1178,12 +1182,13 @@ mod tests {
     /// against the sections, which carry no widths at all.
     #[test]
     fn the_renderer_lays_a_section_out_in_columns() {
-        let mut section = Section::with_headings(
-            "Example",
-            ["stream", "total"].map(str::to_owned).to_vec(),
-        );
+        let mut section =
+            Section::with_headings("Example", ["stream", "total"].map(str::to_owned).to_vec());
         section
-            .push(Row::cells("2-channel decoder", vec!["240".into(), "294".into()]))
+            .push(Row::cells(
+                "2-channel decoder",
+                vec!["240".into(), "294".into()],
+            ))
             .push(Row::note("8-channel decoder", "not checked"));
 
         let mut field = Section::new("Fields");
@@ -1231,7 +1236,10 @@ mod tests {
             cells(&report, "Substream Properties", "Restart sync word"),
             ["31EA", "31EB", "31EB", "31EC"]
         );
-        assert_eq!(cells(&report, "Substream Properties", "Channels"), ["0..1", "0..5", "0..7", "0..15"]);
+        assert_eq!(
+            cells(&report, "Substream Properties", "Channels"),
+            ["0..1", "0..5", "0..7", "0..15"]
+        );
         assert_eq!(
             cells(&report, "Substream Properties", "Maximum FIFO depth"),
             ["240", "246", "250", "274"]
@@ -1287,7 +1295,10 @@ mod tests {
         );
 
         let report = report(&facts());
-        assert_eq!(cells(&report, "Disc Format Validity", "HD DVD-Video"), ["yes"]);
+        assert_eq!(
+            cells(&report, "Disc Format Validity", "HD DVD-Video"),
+            ["yes"]
+        );
         assert_eq!(cells(&report, "Disc Format Validity", "BluRay"), ["yes"]);
     }
 
@@ -1468,7 +1479,10 @@ mod tests {
             let report = sections("x.mlp", &facts(), &tally, verdict);
             cells(&report, "Diagnostics", "Verdict")[0].to_owned()
         };
-        assert_eq!(stated(Verdict::NonConformant), "NON-CONFORMANT (worst: warning)");
+        assert_eq!(
+            stated(Verdict::NonConformant),
+            "NON-CONFORMANT (worst: warning)"
+        );
         assert_eq!(stated(Verdict::Conformant), "CONFORMANT (worst: warning)");
     }
 
@@ -1522,11 +1536,17 @@ mod tests {
 
         let report = report(&facts);
         assert_eq!(
-            cells(&report, "Cumulative FIFO Depth", "6-channel decoder (ss0 only)"),
+            cells(
+                &report,
+                "Cumulative FIFO Depth",
+                "6-channel decoder (ss0 only)"
+            ),
             ["2210", "174", "2384", "90000"]
         );
         assert_eq!(
-            row(&report, "Cumulative FIFO Depth", "16-channel decoder").note.as_deref(),
+            row(&report, "Cumulative FIFO Depth", "16-channel decoder")
+                .note
+                .as_deref(),
             Some("no 16-channel presentation")
         );
     }
@@ -1541,9 +1561,16 @@ mod tests {
         assert_eq!(facts.substream0_channels(), Some(6));
 
         let report = report(&facts);
-        assert_eq!(cells(&report, "Cumulative FIFO Depth", "2-channel decoder"), ["-", "-", "-", "-"]);
         assert_eq!(
-            cells(&report, "Cumulative FIFO Depth", "6-channel decoder (ss0 only)"),
+            cells(&report, "Cumulative FIFO Depth", "2-channel decoder"),
+            ["-", "-", "-", "-"]
+        );
+        assert_eq!(
+            cells(
+                &report,
+                "Cumulative FIFO Depth",
+                "6-channel decoder (ss0 only)"
+            ),
             ["44", "46", "90", "90000"]
         );
     }
@@ -1605,7 +1632,10 @@ mod tests {
         assert_eq!(value["substream_properties"][1]["max_chan"], 5);
         assert_eq!(value["substream_properties"][1]["fifo_peak"], 246);
         assert_eq!(value["substream_properties"][1]["fifo_cap"], 90_000);
-        assert_eq!(value["substream_properties"][0]["restart_sync_word"], "31EA");
+        assert_eq!(
+            value["substream_properties"][0]["restart_sync_word"],
+            "31EA"
+        );
     }
 
     #[test]

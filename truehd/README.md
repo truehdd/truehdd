@@ -46,7 +46,7 @@ the two stages will disagree about the stream.
 |                 | Optimize DSP performance      | 🔴     | Medium   | Important    |                               |
 |                 | Dynamic range control         | 🔴     | Low      | Optional     | State parsed, not applied     |
 |                 | Intermediate spatial format   | 🔴     | Low      | Out-of-scope | I have no idea                |
-| **Other TODOs** | Documentation                 | 🟡     | High     | Essential    | With kind support from Claude |
+| **Other TODOs** | Documentation                 | 🟢     | High     | Essential    | With kind support from Claude |
 |                 | Unit tests                    | 🟢     | High     | Essential    |                               |
 |                 | Benchmarking                  | 🔴     | Medium   | Important    |                               |
 |                 | Metadata interpolation        | 🔴     | Low      | Nice-to-have |                               |

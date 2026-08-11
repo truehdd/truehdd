@@ -21,7 +21,7 @@ use crate::structs::sync::{
 };
 use crate::utils::bitstream_io::BsIoSliceReader;
 use crate::utils::errors::RestartHeaderError;
-use crate::utils::timing::TimingContext;
+use crate::utils::timing::{HiresTimingFault, TimingContext};
 use anyhow::{Result, anyhow, bail};
 use log::Level::Warn;
 use log::{info, trace};
@@ -369,19 +369,51 @@ impl RestartHeader {
 
         rh.hires_output_timing = reader.get()?;
 
-        if !state.has_parsed_substream {
-            trace!(
-                "AU {}: high-resolution output timing field = {}",
-                state.au_counter, rh.hires_output_timing
-            );
-            let ctx = TimingContext::from(&*state);
-            if let Some(stream_start) = state
-                .substream_state_mut()?
-                .hires_output_timing_state
-                .update(&ctx, rh.hires_output_timing)
-            {
-                state.hires_output_timing = Some(stream_start);
-            }
+        trace!(
+            "AU {}: high-resolution output timing field = {}",
+            state.au_counter, rh.hires_output_timing
+        );
+
+        // Each substream serialises its own field over its own restart headers.
+        let ctx = TimingContext::from(&*state);
+        let first_substream = !state.has_parsed_substream;
+        let timing = state.substream_state_mut()?;
+        timing.hires_output_timing = rh.hires_output_timing;
+        let stream_start = timing
+            .hires_output_timing_state
+            .update(&ctx, rh.hires_output_timing);
+        let fault = timing.hires_output_timing_state.fault.take();
+
+        if let Some(stream_start) = stream_start
+            && first_substream
+        {
+            state.hires_output_timing = Some(stream_start);
+        }
+
+        match fault {
+            Some(HiresTimingFault::Malformed { au, reason }) => log_or_err!(
+                state,
+                Warn,
+                anyhow!(RestartHeaderError::InvalidHiresOutputTiming { au, reason }),
+                reader
+            ),
+            Some(HiresTimingFault::Sequence {
+                timing,
+                au,
+                prev_timing,
+                prev_au,
+            }) => log_or_err!(
+                state,
+                Warn,
+                anyhow!(RestartHeaderError::InvalidHiresOutputTimingSequence {
+                    timing,
+                    au,
+                    prev_timing,
+                    prev_au
+                }),
+                reader
+            ),
+            None => {}
         }
 
         reader.skip_n(2)?;

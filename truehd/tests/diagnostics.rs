@@ -4,7 +4,9 @@ use truehd::process::extract::Extractor;
 use truehd::process::parse::Parser;
 use truehd::process::{EXAMPLE_DATA, MAX_PRESENTATIONS};
 use truehd::structs::sync::{MAJOR_SYNC_FBA, MAJOR_SYNC_FBB};
-use truehd::utils::crc::{CRC_MAJOR_SYNC_INFO_ALG, Crc16};
+use truehd::utils::crc::{
+    CRC_MAJOR_SYNC_INFO_ALG, CRC_RESTART_BLOCK_HEADER_ALG, CRC_SUBSTREAM_ALG, Crc8, Crc16,
+};
 use truehd::utils::diagnostic::{
     AccessUnitRule, BlockRule, ChannelRule, Diagnostic, DiagnosticMode, RestartHeaderRule, RuleId,
     SubstreamRule, SyncRule,
@@ -19,6 +21,11 @@ const FBA_2CH: &[u8] = include_bytes!("assets/fba_2ch.mlp");
 /// independent presentation, so a presentation mask can leave three of them unparsed.
 /// Its sixteen elements are all bed, so every presentation maps to source channels.
 const FBA_ATMOS_CBI: &[u8] = include_bytes!("assets/fba_atmos_cbi.mlp");
+
+/// An FBA Atmos encode with four substreams carrying an LFE bed and objects, with the
+/// Evolution frames that carry their metadata. The shape a normal Atmos stream has, unlike
+/// `FBA_ATMOS_CBI`, whose sixteen elements are all bed and which carries no object metadata.
+const FBA_ATMOS_OBJ: &[u8] = include_bytes!("assets/fba_atmos_obj.mlp");
 
 /// An FBB (DVD-Audio) encode with two substreams, `flags` 0x4000 and `substream_info`
 /// 0x0D, so substream 1 is also to be decoded.
@@ -218,7 +225,11 @@ fn a_segment_must_decode_one_access_unit_of_samples() {
     assert_eq!(fired.severity, log::Level::Warn, "{fired}");
     assert!(fired.location.bit_offset.is_some(), "{fired}");
     assert!(matches!(
-        fired.source.as_ref().unwrap().downcast_ref::<SubstreamError>(),
+        fired
+            .source
+            .as_ref()
+            .unwrap()
+            .downcast_ref::<SubstreamError>(),
         Some(SubstreamError::SampleCountMismatch {
             substream: 0,
             decoded: 32,
@@ -461,9 +472,7 @@ fn a_restart_gap_must_be_one_or_at_least_eight() {
 
     let gap_of_one = diagnostics_of(&repeated_major_sync(4));
     assert!(
-        !gap_of_one
-            .iter()
-            .any(|diagnostic| diagnostic.rule == rule),
+        !gap_of_one.iter().any(|diagnostic| diagnostic.rule == rule),
         "a gap of 1 is allowed: {gap_of_one:?}"
     );
 }
@@ -730,6 +739,118 @@ fn fbb_channel_meaning_reserved_block_is_reported() {
             &diagnostics,
             RuleId::Sync(SyncRule::ReservedChannelMeaningNonZero)
         ),
+        "{diagnostics:?}"
+    );
+}
+
+/// Flips one substream's `hires_output_timing` bit, repairing the restart header CRC and
+/// the segment's parity and CRC. No encoder writes a stream whose substreams disagree, so
+/// the rule can only be exercised by making one.
+///
+/// The bit is 99 bits into a segment carrying a restart header, and the CRC after the
+/// header covers `113 + 6*(max_matrix_chan+1)` bits of it.
+fn flip_hires_bit(data: &[u8], sync_at: usize, substream: usize) -> Vec<u8> {
+    let mut out = data.to_vec();
+    let substreams = (out[sync_at + 16] >> 4) as usize;
+
+    let mut cursor = major_sync_info_end(&out, sync_at);
+    let mut ends = Vec::new();
+    for _ in 0..substreams {
+        let word = u16::from_be_bytes([out[cursor], out[cursor + 1]]);
+        cursor += if word & 0x8000 != 0 { 4 } else { 2 };
+        ends.push(((word & 0x0FFF) as usize, word & 0x2000 != 0));
+    }
+
+    let first = if substream == 0 {
+        0
+    } else {
+        ends[substream - 1].0
+    };
+    let (start, crc_present) = (cursor * 8 + first * 16, ends[substream].1);
+    let end = cursor * 8 + ends[substream].0 * 16;
+
+    let flipped = 1 - read_bits(&out, start + 99, 1);
+    set_bits(&mut out, start + 99, 1, flipped);
+
+    let header = start + 2;
+    let length = 113 + 6 * (read_bits(&out, header + 38, 4) as usize + 1);
+    let header_crc = crc8_over(
+        &Crc8::new(&CRC_RESTART_BLOCK_HEADER_ALG),
+        &out,
+        header,
+        length,
+    );
+    set_bits(&mut out, header + length, 8, header_crc as u32);
+
+    if crc_present {
+        let body = end - 16 - start;
+        let parity = out[start / 8..(start + body) / 8]
+            .iter()
+            .fold(0u8, |acc, byte| acc ^ byte)
+            ^ 0xA9;
+        set_bits(&mut out, end - 16, 8, parity as u32);
+
+        let segment_crc = crc8_over(&Crc8::new(&CRC_SUBSTREAM_ALG), &out, start, body);
+        set_bits(&mut out, end - 8, 8, segment_crc as u32);
+    }
+
+    out
+}
+
+/// End of a major sync info, where the substream directory begins. `channel_meaning` may
+/// carry extra words, so the length is the one whose CRC-16 matches the bytes after it.
+fn major_sync_info_end(data: &[u8], at: usize) -> usize {
+    let crc = Crc16::new(&CRC_MAJOR_SYNC_INFO_ALG);
+
+    for end in (at + 12..at + 512).step_by(2) {
+        let value = u16::from_be_bytes([data[end], data[end + 1]]);
+        if crc.update(crc.init, &data[at..end]) == value {
+            return end + 2;
+        }
+    }
+
+    panic!("no major sync info CRC at {at}");
+}
+
+/// Reads `n` bits at bit offset `bit`, most significant bit first.
+fn read_bits(data: &[u8], bit: usize, n: usize) -> u32 {
+    (0..n).fold(0, |acc, i| {
+        acc << 1 | ((data[(bit + i) >> 3] >> (7 - ((bit + i) & 7))) & 1) as u32
+    })
+}
+
+/// The format's CRC-8 over a bit range, one bit at a time.
+fn crc8_over(crc: &Crc8, data: &[u8], bit: usize, len: usize) -> u8 {
+    (0..len).fold(crc.init, |value, i| {
+        (value << 1)
+            ^ (if value & 0x80 != 0 { crc.poly } else { 0 })
+            ^ read_bits(data, bit + i, 1) as u8
+    })
+}
+
+/// Every substream of an access unit carrying a major sync must state the same
+/// `hires_output_timing` bit, and each disagreeing pair is named.
+#[test]
+fn hires_output_timing_must_match_across_substreams() {
+    let sync_at = major_syncs(FBA_ATMOS_OBJ, MAJOR_SYNC_FBA)[1];
+    let data = flip_hires_bit(FBA_ATMOS_OBJ, sync_at, 1);
+    let diagnostics = diagnostics_of(&data);
+
+    let rule = RuleId::AccessUnit(AccessUnitRule::HiresOutputTimingMismatch);
+    let raised: Vec<_> = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.rule == rule)
+        .collect();
+
+    // Four substreams, all pairs, so substream 1 disagrees with each of the other three.
+    assert_eq!(raised.len(), 3, "{diagnostics:?}");
+    for diagnostic in &raised {
+        assert!(diagnostic.message.contains(" and "), "{diagnostic:?}");
+    }
+
+    // Nothing else fires: one bit changed, and everything covering it was repaired.
+    assert!(
+        diagnostics.iter().all(|diagnostic| diagnostic.rule == rule),
         "{diagnostics:?}"
     );
 }

@@ -3,9 +3,9 @@ use log::Level::{Error, Warn};
 use log::trace;
 
 use crate::log_or_err;
-use crate::process::{MAX_PRESENTATIONS, PresentationMap};
 use crate::process::decode::DecoderState;
 use crate::process::parse::ParserState;
+use crate::process::{MAX_PRESENTATIONS, PresentationMap};
 use crate::structs::channel::ChannelLabel;
 use crate::structs::extra_data::ExtraData;
 use crate::structs::restart_header::RestartHeader;
@@ -224,6 +224,8 @@ impl AccessUnit {
         }
         segments.record(&mut state.perf.substream_segments);
 
+        Self::check_hires_output_timing_matches(state, substreams, reader)?;
+
         // One whole 16-bit word is enough. `extra_data` is entered whenever the
         // access unit has a word left, so a lone trailing word is a block like any other:
         // its header nibble is checked, and a non-zero header that declares a length it has
@@ -263,6 +265,46 @@ impl AccessUnit {
         au.has_valid_branch = state.has_valid_branch || state.has_substream_info_changed;
 
         Ok(au)
+    }
+
+    /// Every substream must carry the same `hires_output_timing` bit.
+    ///
+    /// FBA only, and only at a major sync: elsewhere a substream may still hold the bit
+    /// from its last restart header. A substream the presentation mask skipped is left out
+    /// for the same reason, since nothing read a bit for it here.
+    fn check_hires_output_timing_matches(
+        state: &mut ParserState,
+        substreams: usize,
+        reader: &mut BsIoSliceReader,
+    ) -> Result<()> {
+        if state.format_sync != MAJOR_SYNC_FBA || !state.is_major_sync {
+            return Ok(());
+        }
+
+        let mut read = [(0usize, false); MAX_PRESENTATIONS];
+        let mut count = 0;
+        for i in 0..substreams {
+            if state.substream_mask >> i & 1 == 1 {
+                read[count] = (i, state.substream_i_state(i)?.hires_output_timing);
+                count += 1;
+            }
+        }
+
+        for first in 0..count.saturating_sub(1) {
+            for second in first + 1..count {
+                if read[first].1 != read[second].1 {
+                    let (first, second) = (read[first].0, read[second].0);
+                    log_or_err!(
+                        state,
+                        Warn,
+                        anyhow!(AccessUnitError::HiresOutputTimingMismatch { first, second }),
+                        reader
+                    );
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Channels of a presentation, in the order the decoder outputs them.

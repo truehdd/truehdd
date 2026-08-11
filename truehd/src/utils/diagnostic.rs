@@ -116,6 +116,7 @@ rule_ids! {
         MissingInitialSync = "missing_initial_sync",
         FbaSyncTooFar = "fba_sync_too_far",
         FbbSyncTooFar = "fbb_sync_too_far",
+        HiresOutputTimingMismatch = "hires_output_timing_mismatch",
         RestartGapInvalid = "restart_gap_invalid",
         NoSubstream = "no_substream",
         MisalignedSync = "misaligned_sync",
@@ -186,6 +187,8 @@ rule_ids! {
     }
     RestartHeaderError => RestartHeader / RestartHeaderRule / "restart_header" {
         HeavyDrcPresentInFbb = "heavy_drc_present_in_fbb",
+        InvalidHiresOutputTiming = "invalid_hires_output_timing",
+        InvalidHiresOutputTimingSequence = "invalid_hires_output_timing_sequence",
         HeavyDrcTimeUpdateExceeded = "heavy_drc_time_update_exceeded",
         InvalidRestartSyncWord = "invalid_restart_sync_word",
         OutputTimingMismatch = "output_timing_mismatch",

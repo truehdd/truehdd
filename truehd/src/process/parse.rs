@@ -307,6 +307,8 @@ pub struct ParserSubstreamState {
     /// Discarded wholesale by every restart header.
     pub restart: ParserRestartState,
 
+    /// The bit this substream's last restart header carried.
+    pub hires_output_timing: bool,
     pub hires_output_timing_state: HiresOutputTimingState,
 
     pub latency: usize,
@@ -365,6 +367,8 @@ impl Default for ParserSubstreamState {
             drc_gain_update: 0,
             drc_time_update: 0,
             drc_count: 0,
+
+            hires_output_timing: false,
 
             heavy_drc_active: false,
             heavy_drc_present: false,

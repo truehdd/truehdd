@@ -105,7 +105,7 @@ pub struct FifoDepthReport {
 /// What one access unit adds to the window, split by where the bytes come from.
 ///
 /// `total` is what an accumulator is capped on. `stream` is the part of it that is
-/// substream-segment payload — the audio the stream carries — and the remainder is the
+/// substream-segment payload, the audio the stream carries, and the remainder is the
 /// container overhead priced around it: the access unit header, a major sync, the
 /// directory words the accumulator covers and EXTRA_DATA. `substream` prices each
 /// substream's own payload on its own, with no overhead at all.
@@ -203,8 +203,8 @@ impl FifoDepthState {
                 match self.depth[k].checked_sub(leaving) {
                     Some(remaining) => {
                         self.depth[k] = remaining;
-                        self.depth_stream[k] = self.depth_stream[k]
-                            .saturating_sub(self.stream[k][read] as usize);
+                        self.depth_stream[k] =
+                            self.depth_stream[k].saturating_sub(self.stream[k][read] as usize);
                     }
                     None => {
                         self.depth[k] = 0;

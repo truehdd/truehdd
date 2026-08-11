@@ -99,6 +99,11 @@ pub enum AccessUnitError {
     #[error("FBB stream major syncs must occur at intervals not exceeding 32 access units")]
     FbbSyncTooFar,
 
+    #[error(
+        "hires_output_timing bit must match in all substreams. Mismatch on substreams {first} and {second}"
+    )]
+    HiresOutputTimingMismatch { first: usize, second: usize },
+
     #[error("Restart gap must be 1 or >= 8. Read {0}")]
     RestartGapInvalid(usize),
 
@@ -264,9 +269,7 @@ pub enum ExtraDataError {
     )]
     EvoFrameTooLong { evo_len: u16, extra_len: u16 },
 
-    #[error(
-        "extra_data_length leaves no room for an evo_frame(). extra_data_length = {extra_len}"
-    )]
+    #[error("extra_data_length leaves no room for an evo_frame(). extra_data_length = {extra_len}")]
     EvoFrameNoRoom { extra_len: u16 },
 
     #[error("evo_frame() in extra_data does not begin on a byte boundary")]
@@ -365,7 +368,9 @@ pub enum RestartHeaderError {
     #[error("Invalid seamless branch")]
     InvalidSeamlessBranch,
 
-    #[error("advance[n] > advance[n-1] + 3*samples_per_au/4 ({advance} > {prev_advance} + {slack})")]
+    #[error(
+        "advance[n] > advance[n-1] + 3*samples_per_au/4 ({advance} > {prev_advance} + {slack})"
+    )]
     BranchAdvanceTooLarge {
         advance: usize,
         prev_advance: usize,
@@ -426,6 +431,19 @@ pub enum RestartHeaderError {
     #[error("heavy_drc_present must be false in FBB streams")]
     HeavyDrcPresentInFbb,
 
+    #[error("Invalid hires_output_timing field starting in au {au}, {reason}")]
+    InvalidHiresOutputTiming { au: usize, reason: &'static str },
+
+    #[error(
+        "Invalid sequence of hires_output_timing fields: {timing} starting in au {au} does not follow {prev_timing} starting in au {prev_au}"
+    )]
+    InvalidHiresOutputTimingSequence {
+        timing: usize,
+        au: usize,
+        prev_timing: usize,
+        prev_au: usize,
+    },
+
     #[error(
         "heavy_drc_time_update = {heavy_drc_time_update}, but heavy_drc_count = {heavy_drc_count}"
     )]
@@ -469,7 +487,10 @@ pub enum SubstreamError {
     },
 
     #[error("drc_time_update = {drc_time_update}, but drc_count = {drc_count}")]
-    DrcTimeUpdateExceeded { drc_time_update: u8, drc_count: usize },
+    DrcTimeUpdateExceeded {
+        drc_time_update: u8,
+        drc_count: usize,
+    },
 
     #[error("Termination word must be 0x348D3. Read {0:#X}")]
     InvalidTerminationWord(u32),

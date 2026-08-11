@@ -3,7 +3,7 @@
 //! `output_timing` is 16 bits and wraps; this field carries the high half, one bit per
 //! access unit, so a decoder can recover an absolute sample position.
 
-use log::{debug, info, trace};
+use log::{debug, trace};
 
 use crate::process::parse::ParserState;
 
@@ -28,8 +28,25 @@ impl From<&ParserState> for TimingContext {
     }
 }
 
+/// What a field decode found wrong, for the caller to report. Both name the access unit the
+/// field started in, not the one the fault surfaced at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HiresTimingFault {
+    /// The serialisation is malformed: the field's own access unit, and why.
+    Malformed { au: usize, reason: &'static str },
+    /// The field decodes, but does not continue the one before it.
+    Sequence {
+        timing: usize,
+        au: usize,
+        prev_timing: usize,
+        prev_au: usize,
+    },
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct HiresOutputTimingState {
+    /// Set where the field decode found something to report.
+    pub fault: Option<HiresTimingFault>,
     state_index: usize,
     serialisation_counter: usize,
     timing: usize,
@@ -51,6 +68,7 @@ impl HiresOutputTimingState {
     /// Findings are informational: a stream carrying no field at all is legal.
     pub fn update(&mut self, ctx: &TimingContext, hires_present: bool) -> Option<usize> {
         let mut stream_start = None;
+        self.fault = None;
 
         match self.state_index {
             0 => {
@@ -80,15 +98,15 @@ impl HiresOutputTimingState {
 
                 self.state_index = 0;
                 if self.serialisation_counter != 0 {
-                    info!(
-                        "Invalid high-resolution output timing: extra zero after data field end (AU {})",
-                        self.au_index
-                    );
+                    self.fault = Some(HiresTimingFault::Malformed {
+                        au: self.au_index,
+                        reason: "extra 0 after the data field end",
+                    });
                 } else {
-                    info!(
-                        "Invalid high-resolution output timing: extra zero in data field (AU {})",
-                        self.au_index
-                    );
+                    self.fault = Some(HiresTimingFault::Malformed {
+                        au: self.au_index,
+                        reason: "extra 0 in the datafield",
+                    });
                 }
             }
             i @ 6..=10 => 'a: {
@@ -104,10 +122,10 @@ impl HiresOutputTimingState {
 
                 if i == 10 {
                     self.state_index = 0;
-                    info!(
-                        "Invalid high-resolution output timing: invalid zero in data field (AU {})",
-                        self.au_index
-                    );
+                    self.fault = Some(HiresTimingFault::Malformed {
+                        au: self.au_index,
+                        reason: "invalid 0 in the datafield",
+                    });
 
                     break 'a;
                 }
@@ -137,8 +155,7 @@ impl HiresOutputTimingState {
                             .wrapping_add(self.au_output_timing as u32)
                             .wrapping_sub(
                                 (self.au_index as u32).wrapping_mul(ctx.samples_per_au as u32),
-                            )
-                            as usize;
+                            ) as usize;
                         debug!(
                             "First high-resolution timing field: {} (AU {}), stream start timing: {}",
                             self.timing, self.au_index, hires_output_timing
@@ -157,14 +174,12 @@ impl HiresOutputTimingState {
                             self.timing, self.au_index
                         );
                     } else {
-                        info!(
-                            "High-resolution timing sequence error: {} (AU {}) does not follow {} (AU {}) on substream {}",
-                            self.timing,
-                            self.au_index,
-                            self.prev_timing,
-                            self.prev_au_index,
-                            ctx.substream_index
-                        );
+                        self.fault = Some(HiresTimingFault::Sequence {
+                            timing: self.timing,
+                            au: self.au_index,
+                            prev_timing: self.prev_timing,
+                            prev_au: self.prev_au_index,
+                        });
 
                         self.counter = 0;
                         skip_refresh = true;
@@ -190,6 +205,7 @@ impl HiresOutputTimingState {
     }
 
     pub fn reset_for_branch(&mut self) {
+        self.fault = None;
         self.state_index = 0;
         self.counter = 0;
     }
@@ -234,6 +250,19 @@ mod tests {
             true, true, false, false, false, false, false, // field = 0, goes backwards
         ]);
         assert_eq!(stream_start, Some(1 << 16), "first field still decoded");
-        assert_eq!(machine.counter, 0, "the sequence error resets the run counter");
+        assert_eq!(
+            machine.counter, 0,
+            "the sequence error resets the run counter"
+        );
+        assert_eq!(
+            machine.fault,
+            Some(HiresTimingFault::Sequence {
+                timing: 0,
+                au: 0,
+                prev_timing: 1,
+                prev_au: 0,
+            }),
+            "the caller is handed the sequence error to report"
+        );
     }
 }
