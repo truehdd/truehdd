@@ -1,8 +1,8 @@
 //! Parse timing, compiled out unless the `perf` feature is on.
 //!
 //! Timing the parse from outside only gives a total. Attributing it to
-//! bitstream structures — Huffman decoding against LSB bypass against the
-//! conformance checks — needs measurements taken where those structures are
+//! bitstream structures - Huffman decoding against LSB bypass against the
+//! conformance checks - needs measurements taken where those structures are
 //! read, so the hooks live in the parser and cost nothing when disabled.
 
 use std::time::Duration;

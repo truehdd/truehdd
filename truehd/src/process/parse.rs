@@ -500,4 +500,56 @@ mod tests {
         assert_eq!(parser.state.au_counter, 0);
         assert_eq!(parser.state.input_timing, 0);
     }
+
+    /// FBB streams bailed with `unimplemented!` at three sites, so the crate could not read
+    /// them at all even though the format info, substream and restart header paths were
+    /// already written.
+    fn first_au(data: &[u8]) -> Option<crate::structs::access_unit::AccessUnit> {
+        let mut extractor = crate::process::extract::Extractor::default();
+        extractor.push_bytes(data);
+        let frame = extractor.by_ref().next()?.ok()?;
+        Parser::default().parse(&frame).ok()
+    }
+
+    #[test]
+    fn fbb_stream_parses() {
+        let au = first_au(crate::process::EXAMPLE_DATA_FBB).expect("an access unit");
+        let ms = au.major_sync_info.as_ref().expect("a major sync");
+        assert_eq!(ms.format_sync, crate::structs::sync::MAJOR_SYNC_FBB);
+        assert_eq!(ms.format_info.sampling_frequency_1().unwrap(), 48000);
+    }
+
+    /// FBA is unaffected by the FBB work.
+    #[test]
+    fn fba_stream_still_parses() {
+        let au = first_au(crate::process::EXAMPLE_DATA).expect("an access unit");
+        let ms = au.major_sync_info.as_ref().expect("a major sync");
+        assert_eq!(ms.format_sync, crate::structs::sync::MAJOR_SYNC_FBA);
+    }
+
+    /// A six-channel copy-of two-channel FBB access unit. It carries `substream_info` 0x05
+    /// (masked 0x04) and sets `extra_channel_meaning_present`, both of which are FBA-only
+    /// rules: applying them rejected 0x04 and read the extra channel meaning block past
+    /// the major sync info CRC, so no frame came out at all.
+    #[test]
+    fn fbb_unextractable_stream_extracts() {
+        let au = first_au(crate::process::EXAMPLE_DATA_FBB_UNEXTRACTABLE).expect("an access unit");
+        let ms = au.major_sync_info.as_ref().expect("a major sync");
+        assert_eq!(ms.format_sync, crate::structs::sync::MAJOR_SYNC_FBB);
+    }
+
+    /// The major-sync repetition limit differs by format: 128 access units for FBA, 32 for
+    /// FBB.
+    #[test]
+    fn fbb_sync_interval_limit_is_stricter_than_fba() {
+        use crate::utils::errors::AccessUnitError;
+        assert_eq!(
+            AccessUnitError::FbbSyncTooFar.to_string(),
+            "FBB stream major syncs must occur at intervals not exceeding 32 access units"
+        );
+        assert_eq!(
+            AccessUnitError::FbaSyncTooFar.to_string(),
+            "FBA stream major syncs must occur at intervals not exceeding 128 access units"
+        );
+    }
 }

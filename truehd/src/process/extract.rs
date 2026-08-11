@@ -273,6 +273,15 @@ impl Extractor {
 
     fn major_sync_info_len(&self) -> Option<usize> {
         let buffer = self.buffered();
+
+        // The extra channel meaning block that extends the major sync info is FBA-only, so
+        // an FBB major sync (format_sync byte 0xBB) is always the 26-byte base regardless
+        // of the bit at buffer[29]. Using the FBA extension length here would put the CRC
+        // past its real position and the frame would be rejected.
+        if *buffer.get(7)? == 0xBB {
+            return Some(26);
+        }
+
         let len = if buffer.get(29)? & 0x01 == 0 {
             26
         } else {

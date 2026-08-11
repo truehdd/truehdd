@@ -13,6 +13,7 @@ use crate::process::decode::DecoderState;
 use crate::process::parse::ParserState;
 use crate::structs::filter::{CoeffType, FilterCoeffs};
 use crate::structs::restart_header::GuardsField;
+use crate::structs::sync::MAJOR_SYNC_FBA;
 use crate::utils::bitstream_io::BsIoSliceReader;
 use crate::utils::errors::ChannelError;
 
@@ -162,7 +163,12 @@ impl ChannelMeaning {
             }
         }
 
-        if cm.extra_channel_meaning_present {
+        // The extra channel meaning block carries the 16-channel / object presentation, an
+        // FBA-only feature. An FBB major sync info ends with this bit, so reading the block
+        // would consume the major_sync_info CRC as payload and fail the CRC check.
+        if cm.extra_channel_meaning_present
+            && state.format_sync == MAJOR_SYNC_FBA
+        {
             cm.extra_channel_meaning = Some(ExtraChannelMeaning::read(state, reader)?);
 
             // is this even needed?

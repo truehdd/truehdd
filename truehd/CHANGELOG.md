@@ -10,13 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `ExtraData::verify_evo_protection` checks an Evolution frame's primary protection word against a supplied key, returning `EvoProtectionStatus`. Behind the optional `evo-protection` feature, off by default
 - `ExtraData::evo_hmac_message` returns the bytes the protection digest covers, with `ExtraData::extra_data_offset` and `EvoFrame::protection_offset`
+- FBB (Meridian / DVD-Audio) stream support. Parsing bailed with `unimplemented!` at three sites, so an FBB stream could not be read at all. The major sync now takes the same path as FBA, the channel-assignment bound applies to both formats while the identity-permutation rule stays FBA-only, and `AccessUnitError::FbbSyncTooFar` covers FBB's tighter 32-access-unit repetition limit. One `unimplemented!` remains, for heavy DRC on FBB. `EXAMPLE_DATA_FBB` and `EXAMPLE_DATA_FBB_UNEXTRACTABLE` are the fixtures
 
 ### Fixed
+- The extractor found no frames at all in FBB streams whose `channel_meaning` sets the bit FBA defines as `extra_channel_meaning_present`: it computed an extended major sync info length whose CRC could never match, and the parser misread the same extension. Both are FBA-only; an FBB major sync info is always the fixed 26 bytes. `fbb_unextractable_stream_extracts` is no longer ignored
+- The `substream_info` whitelist rejected valid FBB values and accepted FBB's layered `0x0C` only through release-mode shift wrapping that panics under debug overflow checks. It now applies to FBA alone, and its shifts are range-guarded
 - `ObjectAudioMetadataPayload::read` panicked on any `oamd_version` other than 0, and again on `intermediate_spatial_format_idx` 6 or 7 while indexing a six-entry table. Both are reachable from arbitrary stream bytes. An unknown version is now an error; the two reserved ISF indices carry no objects and parse as such. This affected every version
 - A trim element with `b_default_trim` set was dropped instead of stored, so a renderer-derived trim was indistinguishable from an absent one
 
 ### Changed
+- `samples_per_75ms` is a function in `structs::sync` rather than the same expression written out at three call sites. Behaviour is unchanged, including the rounding at 44.1 kHz, the one rate where 75 ms is not a whole number of samples
 - `ISF_COUNT_LIST` covers all eight values of the 3-bit index rather than six, and `MAX_OBJ_INFO_BLOCKS` is exposed alongside `MAX_OBJECT_COUNT`
+- Error messages spell their comparisons in ASCII, `<=` and `>=` rather than the typographic forms, so they survive any terminal or log encoding
 
 ## [0.6.3] - 2026-08-04
 

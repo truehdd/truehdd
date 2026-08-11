@@ -275,7 +275,8 @@ impl Block {
                 );
             }
 
-            let samples_per_75ms = (state.audio_sampling_frequency_1 * 3).div_ceil(40);
+            let samples_per_75ms =
+                crate::structs::sync::samples_per_75ms(state.audio_sampling_frequency_1);
 
             if prev_latency as u32 > samples_per_75ms {
                 log_or_err!(

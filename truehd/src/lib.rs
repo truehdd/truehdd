@@ -2,7 +2,8 @@
 //!
 //! ## Technical Overview
 //!
-//! Parser and decoder for Dolby TrueHD (MLP) bitstreams according to FBA syntax specification.
+//! Parser and decoder for Dolby TrueHD (MLP) bitstreams, in both the FBA syntax and the
+//! FBB syntax used for DVD-Audio.
 //!
 //! ### Bitstream Organization
 //!

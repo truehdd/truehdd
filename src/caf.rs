@@ -853,7 +853,7 @@ mod tests {
         writer.write_pcm_24bit_as_packed(&samples)?;
 
         let stats = writer.stats();
-        assert_eq!(stats.data_written, 6); // 2 samples × 3 bytes each
+        assert_eq!(stats.data_written, 6); // 2 samples x 3 bytes each
 
         writer.finish()?;
 
@@ -1046,7 +1046,7 @@ mod tests {
         assert!(file_info.data_chunk_start > file_info.data_size_position + 8); // After data chunk header
 
         // Verify that the calculated data size matches what we wrote
-        let expected_data_size = 100 * 3; // 100 samples × 3 bytes each
+        let expected_data_size = 100 * 3; // 100 samples x 3 bytes each
         let file_size = buffer.len() as u64;
         let actual_data_size = file_size - file_info.data_chunk_start;
         assert_eq!(actual_data_size, expected_data_size as u64);

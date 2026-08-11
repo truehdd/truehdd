@@ -32,7 +32,7 @@ the two stages will disagree about the stream.
 | Category        | Feature                       | Status | Priority | Criticality  | Notes                         |
 |-----------------|-------------------------------|--------|----------|--------------|-------------------------------|
 | **Parser**      | FBA sync bitstream (Dolby)    | 🟢     | High     | Essential    |                               |
-|                 | FBB sync bitstream (Meridian) | 🔴     | Low      | Nice-to-have | Do you really need it?        |
+|                 | FBB sync bitstream (Meridian) | 🟢     | Low      | Nice-to-have | DVD-Audio / MLP               |
 |                 | Evolution frame               | 🟢     | High     | Essential    |                               |
 |                 | CRC and parity validation     | 🟢     | High     | Essential    |                               |
 |                 | SMPTE timestamp               | 🟢     | Medium   | Optional     |                               |

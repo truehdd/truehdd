@@ -47,6 +47,16 @@ pub const BASE_SAMPLING_RATE_DVD: u32 = 48000;
 /// Base number of samples per access unit at 48kHz.
 pub const BASE_SAMPLES_PER_AU: usize = 40;
 
+/// Samples in 75 ms at `sampling_frequency`, the cap several timing rules compare against.
+///
+/// 75 ms is `freq * 3 / 40`, exact at every rate except 44.1 kHz, where it lands on 3307.5
+/// samples. Rounding up accepts a latency of exactly 3308 samples there. Which way an
+/// encoder rounds there is unmeasured, so tightening this to a floor would risk rejecting
+/// streams that are legal.
+pub fn samples_per_75ms(sampling_frequency: u32) -> u32 {
+    (sampling_frequency * 3).div_ceil(40)
+}
+
 /// Format information from major sync frames.
 ///
 /// Stream configuration parsed from 32-bit format_info field containing
@@ -344,10 +354,15 @@ impl MajorSyncInfo {
             let extended_substream_info = ms.extended_substream_info & 3;
             let substream_info = ms.substream_info & 0x7C;
 
-            if substream_info <= 76
-                && (76562297473007889u64 >> substream_info.wrapping_sub(20)) & 1 != 0
-                || (68987981841u64 >> substream_info.wrapping_sub(88)) & 1 != 0
-            {
+            // The whitelist is an FBA-only rule; FBB carries values outside it (0x04 for a
+            // six-channel copy-of two-channel, 0x0C for a layered six-channel). The range
+            // bounds are load-bearing: an unguarded shift overflows the u64, panicking in
+            // debug and wrongly whitelisting 0x08/0x0C in release.
+            let whitelisted = (20..=76).contains(&substream_info)
+                && (76562297473007889u64 >> (substream_info - 20)) & 1 != 0
+                || substream_info >= 88 && (68987981841u64 >> (substream_info - 88)) & 1 != 0;
+
+            if state.format_sync != MAJOR_SYNC_FBA || whitelisted {
                 debug!("substream_info={substream_info:#04X}")
             } else {
                 log_or_err!(
@@ -513,5 +528,75 @@ impl MajorSyncInfo {
         ));
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The 4-bit rate code is split across two families: 0..2 are the 48 kHz multiples and
+    /// 8..10 the 44.1 kHz ones, with everything between and above reserved.
+    #[test]
+    fn sampling_frequency_codes_cover_both_families() {
+        let f = |code: u8| {
+            FormatInfo {
+                audio_sampling_frequency_1: code,
+                ..Default::default()
+            }
+            .sampling_frequency_1()
+        };
+
+        assert_eq!(f(0).unwrap(), 48000);
+        assert_eq!(f(1).unwrap(), 96000);
+        assert_eq!(f(2).unwrap(), 192000);
+        assert_eq!(f(8).unwrap(), 44100);
+        assert_eq!(f(9).unwrap(), 88200);
+        assert_eq!(f(10).unwrap(), 176400);
+
+        for code in [3, 4, 5, 6, 7, 11, 12, 13, 14, 15] {
+            assert!(f(code).is_err(), "code {code} is reserved and must not map");
+        }
+    }
+
+    /// 75 ms is exact at every rate but 44.1 kHz, where it is 3307.5 samples. Pinned so the
+    /// rounding is a stated decision rather than an accident of `div_ceil`.
+    #[test]
+    fn samples_per_75ms_rounds_up_only_where_it_must() {
+        assert_eq!(samples_per_75ms(48000), 3600);
+        assert_eq!(samples_per_75ms(96000), 7200);
+        assert_eq!(samples_per_75ms(192000), 14400);
+        assert_eq!(samples_per_75ms(88200), 6615);
+        assert_eq!(samples_per_75ms(176400), 13230);
+
+        // the only rate whose 75 ms is not a whole number of samples
+        assert_eq!(samples_per_75ms(44100), 3308, "3307.5 rounded up");
+        for freq in [48000u32, 96000, 192000, 88200, 176400] {
+            assert_eq!(
+                freq * 3 % 40,
+                0,
+                "{freq} Hz should divide exactly, so rounding cannot bite"
+            );
+        }
+        assert_ne!(44100 * 3 % 40, 0, "44.1 kHz is the exception");
+    }
+
+    /// `samples_per_au` is `(freq / 44100) * 40`, which reads like a bug and is not: integer
+    /// division collapses each family onto its multiple, so 48 kHz and 44.1 kHz both give
+    /// 40, the 88.2/96 pair 80, and the 176.4/192 pair 160.
+    #[test]
+    fn samples_per_au_is_forty_per_rate_family() {
+        let n = |code: u8| {
+            FormatInfo {
+                audio_sampling_frequency_1: code,
+                ..Default::default()
+            }
+            .samples_per_au()
+            .unwrap()
+        };
+
+        assert_eq!((n(0), n(8)), (40, 40), "48 kHz and 44.1 kHz");
+        assert_eq!((n(1), n(9)), (80, 80), "96 kHz and 88.2 kHz");
+        assert_eq!((n(2), n(10)), (160, 160), "192 kHz and 176.4 kHz");
     }
 }

@@ -9,7 +9,7 @@ use crate::process::parse::ParserState;
 use crate::structs::channel::ChannelLabel;
 use crate::structs::extra_data::ExtraData;
 use crate::structs::substream::{SubstreamDirectory, SubstreamSegment};
-use crate::structs::sync::{MAJOR_SYNC_FBA, MAJOR_SYNC_FBB, MajorSyncInfo, UNIMPLEMENTED_FBB_MSG};
+use crate::structs::sync::{MAJOR_SYNC_FBA, MAJOR_SYNC_FBB, MajorSyncInfo};
 use crate::utils::bitstream_io::BsIoSliceReader;
 use crate::utils::errors::AccessUnitError;
 use crate::utils::perf::Timer;
@@ -126,7 +126,7 @@ impl AccessUnit {
         let test_bytes: u32 = reader.get_n(32)?;
         reader.seek(-32)?;
 
-        if test_bytes == MAJOR_SYNC_FBA {
+        if test_bytes == MAJOR_SYNC_FBA || test_bytes == MAJOR_SYNC_FBB {
             au.major_sync_info = Some(MajorSyncInfo::read(state, reader)?);
 
             let suffix = if state.last_major_sync_index > 0 {
@@ -141,9 +141,6 @@ impl AccessUnit {
             trace!("AU {}: Major sync found {}", state.au_counter, suffix);
 
             state.last_major_sync_index = state.au_counter;
-        } else if test_bytes == MAJOR_SYNC_FBB {
-            // TODO: Implement FBB
-            unimplemented!("{}", UNIMPLEMENTED_FBB_MSG)
         } else {
             // no major sync, update gap check
 
@@ -154,9 +151,15 @@ impl AccessUnit {
 
         let major_sync_interval = state.au_counter - state.last_major_sync_index;
 
-        // TODO: 32 for FBB
-        if state.format_sync == MAJOR_SYNC_FBA && major_sync_interval > 128 {
-            log_or_err!(state, Warn, anyhow!(AccessUnitError::FbaSyncTooFar));
+        // FBA repeats its major sync at least every 128 access units, FBB every 32.
+        let (sync_limit, too_far) = if state.format_sync == MAJOR_SYNC_FBB {
+            (32, AccessUnitError::FbbSyncTooFar)
+        } else {
+            (128, AccessUnitError::FbaSyncTooFar)
+        };
+
+        if major_sync_interval > sync_limit {
+            log_or_err!(state, Warn, anyhow!(too_far));
         }
 
         // TODO: restart gap check
@@ -338,7 +341,8 @@ impl AccessUnit {
             state.au_counter, state.input_timing, state.prev_input_timing, input_timing_interval
         );
 
-        let samples_per_75ms = (state.audio_sampling_frequency_1 * 3).div_ceil(40);
+        let samples_per_75ms =
+            crate::structs::sync::samples_per_75ms(state.audio_sampling_frequency_1);
 
         if input_timing_interval < state.samples_per_au >> 2 {
             if !state.allow_seamless_branch || !state.is_major_sync {

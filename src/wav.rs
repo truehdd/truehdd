@@ -194,7 +194,7 @@ mod tests {
         writer.write_pcm_24bit_as_packed(&samples)?;
 
         let stats = writer.stats();
-        assert_eq!(stats.data_written, 6); // 2 samples × 3 bytes each
+        assert_eq!(stats.data_written, 6); // 2 samples x 3 bytes each
 
         writer.finish()?;
 

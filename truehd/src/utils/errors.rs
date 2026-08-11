@@ -65,6 +65,9 @@ pub enum AccessUnitError {
     #[error("FBA stream major syncs must occur at intervals not exceeding 128 access units")]
     FbaSyncTooFar,
 
+    #[error("FBB stream major syncs must occur at intervals not exceeding 32 access units")]
+    FbbSyncTooFar,
+
     #[error("No substream")]
     NoSubstream,
 
@@ -173,13 +176,13 @@ pub enum BlockError {
 
 #[derive(thiserror::Error, Debug)]
 pub enum ChannelError {
-    #[error("Total filter order for Filters A and B must be ≤ 8. Got {a} + {b}")]
+    #[error("Total filter order for Filters A and B must be <= 8. Got {a} + {b}")]
     FilterOrderTooHigh { a: u8, b: u8 },
 
     #[error("Mismatched coeff_Q for Filters A and B on channel {chan}: A = {a_q}, B = {b_q}")]
     CoeffQMismatch { chan: usize, a_q: u8, b_q: u8 },
 
-    #[error("huff_lsbs[{chan}] must be ≤ {max}, got {actual}")]
+    #[error("huff_lsbs[{chan}] must be <= {max}, got {actual}")]
     HuffLsbsTooLarge { chan: usize, max: u32, actual: u32 },
 }
 
@@ -220,22 +223,22 @@ pub enum ExtraDataError {
 
 #[derive(thiserror::Error, Debug)]
 pub enum FilterError {
-    #[error("Filter A must have order ≤ 8. Got {0}")]
+    #[error("Filter A must have order <= 8. Got {0}")]
     FilterAOrderTooHigh(u8),
 
-    #[error("Filter B must have order ≤ 4. Got {0}")]
+    #[error("Filter B must have order <= 4. Got {0}")]
     FilterBOrderTooHigh(u8),
 
-    #[error("coeff_Q must be ≥ 8 and ≤ 15. Got {0}")]
+    #[error("coeff_Q must be >= 8 and <= 15. Got {0}")]
     InvalidCoeffQ(u8),
 
     #[error("coeff_bits must be between 1 and 16. Got {0}")]
     InvalidCoeffBits(u8),
 
-    #[error("coeff_shift must be ≤ 15. Got {0}")]
+    #[error("coeff_shift must be <= 15. Got {0}")]
     InvalidCoeffShift(u8),
 
-    #[error("coeff_bits + coeff_shift must be ≤ 16. Got {0}")]
+    #[error("coeff_bits + coeff_shift must be <= 16. Got {0}")]
     TotalCoeffBitsTooLarge(u8),
 
     #[error("coeff cannot take value -32768")]
@@ -250,14 +253,14 @@ pub enum FilterError {
 
 #[derive(thiserror::Error, Debug)]
 pub enum MatrixError {
-    #[error("matrix_ch[{index}] must be ≤ {max} (max_matrix_chan). Read {actual}")]
+    #[error("matrix_ch[{index}] must be <= {max} (max_matrix_chan). Read {actual}")]
     MatrixChannelTooHigh {
         index: usize,
         max: usize,
         actual: u8,
     },
 
-    #[error("frac_bits must be ≤ 14. Read {0}")]
+    #[error("frac_bits must be <= 14. Read {0}")]
     FracBitsTooHigh(u8),
 
     #[error(
@@ -316,7 +319,7 @@ pub enum RestartHeaderError {
     ChannelAssignTooHigh { index: usize, value: u8, max: u8 },
 
     #[error(
-        "In substream 0, ch_assign[{index}] = {value} must equal index when sampling rate is ≥ 176.4kHz"
+        "In substream 0, ch_assign[{index}] = {value} must equal index when sampling rate is >= 176.4kHz"
     )]
     ChannelAssignMisordered { index: usize, value: u8 },
 

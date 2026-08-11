@@ -17,7 +17,7 @@ use crate::log_or_err;
 use crate::process::decode::DecoderState;
 use crate::process::parse::ParserState;
 use crate::structs::sync::{
-    BASE_SAMPLING_RATE_CD, MAJOR_SYNC_FBA, MAJOR_SYNC_FBB, UNIMPLEMENTED_FBB_MSG,
+    BASE_SAMPLING_RATE_CD, MAJOR_SYNC_FBA, MAJOR_SYNC_FBB, UNIMPLEMENTED_FBB_MSG, samples_per_75ms,
 };
 use crate::utils::bitstream_io::BsIoSliceReader;
 use crate::utils::errors::RestartHeaderError;
@@ -236,13 +236,12 @@ impl RestartHeader {
                     }
 
                     let samples_per_au_3q4 = 3 * (samples_per_au >> 2);
-                    let samples_per_75ms =
-                        (state.audio_sampling_frequency_1 as usize * 3).div_ceil(40);
+                    let limit_75ms = samples_per_75ms(state.audio_sampling_frequency_1) as usize;
 
                     let c2_limit = prev_advance
                         .checked_add(samples_per_au)
                         .and_then(|v| v.checked_sub(prev_fifo_duration));
-                    let c3_limit = samples_per_75ms.checked_sub(samples_per_au);
+                    let c3_limit = limit_75ms.checked_sub(samples_per_au);
 
                     let c1 = advance <= prev_advance.saturating_add(samples_per_au_3q4);
                     let c2 = c2_limit.is_some_and(|limit| advance <= limit);
@@ -292,7 +291,7 @@ impl RestartHeader {
                     if !c3 {
                         warn!(
                             "AU {}: advance[n]>samples_per_75ms-samples_per_au, \
-                            ({advance} > {samples_per_75ms} - {samples_per_au})",
+                            ({advance} > {limit_75ms} - {samples_per_au})",
                             state.au_counter
                         );
                     }
@@ -394,24 +393,26 @@ impl RestartHeader {
         for i in 0..=rh.max_matrix_chan as usize {
             let ch_assign = reader.get_n::<u8>(6)?;
 
-            if state.format_sync == MAJOR_SYNC_FBA {
-                if ch_assign > rh.max_matrix_chan {
-                    bail!(RestartHeaderError::ChannelAssignTooHigh {
-                        index: i,
-                        value: ch_assign,
-                        max: rh.max_matrix_chan
-                    })
-                } else if state.substream_index == 0
-                    && i != ch_assign as usize
-                    && state.audio_sampling_frequency_1 >= BASE_SAMPLING_RATE_CD << 2
-                {
-                    bail!(RestartHeaderError::ChannelAssignMisordered {
-                        index: i,
-                        value: ch_assign,
-                    })
-                }
-            } else {
-                unimplemented!("{}", UNIMPLEMENTED_FBB_MSG)
+            // The permutation must index within the matrix channels in either format.
+            if ch_assign > rh.max_matrix_chan {
+                bail!(RestartHeaderError::ChannelAssignTooHigh {
+                    index: i,
+                    value: ch_assign,
+                    max: rh.max_matrix_chan
+                })
+            }
+
+            // Requiring the identity permutation is FBA-only, and only for substream 0 at
+            // four times the CD rate or above. FBB carries no such rule.
+            if state.format_sync == MAJOR_SYNC_FBA
+                && state.substream_index == 0
+                && i != ch_assign as usize
+                && state.audio_sampling_frequency_1 >= BASE_SAMPLING_RATE_CD << 2
+            {
+                bail!(RestartHeaderError::ChannelAssignMisordered {
+                    index: i,
+                    value: ch_assign,
+                })
             }
 
             let permutation_bit = 1 << ch_assign;

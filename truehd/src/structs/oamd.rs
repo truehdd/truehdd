@@ -1271,6 +1271,136 @@ impl SpeakerLabels {
     }
 }
 
+/// `STD_BED_LIST` is a bit-indexed partition of the speaker labels: bit *n* of a standard bed
+/// assignment turns on group *n*. It must cover every label exactly once, because a gap would
+/// silently drop a speaker from a bed and an overlap would let two bits fight over one.
+#[test]
+fn std_bed_list_partitions_the_speaker_labels() {
+    let mut seen = vec![0usize; SpeakerLabels::LFE2 as usize + 1];
+    for group in STD_BED_LIST {
+        for &n in group {
+            seen[n] += 1;
+        }
+    }
+    assert!(
+        seen.iter().all(|&c| c == 1),
+        "each label must appear in exactly one group, got {seen:?}"
+    );
+
+    // the groups are pairs in label order, with the three mono speakers alone
+    assert_eq!(
+        STD_BED_LIST[0],
+        &[SpeakerLabels::L as usize, SpeakerLabels::R as usize]
+    );
+    assert_eq!(STD_BED_LIST[1], &[SpeakerLabels::C as usize]);
+    assert_eq!(STD_BED_LIST[2], &[SpeakerLabels::LFE as usize]);
+    assert_eq!(STD_BED_LIST[9], &[SpeakerLabels::LFE2 as usize]);
+}
+
+/// The two ways to build an LFE-only bed must agree. `from_std` walks `STD_BED_LIST` while
+/// `with_lfe_only` sets the label directly, so a reordering of the table would make them
+/// disagree with nothing else to notice. An LFE-only bed is the common Atmos shape, not a
+/// corner case.
+#[test]
+fn lfe_only_bed_agrees_between_both_constructors() {
+    let from_bit = BedAssignment::from_std(1 << 2);
+    let direct = BedAssignment::with_lfe_only();
+    assert_eq!(
+        from_bit.0, direct.0,
+        "bit 2 of a standard bed assignment is the LFE group"
+    );
+    assert_eq!(direct.0.iter().filter(|&&b| b).count(), 1);
+}
+
+/// Distances are a fixed ladder resolved by a 4-bit index, so an out-of-order or truncated
+/// table would place objects at the wrong distance with no error anywhere.
+#[test]
+fn distance_factors_are_a_rising_ladder_of_sixteen() {
+    assert_eq!(DISTANCE_FACTORS.len(), 16);
+    assert!(
+        DISTANCE_FACTORS.windows(2).all(|w| w[0] < w[1]),
+        "must be strictly increasing: {DISTANCE_FACTORS:?}"
+    );
+    assert_eq!(DISTANCE_FACTORS[0], 1.1);
+    assert_eq!(DISTANCE_FACTORS[15], 50.1);
+}
+
+/// The ISF table is indexed by a 3-bit field, so it needs eight entries even though only six
+/// are defined. Indexing a six-entry table panicked on the reserved values until 0.6.4.
+#[test]
+fn isf_count_list_covers_the_full_three_bit_index() {
+    assert_eq!(ISF_COUNT_LIST.len(), 8);
+    assert_eq!(&ISF_COUNT_LIST[..6], &[4, 8, 10, 14, 15, 30]);
+    assert_eq!(
+        &ISF_COUNT_LIST[6..],
+        &[0, 0],
+        "reserved indices carry no objects"
+    );
+    assert!(ISF_COUNT_LIST[..6].windows(2).all(|w| w[0] < w[1]));
+}
+
+/// The extended-precision position offsets are a 2-bit signed ladder applied on top of a
+/// coarse position, so sign order matters: swapping the halves would mirror every refinement.
+#[test]
+fn extended_precision_offsets_pair_positive_then_negative() {
+    assert_eq!(
+        ExtendedPrecisionPositionBlock::EXT_PREC_POS3D_LUT,
+        [1.0, 2.0, -1.0, -2.0]
+    );
+}
+
+/// `POSITIONS` is already in DAMF's coordinate space, not an internal one: x runs -1 left to
+/// +1 right, y **+1 front to -1 back**, and z 0 at ear level to 1 at the ceiling. Getting the
+/// y sign backwards puts every object on the wrong axis, and nothing else in the crate would
+/// complain. Confirmed against a master whose bed objects carry `[-1,1,0]`,
+/// `[0,1,0]` and `[-1,0,0]` for L, C and Lss.
+#[test]
+fn speaker_positions_are_damf_coordinates() {
+    use SpeakerLabels::*;
+
+    // fronts sit at y = +1, rears at y = -1, sides at 0
+    assert_eq!(L.pos(), &[-1.0, 1.0, 0.0]);
+    assert_eq!(R.pos(), &[1.0, 1.0, 0.0]);
+    assert_eq!(C.pos(), &[0.0, 1.0, 0.0]);
+    assert_eq!(Lss.pos(), &[-1.0, 0.0, 0.0]);
+    assert_eq!(Rss.pos(), &[1.0, 0.0, 0.0]);
+    assert_eq!(Lrs.pos(), &[-1.0, -1.0, 0.0]);
+    assert_eq!(Rrs.pos(), &[1.0, -1.0, 0.0]);
+
+    // heights repeat the floor plan at z = 1
+    assert_eq!(Lfh.pos(), &[-1.0, 1.0, 1.0]);
+    assert_eq!(Rfh.pos(), &[1.0, 1.0, 1.0]);
+    assert_eq!(Lts.pos(), &[-1.0, 0.0, 1.0]);
+    assert_eq!(Rts.pos(), &[1.0, 0.0, 1.0]);
+    assert_eq!(Lrh.pos(), &[-1.0, -1.0, 1.0]);
+    assert_eq!(Rrh.pos(), &[1.0, -1.0, 1.0]);
+
+    // the wides are the only off-axis pair, at 42/62 on the 1/62 position grid
+    assert_eq!(Lw.pos(), &[-1.0, 42.0 / 62.0, 0.0]);
+    assert_eq!(Rw.pos(), &[1.0, 42.0 / 62.0, 0.0]);
+
+    // the LFEs are the only entries below ear level
+    assert_eq!(LFE.pos(), &[-1.0, 1.0, -1.0]);
+    assert_eq!(LFE2.pos(), &[1.0, 1.0, -1.0]);
+}
+
+/// Every label must resolve, and the discriminants must stay dense: `from_u8` gates on
+/// `<= LFE2` and `pos()` indexes `POSITIONS` directly, so a gap or a reordering would index
+/// the wrong row rather than fail.
+#[test]
+fn every_speaker_label_round_trips_to_a_position() {
+    for n in 0..=SpeakerLabels::LFE2 as u8 {
+        let label = SpeakerLabels::from_u8(n).unwrap_or_else(|| panic!("label {n} must map"));
+        assert_eq!(label as u8, n, "discriminant {n} must round trip");
+        let p = label.pos();
+        assert!(
+            (-1.0..=1.0).contains(&p[0]) && (-1.0..=1.0).contains(&p[1]),
+            "{label:?} position {p:?} outside the DAMF range"
+        );
+    }
+    assert!(SpeakerLabels::from_u8(SpeakerLabels::LFE2 as u8 + 1).is_none());
+}
+
 pub const TEST_DATA: &[u8] = &[
     0x1F, 0x88, 0x4B, 0x80, 0x00, 0xA2, 0x70, 0x00, 0x80, 0x40, 0xE0, 0x01, 0x00, 0x81, 0xC0, 0x02,
     0x01, 0x03, 0x80, 0x04, 0x02, 0x07, 0x00, 0x08, 0x04, 0x0E, 0x00, 0x10, 0x08, 0x1C, 0x00, 0x20,
