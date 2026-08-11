@@ -263,7 +263,7 @@ impl Verification<'_> {
     /// The verdict as an error, so its exit code travels the path every other one does.
     fn exit_with(&self, verdict: Verdict) -> Result<()> {
         let source = match verdict {
-            Verdict::Conformant => return Ok(()),
+            Verdict::Conformant | Verdict::ConformantOffDisc => return Ok(()),
             Verdict::Unparseable if self.facts.access_units == 0 => {
                 anyhow::anyhow!("no access unit in the stream could be parsed")
             }

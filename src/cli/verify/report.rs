@@ -2,6 +2,8 @@
 
 use serde_json::{Value, json};
 use truehd::process::parse::Parser;
+use truehd::process::{MAX_PRESENTATIONS, PresentationMap};
+use truehd::structs::channel::ChannelLabel;
 use truehd::structs::sync::{MAJOR_SYNC_FBA, MAJOR_SYNC_FBB, MajorSyncInfo};
 use truehd::utils::diagnostic::{Diagnostic, Location};
 use truehd::utils::fifo::{ACCUMULATORS, Accumulator, FifoPeak, SUBSTREAMS};
@@ -25,6 +27,30 @@ const FIFO_LABELS: [&str; ACCUMULATORS] = [
     "Whole stream",
 ];
 
+/// Bytes a substream carrying no channel is allowed for its headers alone.
+const EMPTY_SUBSTREAM_CAP: usize = 5_000;
+
+/// The restart sync word substream 0 must carry for a stream to be legal on any disc.
+const FIRST_RESTART_SYNC_WORD: u16 = 0x31EA;
+
+/// Which disc formats a stream is legal for.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct DiscValidity {
+    pub dvd_audio: bool,
+    pub hd_dvd_video: bool,
+    pub bluray: bool,
+    /// DVD-Audio additionally requires that the six-channel downmix not clip, which a
+    /// parse cannot establish.
+    pub dvd_audio_needs_decode: bool,
+}
+
+impl DiscValidity {
+    /// Whether any disc format admits the stream at all.
+    pub fn any_format(&self) -> bool {
+        self.dvd_audio || self.hd_dvd_video || self.bluray
+    }
+}
+
 /// What one substream declares about itself, and how deep its own bytes went.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SubstreamFacts {
@@ -33,7 +59,7 @@ pub struct SubstreamFacts {
     pub max_chan: usize,
     pub max_matrix_chan: usize,
     pub fifo_peak: usize,
-    pub fifo_cap: Option<usize>,
+    pub fifo_cap: usize,
 }
 
 /// What the stream says about itself, next to what the parse measured.
@@ -46,6 +72,11 @@ pub struct StreamFacts {
     pub samples_per_au: usize,
     pub substreams: usize,
     pub substream_info: u8,
+    pub extended_substream_info: u8,
+    /// Channels the major sync declares for the 6- and 8-channel presentations, which the
+    /// disc rules check against the channels the substreams actually carry.
+    pub declared_sixch_channels: usize,
+    pub declared_eightch_channels: usize,
     /// Each accumulator's deepest point, split into stream bytes and overhead.
     pub fifo_records: [FifoPeak; ACCUMULATORS],
     pub substream_facts: Vec<SubstreamFacts>,
@@ -67,8 +98,19 @@ impl StreamFacts {
         self.format_sync = Some(major_sync.format_sync);
         self.substreams = major_sync.substreams;
         self.substream_info = major_sync.substream_info;
+        self.extended_substream_info = major_sync.extended_substream_info;
         self.sampling_frequency = major_sync.format_info.sampling_frequency_1().unwrap_or(0);
         self.samples_per_au = major_sync.format_info.samples_per_au().unwrap_or(0);
+
+        let format_info = &major_sync.format_info;
+        self.declared_sixch_channels =
+            ChannelLabel::from_sixch_channel(format_info.sixch_decoder_channel_assignment)
+                .map_or(0, |labels| labels.len());
+        self.declared_eightch_channels = ChannelLabel::from_eightch_channel(
+            format_info.eightch_decoder_channel_assignment,
+            major_sync.flags,
+        )
+        .map_or(0, |labels| labels.len());
     }
 
     /// Everything the parse measured but the stream does not state about itself.
@@ -129,11 +171,14 @@ impl StreamFacts {
     /// A substream is allowed 15000 bytes for each channel it carries, to a ceiling of
     /// 120000. Its channel span is what counts: substreams that partition the channels
     /// each state their own share, while cumulative ones each state their presentation's
-    /// whole allowance.
-    pub fn substream_cap(min_chan: usize, max_chan: usize) -> Option<usize> {
-        let channels = max_chan.checked_sub(min_chan)? + 1;
+    /// whole allowance. A substream whose span is empty carries no channel but still
+    /// carries headers, and is allowed a flat 5000 bytes for them.
+    pub fn substream_cap(min_chan: usize, max_chan: usize) -> usize {
+        let Some(span) = max_chan.checked_sub(min_chan) else {
+            return EMPTY_SUBSTREAM_CAP;
+        };
 
-        Some((15_000 * channels).min(120_000))
+        (15_000 * (span + 1)).min(120_000)
     }
 
     fn duration_secs(&self) -> Option<f64> {
@@ -168,6 +213,102 @@ impl StreamFacts {
         let substream = self.substream_facts.first()?;
 
         Some(substream.max_chan.checked_sub(substream.min_chan)? + 1)
+    }
+
+    /// Channels a presentation reconstructs, taken from the substreams it is made of.
+    fn carried_channels(&self, presentation: usize) -> usize {
+        let map = PresentationMap::for_format_sync(
+            self.format_sync.unwrap_or_default(),
+            self.substream_info,
+            self.extended_substream_info,
+        );
+        let mask = map.substream_mask_by_index(presentation);
+
+        self.substream_facts
+            .iter()
+            .enumerate()
+            .filter(|&(index, _)| mask >> index & 1 != 0)
+            .map(|(_, substream)| substream.max_chan + 1)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Whether any presentation's substreams fail to tile its channels: every presentation
+    /// must run from channel 0 upwards with no channel left out and none claimed twice.
+    fn channel_numbering_broken(&self) -> bool {
+        let map = PresentationMap::for_format_sync(
+            self.format_sync.unwrap_or_default(),
+            self.substream_info,
+            self.extended_substream_info,
+        );
+
+        (0..MAX_PRESENTATIONS).any(|presentation| {
+            let mask = map.substream_mask_by_index(presentation);
+
+            let mut spans: Vec<(usize, usize)> = self
+                .substream_facts
+                .iter()
+                .enumerate()
+                .filter(|&(index, _)| mask >> index & 1 != 0)
+                .map(|(_, substream)| (substream.min_chan, substream.max_chan))
+                .collect();
+            spans.sort_unstable();
+
+            let mut next = 0;
+            spans.into_iter().any(|(min_chan, max_chan)| {
+                let broken = min_chan != next;
+                next = max_chan + 1;
+
+                broken
+            })
+        })
+    }
+
+    /// Which disc formats the stream is legal for.
+    ///
+    /// The stream must restart substream 0 on 0x31EA and number its channels without a gap
+    /// or an overlap, or it is legal for none of them. Beyond that the rules are the
+    /// channel counts a decoder may be asked for at each sampling frequency: at 176.4 and
+    /// 192 kHz, BluRay allows six channels and HD DVD-Video two, and both the declared
+    /// assignment and the substreams themselves have to stay inside that. BluRay does not
+    /// admit 44.1, 88.2 or 176.4 kHz at all, and takes no DVD-Audio stream.
+    pub fn disc_validity(&self) -> Option<DiscValidity> {
+        let format_sync = self.format_sync?;
+        let mut validity = DiscValidity::default();
+
+        if self.substream_facts.first()?.restart_sync_word != FIRST_RESTART_SYNC_WORD
+            || self.channel_numbering_broken()
+        {
+            return Some(validity);
+        }
+
+        if format_sync == MAJOR_SYNC_FBB {
+            // Whether the six-channel downmix clips decides DVD-Audio, and only a decode
+            // can say. The rest of the rule is met, so the answer is stated as the
+            // condition that remains.
+            validity.dvd_audio = true;
+            validity.dvd_audio_needs_decode = true;
+            validity.hd_dvd_video = self.substream_info & 1 != 0;
+        } else if !matches!(self.sampling_frequency, 176_400 | 192_000) {
+            validity.hd_dvd_video = true;
+            validity.bluray = true;
+        } else {
+            let counts = [
+                self.declared_sixch_channels,
+                self.declared_eightch_channels,
+                self.carried_channels(1),
+                self.carried_channels(2),
+            ];
+
+            validity.bluray = counts.iter().all(|&channels| channels <= 6);
+            validity.hd_dvd_video = counts.iter().all(|&channels| channels <= 2);
+        }
+
+        if matches!(self.sampling_frequency, 44_100 | 88_200 | 176_400) {
+            validity.bluray = false;
+        }
+
+        Some(validity)
     }
 
     fn max_fifo_latency_ms(&self) -> Option<f64> {
@@ -246,6 +387,10 @@ pub enum Verdict {
     /// The stream did not parse to its end, so nothing was fully checked.
     Unparseable,
     Conformant,
+    /// Conformant as a bitstream, but outside what any disc format admits, so it can be
+    /// decoded and carried in a file and cannot be authored to a disc. The codec rules and
+    /// the disc rules are different rules, and a stream can satisfy one without the other.
+    ConformantOffDisc,
     /// Violated a rule at or above the severity the caller fails on.
     NonConformant,
 }
@@ -256,6 +401,11 @@ impl Verdict {
             Verdict::Unparseable
         } else if tally.worst().is_some_and(|worst| worst >= fail_on) {
             Verdict::NonConformant
+        } else if facts
+            .disc_validity()
+            .is_some_and(|validity| !validity.any_format())
+        {
+            Verdict::ConformantOffDisc
         } else {
             Verdict::Conformant
         }
@@ -265,6 +415,7 @@ impl Verdict {
         match self {
             Verdict::Unparseable => "UNPARSEABLE",
             Verdict::Conformant => "CONFORMANT",
+            Verdict::ConformantOffDisc => "CONFORMANT, NOT DISC-AUTHORABLE",
             Verdict::NonConformant => "NON-CONFORMANT",
         }
     }
@@ -273,6 +424,7 @@ impl Verdict {
         match self {
             Verdict::Unparseable => "unparseable",
             Verdict::Conformant => "conformant",
+            Verdict::ConformantOffDisc => "conformant_off_disc",
             Verdict::NonConformant => "non_conformant",
         }
     }
@@ -280,106 +432,220 @@ impl Verdict {
     pub const fn exit_code(self) -> i32 {
         match self {
             Verdict::Unparseable => crate::exit::PARSE,
-            Verdict::Conformant => crate::exit::SUCCESS,
+            // The bitstream conforms, so the run succeeded. Being inadmissible on every
+            // disc is reported, not failed: it is a property of the disc rules, not a
+            // defect in the stream.
+            Verdict::Conformant | Verdict::ConformantOffDisc => crate::exit::SUCCESS,
             Verdict::NonConformant => crate::exit::NONCONFORMANT,
         }
     }
 }
 
-/// One `  label   value` line, laid out as the `info` command lays its own out.
-fn field(label: &str, value: impl std::fmt::Display) -> String {
-    format!("  {label:<LABEL$}{value}\n")
+/// One row of the summary: a label and the cells under it. A row with nothing to report
+/// carries a note in place of its cells.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Row {
+    pub label: String,
+    pub cells: Vec<String>,
+    pub note: Option<String>,
 }
 
-pub fn summary(input: &str, facts: &StreamFacts, tally: &Tally, verdict: Verdict) -> String {
-    let mut out = String::from("\nVerification Summary\n====================\n\n");
-
-    out.push_str("Stream Information\n");
-    out.push_str(&field("Input", input));
-
-    match facts.format_sync {
-        Some(format_sync) => {
-            out.push_str(&field(
-                "Format Sync",
-                format_args!("{} ({format_sync:08X})", facts.format_name()),
-            ));
-            out.push_str(&field(
-                "Sampling rate",
-                format_args!("{} Hz", facts.sampling_frequency),
-            ));
-            out.push_str(&field("Number of substreams", facts.substreams));
-            out.push_str(&field(
-                "substream_info",
-                format_args!("{:#04X}", facts.substream_info),
-            ));
+impl Row {
+    fn value(label: impl Into<String>, value: impl ToString) -> Self {
+        Self {
+            label: label.into(),
+            cells: vec![value.to_string()],
+            note: None,
         }
-        None => out.push_str(&field("Format Sync", "no major sync found")),
     }
 
-    out.push('\n');
-    out.push_str(&measurements(facts));
+    fn cells(label: impl Into<String>, cells: Vec<String>) -> Self {
+        Self {
+            label: label.into(),
+            cells,
+            note: None,
+        }
+    }
+
+    fn note(label: impl Into<String>, note: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            cells: Vec::new(),
+            note: Some(note.into()),
+        }
+    }
+}
+
+/// A titled block of rows. Headings make it a table, laid out in columns; without them the
+/// rows are `label   value` lines, as the `info` command lays its own out.
+///
+/// The sections are the report: what it says lives here, and rendering them to text is a
+/// separate step that cannot change any of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Section {
+    pub title: String,
+    pub headings: Vec<String>,
+    pub rows: Vec<Row>,
+}
+
+impl Section {
+    fn new(title: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            headings: Vec::new(),
+            rows: Vec::new(),
+        }
+    }
+
+    fn with_headings(title: impl Into<String>, headings: Vec<String>) -> Self {
+        Self {
+            title: title.into(),
+            headings,
+            rows: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, row: Row) -> &mut Self {
+        self.rows.push(row);
+        self
+    }
+}
+
+/// Everything the summary states, before any of it is laid out.
+pub fn sections(
+    input: &str,
+    facts: &StreamFacts,
+    tally: &Tally,
+    verdict: Verdict,
+) -> Vec<Section> {
+    let mut sections = vec![stream_information(input, facts), measurements(facts)];
 
     if facts.format_sync.is_some() {
-        out.push('\n');
-        out.push_str(&substream_table(facts));
-        out.push('\n');
-        out.push_str(&fifo_table(facts));
+        sections.push(substream_properties(facts));
+        sections.push(cumulative_fifo(facts));
+
+        if let Some(validity) = facts.disc_validity() {
+            sections.push(disc_validity(&validity));
+        }
     }
 
-    out.push('\n');
-    out.push_str("Diagnostics\n");
+    sections.push(diagnostics(tally, verdict));
 
-    for severity in Severity::ALL.iter().rev() {
-        let label = match severity {
-            Severity::Fatal => "Fatal",
-            Severity::Error => "Errors",
-            Severity::Warning => "Warnings",
-            Severity::Info => "Info",
-        };
+    sections
+}
 
-        out.push_str(&field(label, tally.count_of(*severity)));
-    }
+fn render(sections: &[Section]) -> String {
+    let mut out = String::new();
 
-    match tally.worst() {
-        Some(worst) => out.push_str(&field(
-            "Verdict",
-            format_args!("{} (worst: {worst})", verdict.label()),
-        )),
-        None => out.push_str(&field("Verdict", verdict.label())),
+    for (index, section) in sections.iter().enumerate() {
+        if index != 0 {
+            out.push('\n');
+        }
+
+        out.push_str(&section.title);
+        out.push('\n');
+
+        if !section.headings.is_empty() {
+            out.push_str(&format!("  {:<LABEL$}", ""));
+
+            for heading in &section.headings {
+                out.push_str(&format!("{heading:>COLUMN$}"));
+            }
+
+            out.push('\n');
+        }
+
+        for row in &section.rows {
+            out.push_str(&format!("  {:<LABEL$}", row.label));
+
+            match &row.note {
+                // A note stands in for the cells, over the width they would have filled.
+                Some(note) if !section.headings.is_empty() => out.push_str(&format!(
+                    "{note:>width$}",
+                    width = section.headings.len() * COLUMN
+                )),
+                Some(note) => out.push_str(note),
+                None if section.headings.is_empty() => {
+                    out.push_str(row.cells.first().map_or("", String::as_str))
+                }
+                None => {
+                    for cell in &row.cells {
+                        out.push_str(&format!("{cell:>COLUMN$}"));
+                    }
+                }
+            }
+
+            out.push('\n');
+        }
     }
 
     out
 }
 
-fn measurements(facts: &StreamFacts) -> String {
-    let mut out = String::from("Stream Measurements\n");
+pub fn summary(input: &str, facts: &StreamFacts, tally: &Tally, verdict: Verdict) -> String {
+    format!(
+        "\nVerification Summary\n====================\n\n{}",
+        render(&sections(input, facts, tally, verdict))
+    )
+}
 
-    out.push_str(&field("Access units", facts.access_units));
+fn stream_information(input: &str, facts: &StreamFacts) -> Section {
+    let mut section = Section::new("Stream Information");
+    section.push(Row::value("Input", input));
+
+    match facts.format_sync {
+        Some(format_sync) => {
+            section
+                .push(Row::value(
+                    "Format Sync",
+                    format_args!("{} ({format_sync:08X})", facts.format_name()),
+                ))
+                .push(Row::value(
+                    "Sampling rate",
+                    format_args!("{} Hz", facts.sampling_frequency),
+                ))
+                .push(Row::value("Number of substreams", facts.substreams))
+                .push(Row::value(
+                    "substream_info",
+                    format_args!("{:#04X}", facts.substream_info),
+                ));
+        }
+        None => {
+            section.push(Row::value("Format Sync", "no major sync found"));
+        }
+    }
+
+    section
+}
+
+fn measurements(facts: &StreamFacts) -> Section {
+    let mut section = Section::new("Stream Measurements");
+    section.push(Row::value("Access units", facts.access_units));
 
     if facts.extracted_frames != facts.access_units {
-        out.push_str(&field("Frames extracted", facts.extracted_frames));
+        section.push(Row::value("Frames extracted", facts.extracted_frames));
     }
 
     if let Some(secs) = facts.duration_secs() {
-        out.push_str(&field("Duration", time_str(secs)));
+        section.push(Row::value("Duration", time_str(secs)));
     }
 
-    match facts.average_access_unit_size() {
-        Some(average) => out.push_str(&field(
+    section.push(match facts.average_access_unit_size() {
+        Some(average) => Row::value(
             "Access unit size",
             format_args!(
                 "{average:.2} bytes average, {} bytes maximum",
                 facts.max_access_unit_size
             ),
-        )),
-        None => out.push_str(&field(
+        ),
+        None => Row::value(
             "Access unit size",
             format_args!("{} bytes maximum", facts.max_access_unit_size),
-        )),
-    }
+        ),
+    });
 
     if facts.max_data_rate != 0 {
-        out.push_str(&field(
+        section.push(Row::value(
             "Maximum data rate",
             format_args!(
                 "{:.1} kbps, at access unit {}",
@@ -389,20 +655,20 @@ fn measurements(facts: &StreamFacts) -> String {
         ));
     }
 
-    match facts.max_fifo_latency_ms() {
-        Some(ms) => out.push_str(&field(
-            "Maximum FIFO latency",
-            format_args!("{} samples ({ms:.3} ms)", facts.max_fifo_latency),
-        )),
-        None => out.push_str(&field(
-            "Maximum FIFO latency",
-            format_args!("{} samples", facts.max_fifo_latency),
-        )),
-    }
+    section
+        .push(match facts.max_fifo_latency_ms() {
+            Some(ms) => Row::value(
+                "Maximum FIFO latency",
+                format_args!("{} samples ({ms:.3} ms)", facts.max_fifo_latency),
+            ),
+            None => Row::value(
+                "Maximum FIFO latency",
+                format_args!("{} samples", facts.max_fifo_latency),
+            ),
+        })
+        .push(Row::value("Invalid branches", facts.invalid_branches));
 
-    out.push_str(&field("Invalid branches", facts.invalid_branches));
-
-    out
+    section
 }
 
 /// The per-substream view: what each substream carries, how deep its own bytes went and
@@ -410,98 +676,68 @@ fn measurements(facts: &StreamFacts) -> String {
 ///
 /// Transposed like the stream's own description, a column per substream, so that the
 /// depths sit under the channel range that earns their allowance.
-fn substream_table(facts: &StreamFacts) -> String {
-    let mut out = String::from("Substream Properties\n");
-
+fn substream_properties(facts: &StreamFacts) -> Section {
     if facts.substream_facts.is_empty() {
-        out.push_str(&field("Substreams", "no substream reached a restart header"));
+        let mut section = Section::new("Substream Properties");
+        section.push(Row::value(
+            "Substreams",
+            "no substream reached a restart header",
+        ));
 
-        return out;
+        return section;
     }
 
-    let columns = |values: Vec<String>| {
-        let mut line = String::new();
-
-        for value in values {
-            line.push_str(&format!("{value:>COLUMN$}"));
-        }
-
-        line
+    let column = |render: &dyn Fn(&SubstreamFacts) -> String| {
+        facts.substream_facts.iter().map(render).collect::<Vec<_>>()
     };
 
-    let heading = columns(
+    let mut section = Section::with_headings(
+        "Substream Properties",
         (0..facts.substream_facts.len())
             .map(|index| format!("ss{index}"))
             .collect(),
     );
-    out.push_str(&format!("  {:<LABEL$}{heading}\n", ""));
 
-    let row = |label: &str, values: Vec<String>| format!("  {label:<LABEL$}{}\n", columns(values));
+    section
+        .push(Row::cells(
+            "Restart sync word",
+            column(&|s| format!("{:04X}", s.restart_sync_word)),
+        ))
+        .push(Row::cells(
+            "Channels",
+            column(&|s| format!("{}..{}", s.min_chan, s.max_chan)),
+        ))
+        .push(Row::cells(
+            "Max matrix channel",
+            column(&|s| s.max_matrix_chan.to_string()),
+        ))
+        .push(Row::cells(
+            "Maximum FIFO depth",
+            column(&|s| s.fifo_peak.to_string()),
+        ))
+        .push(Row::cells(
+            "Allowed FIFO depth",
+            column(&|s| s.fifo_cap.to_string()),
+        ));
 
-    out.push_str(&row(
-        "Restart sync word",
-        facts
-            .substream_facts
-            .iter()
-            .map(|substream| format!("{:04X}", substream.restart_sync_word))
-            .collect(),
-    ));
-    out.push_str(&row(
-        "Channels",
-        facts
-            .substream_facts
-            .iter()
-            .map(|substream| format!("{}..{}", substream.min_chan, substream.max_chan))
-            .collect(),
-    ));
-    out.push_str(&row(
-        "Max matrix channel",
-        facts
-            .substream_facts
-            .iter()
-            .map(|substream| substream.max_matrix_chan.to_string())
-            .collect(),
-    ));
-    out.push_str(&row(
-        "Maximum FIFO depth",
-        facts
-            .substream_facts
-            .iter()
-            .map(|substream| substream.fifo_peak.to_string())
-            .collect(),
-    ));
-    out.push_str(&row(
-        "Allowed FIFO depth",
-        facts
-            .substream_facts
-            .iter()
-            .map(|substream| match substream.fifo_cap {
-                Some(cap) => cap.to_string(),
-                None => "-".to_owned(),
-            })
-            .collect(),
-    ));
-
-    out
+    section
 }
 
 /// The cumulative view: one row per accumulator, with the stream's own bytes separated
 /// from the container overhead priced around them.
-fn fifo_table(facts: &StreamFacts) -> String {
+fn cumulative_fifo(facts: &StreamFacts) -> Section {
     let caps = facts.fifo_caps();
-    let mut out = String::from("FIFO Depth, cumulative\n");
-
-    out.push_str(&format!(
-        "  {:<LABEL$}{:>COLUMN$}{:>COLUMN$}{:>COLUMN$}{:>COLUMN$}\n",
-        "", "stream", "overhead", "total", "allowed"
-    ));
+    let mut section = Section::with_headings(
+        "Cumulative FIFO Depth",
+        ["stream", "overhead", "total", "allowed"]
+            .map(str::to_owned)
+            .to_vec(),
+    );
 
     for (index, label) in FIFO_LABELS.iter().enumerate() {
         // A decoder the stream does not carry has nothing to say in any column.
         if index == 0 && facts.substream0_channels().is_some_and(|channels| channels != 2) {
-            out.push_str(&format!("  {label:<LABEL$}"));
-            out.push_str(&format!("{:>COLUMN$}", "-").repeat(4));
-            out.push('\n');
+            section.push(Row::cells(*label, vec!["-".to_owned(); 4]));
 
             continue;
         }
@@ -515,10 +751,7 @@ fn fifo_table(facts: &StreamFacts) -> String {
         };
 
         if let Some(reason) = unavailable {
-            out.push_str(&format!(
-                "  {label:<LABEL$}{reason:>width$}\n",
-                width = 4 * COLUMN
-            ));
+            section.push(Row::note(*label, reason));
 
             continue;
         }
@@ -532,18 +765,59 @@ fn fifo_table(facts: &StreamFacts) -> String {
             _ => (*label, facts.fifo_records[index]),
         };
 
-        out.push_str(&format!(
-            "  {label:<LABEL$}{:>COLUMN$}{:>COLUMN$}{:>COLUMN$}",
-            record.stream, record.overhead, record.total
+        section.push(Row::cells(
+            label,
+            vec![
+                record.stream.to_string(),
+                record.overhead.to_string(),
+                record.total.to_string(),
+                caps[index].map_or_else(|| "not checked".to_owned(), |cap| cap.to_string()),
+            ],
         ));
-
-        match caps[index] {
-            Some(cap) => out.push_str(&format!("{cap:>COLUMN$}\n")),
-            None => out.push_str(&format!("{:>COLUMN$}\n", "not checked")),
-        }
     }
 
-    out
+    section
+}
+
+/// The disc formats the stream is legal for, one row each.
+fn disc_validity(validity: &DiscValidity) -> Section {
+    let yes_no = |legal: bool| if legal { "yes" } else { "no" };
+    let mut section = Section::new("Disc Format Validity");
+
+    section
+        .push(match (validity.dvd_audio, validity.dvd_audio_needs_decode) {
+            (true, true) => Row::value("DVD-Audio", "yes, if the 6-channel downmix does not clip"),
+            (legal, _) => Row::value("DVD-Audio", yes_no(legal)),
+        })
+        .push(Row::value("HD DVD-Video", yes_no(validity.hd_dvd_video)))
+        .push(Row::value("BluRay", yes_no(validity.bluray)));
+
+    section
+}
+
+fn diagnostics(tally: &Tally, verdict: Verdict) -> Section {
+    let mut section = Section::new("Diagnostics");
+
+    for severity in Severity::ALL.iter().rev() {
+        let label = match severity {
+            Severity::Fatal => "Fatal",
+            Severity::Error => "Errors",
+            Severity::Warning => "Warnings",
+            Severity::Info => "Info",
+        };
+
+        section.push(Row::value(label, tally.count_of(*severity)));
+    }
+
+    section.push(match tally.worst() {
+        Some(worst) => Row::value(
+            "Verdict",
+            format_args!("{} (worst: {worst})", verdict.label()),
+        ),
+        None => Row::value("Verdict", verdict.label()),
+    });
+
+    section
 }
 
 pub fn summary_json(input: &str, facts: &StreamFacts, tally: &Tally, verdict: Verdict) -> String {
@@ -589,6 +863,12 @@ pub fn summary_json(input: &str, facts: &StreamFacts, tally: &Tally, verdict: Ve
         "fifo_stream_bytes": facts.fifo_records.map(|record| record.stream),
         "fifo_overhead_bytes": facts.fifo_records.map(|record| record.overhead),
         "substream_properties": substreams,
+        "disc_validity": facts.disc_validity().map(|validity| json!({
+            "dvd_audio": validity.dvd_audio,
+            "dvd_audio_needs_decode": validity.dvd_audio_needs_decode,
+            "hd_dvd_video": validity.hd_dvd_video,
+            "bluray": validity.bluray,
+        })),
         "invalid_branches": facts.invalid_branches,
         "max_data_rate": facts.max_data_rate,
         "max_data_rate_au": facts.max_data_rate_au,
@@ -607,7 +887,6 @@ pub fn summary_json(input: &str, facts: &StreamFacts, tally: &Tally, verdict: Ve
 
 #[cfg(test)]
 mod tests {
-    use truehd::process::MAX_PRESENTATIONS;
     use truehd::process::extract::Extractor;
     use truehd::utils::diagnostic::Rule;
 
@@ -620,6 +899,17 @@ mod tests {
 
     /// One FBA substream, so the 6- and 8-channel presentations are copies of the first.
     const FBA_2CH: &[u8] = include_bytes!("../../../truehd/tests/assets/fba_2ch.mlp");
+
+    /// FBA at 192 kHz whose 8-channel presentation carries six channels, the only rate
+    /// class where the disc rules count channels.
+    const FBA_192K: &[u8] = include_bytes!("../../../truehd/tests/assets/fba_192k.mlp");
+
+    /// FBA at 176.4 kHz, two channels. BluRay does not admit the rate whatever the
+    /// channel count, so it is the only asset that exercises that clause.
+    const FBA_176K: &[u8] = include_bytes!("../../../truehd/tests/assets/fba_176k.mlp");
+
+    /// FBA at 192 kHz carrying eight channels, which no disc format accepts.
+    const FBA_192K_8CH: &[u8] = include_bytes!("../../../truehd/tests/assets/fba_192k_8ch.mlp");
 
     /// FBB over two substreams, `substream_info` 0x0D.
     const FBB_6CH: &[u8] = include_bytes!("../../../truehd/tests/assets/fbb_6ch.mlp");
@@ -665,6 +955,42 @@ mod tests {
         facts_of(FBA_ATMOS_CBI)
     }
 
+    /// The summary as sections, which is what a test should be looking at: the labels and
+    /// the values are the contract, and the layout is the renderer's business.
+    fn report(facts: &StreamFacts) -> Vec<Section> {
+        sections("x.mlp", facts, &Tally::default(), Verdict::Conformant)
+    }
+
+    /// One row, named by its section and label, with a failure that says which of the two
+    /// went missing rather than only that some string was absent.
+    fn row<'a>(sections: &'a [Section], title: &str, label: &str) -> &'a Row {
+        let section = sections
+            .iter()
+            .find(|section| section.title == title)
+            .unwrap_or_else(|| {
+                let titles: Vec<&str> = sections.iter().map(|s| s.title.as_str()).collect();
+                panic!("no section {title:?}, have {titles:?}")
+            });
+
+        section
+            .rows
+            .iter()
+            .find(|row| row.label == label)
+            .unwrap_or_else(|| {
+                let labels: Vec<&str> = section.rows.iter().map(|r| r.label.as_str()).collect();
+                panic!("no row {label:?} in {title:?}, have {labels:?}")
+            })
+    }
+
+    /// The cells of one row, for comparison against a literal array.
+    fn cells<'a>(sections: &'a [Section], title: &str, label: &str) -> Vec<&'a str> {
+        row(sections, title, label)
+            .cells
+            .iter()
+            .map(String::as_str)
+            .collect()
+    }
+
     #[test]
     fn fba_caps_are_reported_for_every_accumulator() {
         assert_eq!(
@@ -699,17 +1025,17 @@ mod tests {
     #[test]
     fn a_substream_is_allowed_fifteen_thousand_bytes_a_channel() {
         // partitioned: a two-substream DVD-Audio stream, ss1 carrying channels 2..5
-        assert_eq!(StreamFacts::substream_cap(0, 1), Some(30_000));
-        assert_eq!(StreamFacts::substream_cap(2, 5), Some(60_000));
+        assert_eq!(StreamFacts::substream_cap(0, 1), 30_000);
+        assert_eq!(StreamFacts::substream_cap(2, 5), 60_000);
 
         // cumulative: four independent presentations, each spanning from channel 0
-        assert_eq!(StreamFacts::substream_cap(0, 5), Some(90_000));
-        assert_eq!(StreamFacts::substream_cap(0, 7), Some(120_000));
+        assert_eq!(StreamFacts::substream_cap(0, 5), 90_000);
+        assert_eq!(StreamFacts::substream_cap(0, 7), 120_000);
         // sixteen channels would ask 240000; the ceiling holds it at 120000
-        assert_eq!(StreamFacts::substream_cap(0, 15), Some(120_000));
+        assert_eq!(StreamFacts::substream_cap(0, 15), 120_000);
 
-        // a span that cannot be read states nothing
-        assert_eq!(StreamFacts::substream_cap(5, 0), None);
+        // an empty span carries no channel, and is allowed its headers alone
+        assert_eq!(StreamFacts::substream_cap(6, 5), 5_000);
     }
 
     #[test]
@@ -752,27 +1078,57 @@ mod tests {
             assert_eq!(verdict.exit_code(), crate::exit::SUCCESS);
         }
 
-        let text = summary("x.mlp", &facts(), &tally, Verdict::Conformant);
-        assert!(text.contains("Verdict                     CONFORMANT\n"), "{text}");
-        assert!(text.contains("Fatal                       0\n"), "{text}");
+        let report = sections("x.mlp", &facts(), &tally, Verdict::Conformant);
+        assert_eq!(cells(&report, "Diagnostics", "Verdict"), ["CONFORMANT"]);
+        assert_eq!(cells(&report, "Diagnostics", "Fatal"), ["0"]);
     }
 
     /// Every measurement the report gained has a line of its own.
+    /// The one test that looks at the layout, so that a renderer change is caught here
+    /// rather than in every test that happens to mention a row. Everything else asserts
+    /// against the sections, which carry no widths at all.
+    #[test]
+    fn the_renderer_lays_a_section_out_in_columns() {
+        let mut section = Section::with_headings(
+            "Example",
+            ["stream", "total"].map(str::to_owned).to_vec(),
+        );
+        section
+            .push(Row::cells("2-channel decoder", vec!["240".into(), "294".into()]))
+            .push(Row::note("8-channel decoder", "not checked"));
+
+        let mut field = Section::new("Fields");
+        field.push(Row::value("Sampling rate", "48000 Hz"));
+
+        assert_eq!(
+            render(&[section, field]),
+            concat!(
+                "Example\n",
+                "                                   stream      total\n",
+                "  2-channel decoder                   240        294\n",
+                "  8-channel decoder                      not checked\n",
+                "\n",
+                "Fields\n",
+                "  Sampling rate               48000 Hz\n",
+            )
+        );
+    }
+
     #[test]
     fn the_measurements_reach_the_report() {
-        let text = summary("x.mlp", &facts(), &Tally::default(), Verdict::Conformant);
+        let report = report(&facts());
 
-        assert!(
-            text.contains("Maximum data rate           3840.0 kbps, at access unit 0\n"),
-            "{text}"
+        assert_eq!(
+            cells(&report, "Stream Measurements", "Maximum data rate"),
+            ["3840.0 kbps, at access unit 0"]
         );
-        assert!(
-            text.contains("Maximum FIFO latency        56 samples (1.167 ms)\n"),
-            "{text}"
+        assert_eq!(
+            cells(&report, "Stream Measurements", "Maximum FIFO latency"),
+            ["56 samples (1.167 ms)"]
         );
-        assert!(
-            text.contains("Access unit size            252.46 bytes average, 556 bytes maximum\n"),
-            "{text}"
+        assert_eq!(
+            cells(&report, "Stream Measurements", "Access unit size"),
+            ["252.46 bytes average, 556 bytes maximum"]
         );
     }
 
@@ -780,55 +1136,173 @@ mod tests {
     /// own depth and its own allowance.
     #[test]
     fn the_substream_table_reports_a_column_per_substream() {
-        let text = summary("x.mlp", &facts(), &Tally::default(), Verdict::Conformant);
+        let report = report(&facts());
 
-        assert!(text.contains("Substream Properties\n"), "{text}");
-        assert!(
-            text.contains("Restart sync word                  31EA       31EB       31EB       31EC\n"),
-            "{text}"
+        assert_eq!(
+            cells(&report, "Substream Properties", "Restart sync word"),
+            ["31EA", "31EB", "31EB", "31EC"]
         );
-        assert!(
-            text.contains("Channels                           0..1       0..5       0..7      0..15\n"),
-            "{text}"
+        assert_eq!(cells(&report, "Substream Properties", "Channels"), ["0..1", "0..5", "0..7", "0..15"]);
+        assert_eq!(
+            cells(&report, "Substream Properties", "Maximum FIFO depth"),
+            ["240", "246", "250", "274"]
         );
-        assert!(
-            text.contains("Maximum FIFO depth                  240        246        250        274\n"),
-            "{text}"
-        );
-        assert!(
-            text.contains("Allowed FIFO depth                30000      90000     120000     120000\n"),
-            "{text}"
+        assert_eq!(
+            cells(&report, "Substream Properties", "Allowed FIFO depth"),
+            ["30000", "90000", "120000", "120000"]
         );
     }
 
     /// The cumulative rows split into stream and overhead, and the two add back up.
     #[test]
     fn the_fifo_table_separates_the_stream_from_its_overhead() {
-        let text = summary("x.mlp", &facts(), &Tally::default(), Verdict::Conformant);
+        let facts = facts();
+        let report = report(&facts);
 
-        assert!(
-            text.contains("                                 stream   overhead      total    allowed\n"),
-            "{text}"
+        assert_eq!(
+            cells(&report, "Cumulative FIFO Depth", "2-channel decoder"),
+            ["240", "54", "294", "30000"]
         );
-        assert!(
-            text.contains("2-channel decoder                   240         54        294      30000\n"),
-            "{text}"
-        );
-        assert!(
-            text.contains("Whole stream                       1010         72       1082     120000\n"),
-            "{text}"
+        assert_eq!(
+            cells(&report, "Cumulative FIFO Depth", "Whole stream"),
+            ["1010", "72", "1082", "120000"]
         );
 
         // Substream 1 carries the whole 6-channel presentation here, so that row is its
         // own bytes and not substream 0's as well.
-        let facts = facts();
-        assert!(
-            text.contains("6-channel decoder                   246         52        298      90000\n"),
-            "{text}"
+        assert_eq!(
+            cells(&report, "Cumulative FIFO Depth", "6-channel decoder"),
+            ["246", "52", "298", "90000"]
         );
         assert_eq!(
             facts.fifo_records[1].stream,
             facts.substream_facts[1].fifo_peak
+        );
+    }
+
+    /// The disc rules only count channels at 176.4 and 192 kHz. Below that an FBA stream
+    /// is legal for both video formats whatever it carries, and DVD-Audio takes no FBA
+    /// stream at all.
+    #[test]
+    fn an_fba_stream_below_the_high_rates_is_legal_for_both_video_formats() {
+        let validity = facts().disc_validity().unwrap();
+
+        assert_eq!(
+            validity,
+            DiscValidity {
+                dvd_audio: false,
+                hd_dvd_video: true,
+                bluray: true,
+                dvd_audio_needs_decode: false,
+            }
+        );
+
+        let report = report(&facts());
+        assert_eq!(cells(&report, "Disc Format Validity", "HD DVD-Video"), ["yes"]);
+        assert_eq!(cells(&report, "Disc Format Validity", "BluRay"), ["yes"]);
+    }
+
+    /// At 192 kHz BluRay allows six channels and HD DVD-Video two. This stream carries
+    /// six, so it keeps BluRay and loses HD DVD-Video.
+    #[test]
+    fn six_channels_at_the_high_rates_keep_bluray_and_lose_hd_dvd() {
+        let facts = facts_of(FBA_192K);
+        assert_eq!(facts.sampling_frequency, 192_000);
+        assert_eq!(facts.carried_channels(2), 6);
+
+        let validity = facts.disc_validity().unwrap();
+        assert!(validity.bluray);
+        assert!(!validity.hd_dvd_video);
+        assert!(!validity.dvd_audio);
+    }
+
+    /// BluRay admits neither 44.1, 88.2 nor 176.4 kHz, so a two-channel stream that clears
+    /// every channel-count rule still loses BluRay on its sampling frequency alone.
+    #[test]
+    fn bluray_refuses_the_rates_it_does_not_carry() {
+        let facts = facts_of(FBA_176K);
+        assert_eq!(facts.sampling_frequency, 176_400);
+        assert_eq!(facts.carried_channels(2), 2);
+
+        let validity = facts.disc_validity().unwrap();
+        assert!(validity.hd_dvd_video, "two channels satisfy HD DVD-Video");
+        assert!(!validity.bluray, "the rate alone disqualifies BluRay");
+    }
+
+    /// Eight channels at 192 kHz pass the limit of no disc format, so the stream is legal
+    /// for none of them. Its bitstream is still well formed, which the verdict reports
+    /// separately: conformance and disc legality are different questions.
+    #[test]
+    fn eight_channels_at_the_high_rates_are_legal_nowhere() {
+        let facts = facts_of(FBA_192K_8CH);
+        assert_eq!(facts.sampling_frequency, 192_000);
+        assert_eq!(facts.carried_channels(2), 8);
+        assert_eq!(facts.declared_eightch_channels, 8);
+
+        assert_eq!(facts.disc_validity().unwrap(), DiscValidity::default());
+
+        let report = report(&facts);
+        for label in ["DVD-Audio", "HD DVD-Video", "BluRay"] {
+            assert_eq!(cells(&report, "Disc Format Validity", label), ["no"]);
+        }
+    }
+
+    /// A stream no disc format admits is still a conformant bitstream, so it gets a
+    /// verdict of its own rather than an error: it decodes, it just cannot be authored.
+    /// A stream one format does admit is plainly conformant.
+    #[test]
+    fn a_stream_no_disc_format_admits_is_conformant_but_not_authorable() {
+        let tally = Tally::default();
+
+        let verdict = Verdict::of(&facts_of(FBA_192K_8CH), &tally, Severity::Error, true);
+        assert_eq!(verdict, Verdict::ConformantOffDisc);
+        assert_eq!(verdict.exit_code(), crate::exit::SUCCESS);
+
+        let report = sections(
+            "x.mlp",
+            &facts_of(FBA_192K_8CH),
+            &tally,
+            Verdict::ConformantOffDisc,
+        );
+        assert_eq!(
+            cells(&report, "Diagnostics", "Verdict"),
+            ["CONFORMANT, NOT DISC-AUTHORABLE"]
+        );
+
+        // BluRay takes the six-channel stream at the same rate, so it is plain conformant
+        assert_eq!(
+            Verdict::of(&facts_of(FBA_192K), &tally, Severity::Error, true),
+            Verdict::Conformant
+        );
+
+        // and a codec-level violation still outranks the disc question
+        let mut broken = Tally::default();
+        broken.record("fifo.underrun", Severity::Error, 3, 0);
+        assert_eq!(
+            Verdict::of(&facts_of(FBA_192K_8CH), &broken, Severity::Error, true),
+            Verdict::NonConformant
+        );
+    }
+
+    /// A DVD-Audio stream is never legal for BluRay, and its own verdict rests on a
+    /// clipping check no parse can make, so it is stated as the condition it leaves open.
+    #[test]
+    fn a_dvd_audio_stream_states_the_condition_a_parse_cannot_settle() {
+        let report = report(&facts_of(FBB_6CH));
+
+        assert_eq!(
+            cells(&report, "Disc Format Validity", "DVD-Audio"),
+            ["yes, if the 6-channel downmix does not clip"]
+        );
+        assert_eq!(cells(&report, "Disc Format Validity", "BluRay"), ["no"]);
+
+        // Bit 0 of substream_info decides HD DVD-Video: 0x0D carries it, 0x04 does not.
+        assert!(facts_of(FBB_6CH).disc_validity().unwrap().hd_dvd_video);
+        assert!(
+            !facts_of(FBB_6CH_SINGLE)
+                .disc_validity()
+                .unwrap()
+                .hd_dvd_video
         );
     }
 
@@ -846,11 +1320,12 @@ mod tests {
             crate::exit::NONCONFORMANT
         );
 
-        let text = summary("x.mlp", &facts(), &tally, Verdict::NonConformant);
-        assert!(text.contains("NON-CONFORMANT (worst: warning)"));
-
-        let text = summary("x.mlp", &facts(), &tally, Verdict::Conformant);
-        assert!(text.contains("CONFORMANT (worst: warning)"));
+        let stated = |verdict| {
+            let report = sections("x.mlp", &facts(), &tally, verdict);
+            cells(&report, "Diagnostics", "Verdict")[0].to_owned()
+        };
+        assert_eq!(stated(Verdict::NonConformant), "NON-CONFORMANT (worst: warning)");
+        assert_eq!(stated(Verdict::Conformant), "CONFORMANT (worst: warning)");
     }
 
     /// A stream that never parsed to its end was never fully checked, so it cannot be
@@ -876,19 +1351,22 @@ mod tests {
     /// Without a major sync there is nothing to report peaks or caps against.
     #[test]
     fn a_stream_without_a_major_sync_reports_no_format_block() {
-        let text = summary(
+        let report = sections(
             "x.mlp",
             &StreamFacts::default(),
             &Tally::default(),
             Verdict::Unparseable,
         );
 
-        assert!(
-            text.contains("Format Sync                 no major sync found\n"),
-            "{text}"
+        assert_eq!(
+            cells(&report, "Stream Information", "Format Sync"),
+            ["no major sync found"]
         );
-        assert!(!text.contains("FIFO Depth"), "{text}");
-        assert!(text.contains("Verdict                     UNPARSEABLE\n"), "{text}");
+        assert_eq!(cells(&report, "Diagnostics", "Verdict"), ["UNPARSEABLE"]);
+        assert!(
+            !report.iter().any(|section| section.title.contains("FIFO")),
+            "{report:?}"
+        );
     }
 
     /// A single-substream stream declares its 6-channel presentation as a copy of
@@ -898,17 +1376,15 @@ mod tests {
     fn the_sixch_row_says_so_when_the_presentation_is_a_copy() {
         let facts = facts_of(FBA_2CH);
 
-        let text = summary("x.mlp", &facts, &Tally::default(), Verdict::Conformant);
-        assert!(
-            text.contains("6-channel decoder (ss0 only)       2210        174       2384      90000\n"),
-            "{text}"
+        let report = report(&facts);
+        assert_eq!(
+            cells(&report, "Cumulative FIFO Depth", "6-channel decoder (ss0 only)"),
+            ["2210", "174", "2384", "90000"]
         );
-
-        let sixteench = text
-            .lines()
-            .find(|line| line.contains("16-channel"))
-            .unwrap_or_default();
-        assert!(sixteench.contains("no 16-channel presentation"), "{text}");
+        assert_eq!(
+            row(&report, "Cumulative FIFO Depth", "16-channel decoder").note.as_deref(),
+            Some("no 16-channel presentation")
+        );
     }
 
     /// An FBB stream may carry its whole six-channel presentation in substream 0. There is
@@ -920,14 +1396,11 @@ mod tests {
         assert_eq!(facts.substream_info, 0x04);
         assert_eq!(facts.substream0_channels(), Some(6));
 
-        let text = summary("x.mlp", &facts, &Tally::default(), Verdict::Conformant);
-        assert!(
-            text.contains("2-channel decoder                     -          -          -          -\n"),
-            "{text}"
-        );
-        assert!(
-            text.contains("6-channel decoder (ss0 only)         44         46         90      90000\n"),
-            "{text}"
+        let report = report(&facts);
+        assert_eq!(cells(&report, "Cumulative FIFO Depth", "2-channel decoder"), ["-", "-", "-", "-"]);
+        assert_eq!(
+            cells(&report, "Cumulative FIFO Depth", "6-channel decoder (ss0 only)"),
+            ["44", "46", "90", "90000"]
         );
     }
 
@@ -938,16 +1411,12 @@ mod tests {
         let facts = facts_of(FBB_6CH);
         assert_eq!(facts.substream_info, 0x0D);
 
-        let text = summary("x.mlp", &facts, &Tally::default(), Verdict::Conformant);
+        let report = report(&facts);
 
         for label in ["8-channel decoder", "16-channel decoder"] {
-            let row = text
-                .lines()
-                .find(|line| line.contains(label))
-                .unwrap_or_default();
-
-            assert!(row.ends_with("not checked"), "{text}");
-            assert!(!row.contains('0'), "{text}");
+            let row = row(&report, "Cumulative FIFO Depth", label);
+            assert_eq!(row.note.as_deref(), Some("not checked"));
+            assert!(row.cells.is_empty(), "a note replaces the cells");
         }
     }
 

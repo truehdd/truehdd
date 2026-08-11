@@ -11,7 +11,7 @@ use truehd::process::{
     parse::Parser,
 };
 use truehd::structs::access_unit::AccessUnit;
-use truehd::structs::channel::{ChannelGroup, ChannelLabel, FbaChannelMeaning, FbbChannelMeaning};
+use truehd::structs::channel::{ChannelGroup, ChannelLabel, FbaChannelMeaning};
 use truehd::structs::sync::MAJOR_SYNC_FBB;
 
 pub fn cmd_info(args: &InfoArgs, cli: &Cli, multi: Option<&MultiProgress>) -> Result<()> {
@@ -282,7 +282,6 @@ struct StreamInfo {
     peak_data_rate: u32,
     substreams: usize,
     is_atmos: bool,
-    fbb_channel_meaning: Option<FbbChannelMeaning>,
 }
 
 impl StreamInfo {
@@ -299,7 +298,6 @@ impl StreamInfo {
             // upper nibble carries nothing.
             is_atmos: major_sync.format_sync != MAJOR_SYNC_FBB
                 && major_sync.substream_info >> 7 != 0,
-            fbb_channel_meaning: major_sync.channel_meaning.fbb().cloned(),
         })
     }
 }
@@ -312,29 +310,6 @@ fn display_stream_info(info: &StreamInfo) {
     println!("  Peak data rate            {} kbps", info.peak_data_rate);
     println!("  Number of substreams      {}", info.substreams);
     println!("  Dolby Atmos               {}", info.is_atmos);
-    println!();
-
-    if let Some(cm) = &info.fbb_channel_meaning {
-        display_fbb_channel_meaning(cm);
-    }
-}
-
-/// The FBB `channel_meaning` block, printed under the field names the bitstream uses.
-///
-/// Only `hdcd_process` has an agreed reading; the rest are reported raw rather than
-/// mapped onto a table this crate cannot demonstrate.
-fn display_fbb_channel_meaning(cm: &FbbChannelMeaning) {
-    println!("Channel Meaning (DVD-Audio)");
-    println!("  fs                        {}", cm.fs);
-    println!("  wordwidth                 {}", cm.wordwidth);
-    println!("  channel_occupancy         {:#04X}", cm.channel_occupancy);
-    println!("  mlp_multi_channel_type    {}", cm.mlp_multi_channel_type);
-    println!("  speaker_layout            {:#05X}", cm.speaker_layout);
-    println!("  copy_protection           {}", cm.copy_protection);
-    println!("  level_control             {:#06X}", cm.level_control);
-    println!("  hdcd_process              {}", cm.hdcd_process);
-    println!("  source_format             {}", cm.source_format);
-    println!("  summary_info              {:#04X}", cm.summary_info);
     println!();
 }
 
