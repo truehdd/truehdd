@@ -15,7 +15,7 @@
 
 use crate::log_or_err;
 use crate::process::decode::DecoderState;
-use crate::process::parse::ParserState;
+use crate::process::parse::{BranchConditions, ParserState};
 use crate::structs::sync::{
     BASE_SAMPLING_RATE_CD, MAJOR_SYNC_FBA, MAJOR_SYNC_FBB, samples_per_75ms,
 };
@@ -244,7 +244,15 @@ impl RestartHeader {
                             .prev_peak_data_rate
                             .saturating_mul(input_timing_interval);
 
-                    if c1 && c2 && c3 && c4 {
+                    let conditions = BranchConditions {
+                        advance_step: c1,
+                        fifo_duration: c2,
+                        within_75ms: c3,
+                        data_rate: c4,
+                    };
+                    state.record_branch(advance, conditions);
+
+                    if conditions.is_valid() {
                         state.has_valid_branch = true;
                         state.reset_for_branch();
 
@@ -253,6 +261,19 @@ impl RestartHeader {
                             .wrapping_sub(state.first_output_timing)
                             .wrapping_sub(state.au_counter * samples_per_au)
                             & 0xFFFF;
+
+                        // The arrival was unwrapped before the branch was judged, so a
+                        // restarted input clock reads a wrap late. Re-run it now the
+                        // deviation aligns the two clocks.
+                        let mut arrival = (state.input_timing as u16)
+                            .wrapping_sub(state.output_timing_deviation as u16)
+                            as usize;
+
+                        while state.prev_unwrapped_input_timing > arrival {
+                            arrival += 0x10000;
+                        }
+
+                        state.unwrapped_input_timing = arrival;
 
                         info!(
                             "AU {}: Valid seamless branch. Latency {} -> {}",
@@ -263,10 +284,6 @@ impl RestartHeader {
 
                         break 'check_output_timing;
                     }
-
-                    // Counted before the causes are reported, since any one of them can
-                    // end the access unit under a stricter fail level.
-                    state.invalid_branches += 1;
 
                     if !c1 {
                         log_or_err!(
@@ -323,6 +340,9 @@ impl RestartHeader {
                         anyhow!(RestartHeaderError::InvalidSeamlessBranch),
                         reader
                     );
+
+                    let output_timing = state.output_timing;
+                    state.restart_stream_for_branch(output_timing);
                 }
             }
         }

@@ -285,6 +285,15 @@ impl FifoDepthState {
         self.peak_substream
     }
 
+    /// Drops every record in flight and starts the window again, keeping the peaks.
+    pub fn restart(&mut self) {
+        self.read = 0;
+        self.write = 0;
+        self.depth = [0; ACCUMULATORS];
+        self.depth_stream = [0; ACCUMULATORS];
+        self.depth_substream = [0; SUBSTREAMS];
+    }
+
     /// Access units currently held in the window.
     pub fn buffered(&self) -> usize {
         self.write.wrapping_sub(self.read) & (RING - 1)

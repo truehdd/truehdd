@@ -232,6 +232,7 @@ impl AccessUnit {
         }
 
         state.has_parsed_au = true;
+        state.segment_start = false;
         access_unit.record(&mut state.perf.access_unit_total);
 
         if reader.position()? <= state.expected_au_end_pos() as u64 {

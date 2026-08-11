@@ -38,7 +38,7 @@ the two stages will disagree about the stream.
 |                 | SMPTE timestamp               | 🟢     | Medium   | Optional     |                               |
 |                 | FBA hires output timing       | 🟢     | Medium   | Optional     |                               |
 |                 | Object audio metadata         | 🟡     | High     | Essential    | Mostly done                   |
-|                 | FIFO conformance tests        | 🟡     | Medium   | Optional     | Partially done                |
+|                 | FIFO conformance tests        | 🟢     | Medium   | Optional     |                               |
 |                 | FBA bitstream seeking         | 🔴     | Low      | Nice-to-have | Yes, it's possible            |
 | **Decoder**     | 31EA / 31EB sync substream    | 🟢     | High     | Essential    |                               |
 |                 | 31EC sync substream           | 🟢     | High     | Essential    | 4th / 16ch presentation       |

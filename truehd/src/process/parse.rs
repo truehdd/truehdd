@@ -176,8 +176,13 @@ impl Parser {
     ///
     /// These are conformance failures: the decoded samples are unaffected,
     /// but the stream is not a conformant splice.
+    /// Every point where the stream's timing restarted, as a splice does.
+    pub fn branches(&self) -> &[Branch] {
+        &self.state.branches
+    }
+
     pub fn invalid_branches(&self) -> usize {
-        self.state.invalid_branches
+        self.state.branches.iter().filter(|b| !b.is_valid()).count()
     }
 
     /// Read-only view of the parser state for substream `i`.
@@ -415,6 +420,60 @@ impl Default for ParserRestartState {
     }
 }
 
+/// The four buffer-model conditions a branch must meet to be seamless. A decoder that
+/// starts at the branch has to be able to play across it without its input running dry or
+/// overflowing, and each condition bounds one way that can fail.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BranchConditions {
+    /// The advance grew by no more than three quarters of an access unit.
+    pub advance_step: bool,
+    /// The advance stays inside what the previous access unit had buffered.
+    pub fifo_duration: bool,
+    /// The advance stays inside the 75 ms the buffer model allows.
+    pub within_75ms: bool,
+    /// The access unit before the branch fits the peak data rate over the interval.
+    pub data_rate: bool,
+}
+
+impl BranchConditions {
+    pub const fn is_valid(&self) -> bool {
+        self.advance_step && self.fifo_duration && self.within_75ms && self.data_rate
+    }
+
+    /// The conditions that failed, named as the report names them.
+    pub fn failed(&self) -> Vec<&'static str> {
+        [
+            (self.advance_step, "advance step"),
+            (self.fifo_duration, "FIFO duration"),
+            (self.within_75ms, "75 ms limit"),
+            (self.data_rate, "peak data rate"),
+        ]
+        .into_iter()
+        .filter_map(|(met, name)| (!met).then_some(name))
+        .collect()
+    }
+}
+
+/// A point where the stream's timing restarts, which is what a splice leaves behind.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Branch {
+    /// Access unit the branch was found at.
+    pub au_index: usize,
+    /// Byte offset of that access unit from the start of the stream.
+    pub byte_offset: u64,
+    /// Samples played before it.
+    pub sample: u64,
+    /// Samples the decoder is running ahead of playback at the branch.
+    pub advance: usize,
+    pub conditions: BranchConditions,
+}
+
+impl Branch {
+    pub const fn is_valid(&self) -> bool {
+        self.conditions.is_valid()
+    }
+}
+
 #[derive(Debug)]
 #[repr(C)]
 pub struct ParserState {
@@ -442,6 +501,7 @@ pub struct ParserState {
     /// first access unit, advanced one access unit per access unit, never re-synchronised.
     pub fifo_output_clock: Option<usize>,
     pub has_parsed_au: bool,
+    pub segment_start: bool,
 
     pub au_start_pos: usize,
 
@@ -488,7 +548,7 @@ pub struct ParserState {
     pub peak_data_rate_jump: bool,
     pub has_valid_branch: bool,
     pub has_substream_info_changed: bool,
-    pub invalid_branches: usize,
+    pub branches: Vec<Branch>,
 
     /// Parse timing for the current access unit; see the `perf` feature.
     pub perf: ParserPerfStats,
@@ -544,6 +604,7 @@ impl Default for ParserState {
             is_major_sync: false,
             fifo_depth: FifoDepthState::default(),
             fifo_output_clock: None,
+            segment_start: false,
             has_parsed_au: false,
 
             au_start_pos: 0,
@@ -587,7 +648,7 @@ impl Default for ParserState {
             peak_data_rate_jump: false,
             has_valid_branch: false,
             has_substream_info_changed: false,
-            invalid_branches: 0,
+            branches: Vec::new(),
             perf: ParserPerfStats::default(),
 
             variable_rate: false,
@@ -647,6 +708,33 @@ impl DiagnosticSink for ParserState {
 }
 
 impl ParserState {
+    /// Records a branch at the current access unit. A jump is found once per substream
+    /// that reads its restart header, so the record is merged rather than repeated, and a
+    /// condition that fails for any substream fails for the branch.
+    pub fn record_branch(&mut self, advance: usize, conditions: BranchConditions) {
+        if let Some(branch) = self.branches.last_mut()
+            && branch.au_index == self.au_counter
+        {
+            let met = branch.conditions;
+            branch.conditions = BranchConditions {
+                advance_step: met.advance_step && conditions.advance_step,
+                fifo_duration: met.fifo_duration && conditions.fifo_duration,
+                within_75ms: met.within_75ms && conditions.within_75ms,
+                data_rate: met.data_rate && conditions.data_rate,
+            };
+
+            return;
+        }
+
+        self.branches.push(Branch {
+            au_index: self.au_counter,
+            byte_offset: self.au_offset,
+            sample: self.au_counter as u64 * self.samples_per_au as u64,
+            advance,
+            conditions,
+        });
+    }
+
     pub fn reset_for_next_major_sync(&mut self) {
         let diagnostics = std::mem::take(&mut self.diagnostics);
 
@@ -655,7 +743,7 @@ impl ParserState {
             allow_seamless_branch: self.allow_seamless_branch,
             check_fifo: self.check_fifo,
             required_presentations: self.required_presentations,
-            invalid_branches: self.invalid_branches,
+            branches: self.branches.clone(),
             diagnostic_mode: self.diagnostic_mode,
             diagnostics,
             au_index: self.au_index,
@@ -694,6 +782,30 @@ impl ParserState {
 
     pub fn reset_parser_substream_state(&mut self) {
         self.substream_state[self.substream_index].restart = ParserRestartState::default();
+    }
+
+    /// Restarts the timing and FIFO model as if the stream began at this access unit.
+    pub fn restart_stream_for_branch(&mut self, output_timing: usize) {
+        self.output_timing_deviation = 0;
+        self.unwrapped_input_timing = self.input_timing;
+        self.prev_unwrapped_input_timing = 0;
+        self.first_input_timing = self.input_timing;
+        self.first_unwrapped_input_timing = self.unwrapped_input_timing;
+
+        let mut output_timing = output_timing;
+        if output_timing < self.input_timing {
+            output_timing += 0x10000;
+        }
+        self.output_timing = output_timing;
+        self.first_output_timing = output_timing;
+        self.fifo_output_clock = None;
+
+        for ss_state in &mut self.substream_state {
+            ss_state.history_index = 0;
+        }
+
+        self.fifo_depth.restart();
+        self.segment_start = true;
     }
 
     pub fn reset_for_branch(&mut self) {

@@ -1,7 +1,7 @@
 //! Rendering of the verify report, human-readable and as JSON Lines.
 
 use serde_json::{Value, json};
-use truehd::process::parse::Parser;
+use truehd::process::parse::{Branch, Parser};
 use truehd::process::{MAX_PRESENTATIONS, PresentationMap};
 use truehd::structs::channel::ChannelLabel;
 use truehd::structs::sync::{MAJOR_SYNC_FBA, MAJOR_SYNC_FBB, MajorSyncInfo};
@@ -80,7 +80,7 @@ pub struct StreamFacts {
     /// Each accumulator's deepest point, split into stream bytes and overhead.
     pub fifo_records: [FifoPeak; ACCUMULATORS],
     pub substream_facts: Vec<SubstreamFacts>,
-    pub invalid_branches: usize,
+    pub branches: Vec<Branch>,
     pub max_data_rate: usize,
     pub max_data_rate_au: usize,
     pub max_fifo_latency: usize,
@@ -116,7 +116,7 @@ impl StreamFacts {
     /// Everything the parse measured but the stream does not state about itself.
     pub fn adopt_measurements(&mut self, parser: &Parser) {
         self.fifo_records = parser.fifo_depth_records();
-        self.invalid_branches = parser.invalid_branches();
+        self.branches = parser.branches().to_vec();
         self.max_data_rate = parser.max_data_rate();
         self.max_data_rate_au = parser.max_data_rate_au();
         self.max_fifo_latency = parser.max_fifo_latency();
@@ -179,6 +179,11 @@ impl StreamFacts {
         };
 
         (15_000 * (span + 1)).min(120_000)
+    }
+
+    /// A sample position as seconds into the stream.
+    fn sample_time(&self, sample: u64) -> Option<f64> {
+        (self.sampling_frequency != 0).then(|| sample as f64 / self.sampling_frequency as f64)
     }
 
     fn duration_secs(&self) -> Option<f64> {
@@ -529,6 +534,11 @@ pub fn sections(
         }
     }
 
+    // A stream with no splice in it has nothing to say about branches.
+    if !facts.branches.is_empty() {
+        sections.push(branch_points(facts));
+    }
+
     sections.push(diagnostics(tally, verdict));
 
     sections
@@ -545,11 +555,30 @@ fn render(sections: &[Section]) -> String {
         out.push_str(&section.title);
         out.push('\n');
 
+        // Columns are as wide as what goes in them plus a space, and never narrower than
+        // COLUMN, so a value that fills its column cannot run into its neighbour.
+        let widths: Vec<usize> = section
+            .headings
+            .iter()
+            .enumerate()
+            .map(|(index, heading)| {
+                section
+                    .rows
+                    .iter()
+                    .filter_map(|row| row.cells.get(index))
+                    .chain([heading])
+                    .map(|cell| cell.chars().count() + 1)
+                    .max()
+                    .unwrap_or(0)
+                    .max(COLUMN)
+            })
+            .collect();
+
         if !section.headings.is_empty() {
             out.push_str(&format!("  {:<LABEL$}", ""));
 
-            for heading in &section.headings {
-                out.push_str(&format!("{heading:>COLUMN$}"));
+            for (heading, width) in section.headings.iter().zip(&widths) {
+                out.push_str(&format!("{heading:>width$}"));
             }
 
             out.push('\n');
@@ -562,15 +591,15 @@ fn render(sections: &[Section]) -> String {
                 // A note stands in for the cells, over the width they would have filled.
                 Some(note) if !section.headings.is_empty() => out.push_str(&format!(
                     "{note:>width$}",
-                    width = section.headings.len() * COLUMN
+                    width = widths.iter().sum()
                 )),
                 Some(note) => out.push_str(note),
                 None if section.headings.is_empty() => {
                     out.push_str(row.cells.first().map_or("", String::as_str))
                 }
                 None => {
-                    for cell in &row.cells {
-                        out.push_str(&format!("{cell:>COLUMN$}"));
+                    for (cell, width) in row.cells.iter().zip(&widths) {
+                        out.push_str(&format!("{cell:>width$}"));
                     }
                 }
             }
@@ -666,7 +695,7 @@ fn measurements(facts: &StreamFacts) -> Section {
                 format_args!("{} samples", facts.max_fifo_latency),
             ),
         })
-        .push(Row::value("Invalid branches", facts.invalid_branches));
+        ;
 
     section
 }
@@ -795,6 +824,49 @@ fn disc_validity(validity: &DiscValidity) -> Section {
     section
 }
 
+/// Every point the stream's timing restarts at, which is what a splice leaves behind.
+///
+/// A branch is seamless only if a decoder starting there can play across it, so the row
+/// carries the advance it asks for and, where one failed, which of the buffer-model
+/// conditions it broke.
+fn branch_points(facts: &StreamFacts) -> Section {
+    let mut section = Section::with_headings(
+        "Branch Points",
+        ["access unit", "offset", "time", "advance", "status"]
+            .map(str::to_owned)
+            .to_vec(),
+    );
+
+    for (index, branch) in facts.branches.iter().enumerate() {
+        section.push(Row::cells(
+            format!("Branch {index}"),
+            vec![
+                branch.au_index.to_string(),
+                format!("{:#010X}", branch.byte_offset),
+                facts
+                    .sample_time(branch.sample)
+                    .map_or_else(|| branch.sample.to_string(), time_str),
+                branch.advance.to_string(),
+                if branch.is_valid() { "valid" } else { "invalid" }.to_owned(),
+            ],
+        ));
+
+        let failed = branch.conditions.failed();
+
+        if !failed.is_empty() {
+            section.push(Row::note("  failed", failed.join(", ")));
+        }
+    }
+
+    let invalid = facts.branches.iter().filter(|b| !b.is_valid()).count();
+    section.push(Row::note(
+        "Total",
+        format!("{} branches, {invalid} invalid", facts.branches.len()),
+    ));
+
+    section
+}
+
 fn diagnostics(tally: &Tally, verdict: Verdict) -> Section {
     let mut section = Section::new("Diagnostics");
 
@@ -869,7 +941,15 @@ pub fn summary_json(input: &str, facts: &StreamFacts, tally: &Tally, verdict: Ve
             "hd_dvd_video": validity.hd_dvd_video,
             "bluray": validity.bluray,
         })),
-        "invalid_branches": facts.invalid_branches,
+        "branches": facts.branches.iter().map(|branch| json!({
+            "au": branch.au_index,
+            "byte_offset": branch.byte_offset,
+            "sample": branch.sample,
+            "advance": branch.advance,
+            "valid": branch.is_valid(),
+            "failed": branch.conditions.failed(),
+        })).collect::<Vec<_>>(),
+        "invalid_branches": facts.branches.iter().filter(|b| !b.is_valid()).count(),
         "max_data_rate": facts.max_data_rate,
         "max_data_rate_au": facts.max_data_rate_au,
         "max_fifo_latency_samples": facts.max_fifo_latency,
@@ -904,12 +984,21 @@ mod tests {
     /// class where the disc rules count channels.
     const FBA_192K: &[u8] = include_bytes!("../../../truehd/tests/assets/fba_192k.mlp");
 
+    /// Three independently scheduled clips butt-joined, so the stream restarts its timing
+    /// twice. Neither join is seamless: the clips were scheduled to different peak rates
+    /// and their arrival times do not meet across the seam.
+    const FBA_SPLICED: &[u8] = include_bytes!("../../../truehd/tests/assets/fba_spliced.mlp");
+
     /// FBA at 176.4 kHz, two channels. BluRay does not admit the rate whatever the
     /// channel count, so it is the only asset that exercises that clause.
     const FBA_176K: &[u8] = include_bytes!("../../../truehd/tests/assets/fba_176k.mlp");
 
     /// FBA at 192 kHz carrying eight channels, which no disc format accepts.
     const FBA_192K_8CH: &[u8] = include_bytes!("../../../truehd/tests/assets/fba_192k_8ch.mlp");
+
+    /// Three DVD-Audio clips butt-joined. FBB carries its own branch arm and nothing
+    /// exercised it; the figures below are the measured ones for the same stream.
+    const FBB_SPLICED: &[u8] = include_bytes!("../../../truehd/tests/assets/fbb_spliced.mlp");
 
     /// FBB over two substreams, `substream_info` 0x0D.
     const FBB_6CH: &[u8] = include_bytes!("../../../truehd/tests/assets/fbb_6ch.mlp");
@@ -1304,6 +1393,61 @@ mod tests {
                 .unwrap()
                 .hd_dvd_video
         );
+    }
+
+    /// A spliced stream reports each branch with its place and the conditions it met, and
+    /// a stream with no splice in it reports no section at all rather than a zero. The
+    /// depths and rates either side of the seam are exact, which they only are because a
+    /// rejected branch restarts the model.
+    #[test]
+    fn a_spliced_stream_reports_every_branch_point() {
+        let spliced = facts_of(FBA_SPLICED);
+        assert_eq!(spliced.branches.len(), 2);
+        assert_eq!(spliced.branches.iter().filter(|b| !b.is_valid()).count(), 2);
+
+        let report = report(&spliced);
+        assert_eq!(
+            cells(&report, "Branch Points", "Branch 0"),
+            ["44", "0x000013B4", "00:00:00.036", "3527", "invalid"]
+        );
+
+        // The figures for this stream, with branch tolerance on.
+        assert_eq!(spliced.fifo_records[0].total, 6996);
+        assert_eq!(spliced.fifo_records[4].total, 7904);
+        assert_eq!(spliced.substream_facts[0].fifo_peak, 6538);
+        assert_eq!(spliced.max_data_rate_au, 350);
+        assert_eq!(cells(&report, "Branch Points", "Branch 1")[0], "344");
+
+        // The conditions that failed are named, so a reader can see which bound was broken.
+        assert_eq!(
+            spliced.branches[0].conditions.failed(),
+            ["advance step", "FIFO duration"]
+        );
+        assert_eq!(
+            spliced.branches[1].conditions.failed(),
+            ["advance step", "FIFO duration"]
+        );
+
+        let unspliced = sections("x.mlp", &facts(), &Tally::default(), Verdict::Conformant);
+        assert!(
+            !unspliced.iter().any(|s| s.title == "Branch Points"),
+            "an unspliced stream has no branches to report"
+        );
+    }
+
+    /// A DVD-Audio stream branches by the same rules, and its depths hold as the TrueHD
+    /// ones do.
+    #[test]
+    fn a_dvd_audio_splice_branches_like_a_truehd_one() {
+        let facts = facts_of(FBB_SPLICED);
+        assert_eq!(facts.substream_info, 0x0D);
+        assert_eq!(facts.branches.len(), 2);
+        assert!(facts.branches.iter().all(|branch| !branch.is_valid()));
+
+        assert_eq!(facts.substream_facts[0].fifo_peak, 4204);
+        assert_eq!(facts.substream_facts[1].fifo_peak, 2220);
+        assert_eq!(facts.fifo_records[0].total, 4638);
+        assert_eq!(facts.fifo_records[4].total, 6982);
     }
 
     #[test]

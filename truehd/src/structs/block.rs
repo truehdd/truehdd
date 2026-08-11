@@ -309,7 +309,7 @@ impl Block {
             // update output timing
             {
                 let i = state.substream_state()?.history_index;
-                let output_timing = if !state.has_parsed_au {
+                let output_timing = if !state.has_parsed_au || state.segment_start {
                     state.output_timing
                 } else {
                     let i = i.wrapping_sub(1) & 0x7F;
