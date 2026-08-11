@@ -26,6 +26,10 @@ const FBA_2CH_SLICE: &[u8] = include_bytes!("assets/fba_2ch.mlp");
 /// 5440 samples at 48 kHz.
 const FBA_ATMOS_CBI_SLICE: &[u8] = include_bytes!("assets/fba_atmos_cbi.mlp");
 
+/// 400 access units of an Atmos encode whose object metadata carries the optional
+/// elements, which most encodes leave out.
+const FBA_ATMOS_DIMTRIM: &[u8] = include_bytes!("assets/fba_atmos_dimtrim.mlp");
+
 /// Access units 512..600 of an FBB (MLP) encode with two substreams: a
 /// six-channel independent presentation and its two-channel encoder downmix.
 /// 88 access units, 3520 samples at 48 kHz.
@@ -284,6 +288,42 @@ fn fba_two_channel_slice_is_lossless() {
     assert_eq!(p0.samples, 6080);
     assert_eq!(p0.channel_labels, [ChannelLabel::L, ChannelLabel::R]);
     assert_eq!(p0.digest, 0xC566_B961_F699_3F02, "PCM differs from source");
+}
+
+/// Object metadata carries elements beyond the object element every payload has, and most
+/// streams omit them. This one has dimensional trim and the extended object element, so the
+/// two are read from a real stream rather than only from a crafted payload.
+#[test]
+fn a_non_legacy_encode_carries_the_optional_metadata_elements() -> anyhow::Result<()> {
+    let mut extractor = Extractor::default();
+    extractor.push_bytes(FBA_ATMOS_DIMTRIM);
+
+    let mut parser = Parser::default();
+    let mut decoder = Decoder::default();
+    let required = require(&[3]);
+
+    let (mut trim, mut extended, mut payloads) = (0, 0, 0);
+
+    for result in &mut extractor {
+        let Ok(frame) = result else { break };
+        let access_unit = parser.parse(&frame)?;
+        let decoded = decoder.decode_presentations(&access_unit, &required)?;
+
+        for oamd in decoded.iter().flatten().flat_map(|d| &d.oamd) {
+            payloads += 1;
+            trim += oamd.trim_element.is_some() as usize;
+            extended += oamd.extended_object_element.is_some() as usize;
+        }
+    }
+
+    assert!(payloads > 0, "the stream carries object metadata");
+    assert!(trim > 0, "dimensional trim, {payloads} payloads seen");
+    assert!(
+        extended > 0,
+        "extended object element, {payloads} payloads seen"
+    );
+
+    Ok(())
 }
 
 /// FBA Atmos, four substreams: all four presentations decoded in one pass
