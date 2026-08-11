@@ -180,7 +180,7 @@ impl Verdict {
 }
 
 pub fn summary(input: &str, facts: &StreamFacts, tally: &Tally, verdict: Verdict) -> String {
-    let mut out = format!("\nSummary — {input}\n");
+    let mut out = format!("\nSummary: {input}\n");
 
     match facts.duration_secs() {
         Some(secs) => out.push_str(&format!(
@@ -248,7 +248,7 @@ fn fifo_rows(facts: &StreamFacts) -> String {
             1 if !facts.sixch_is_independent() => ("6-ch (only ss0)", facts.fifo_peaks[0]),
             3 if facts.substreams < 4 => {
                 out.push_str(&format!(
-                    "{heading} {:<15} — (no 16-channel presentation)\n",
+                    "{heading} {:<15} (no 16-channel presentation)\n",
                     "16-ch"
                 ));
                 continue;

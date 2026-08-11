@@ -8,6 +8,7 @@ use crate::process::decode::DecoderState;
 use crate::process::parse::ParserState;
 use crate::structs::channel::ChannelLabel;
 use crate::structs::extra_data::ExtraData;
+use crate::structs::restart_header::RestartHeader;
 use crate::structs::substream::{SubstreamDirectory, SubstreamSegment};
 use crate::structs::sync::{MAJOR_SYNC_FBA, MAJOR_SYNC_FBB, MajorSyncInfo};
 use crate::utils::bitstream_io::BsIoSliceReader;
@@ -198,12 +199,15 @@ impl AccessUnit {
 
         state.substream_segment_start_pos = reader.position()?;
         state.has_parsed_substream = false;
+        state.au_output_timing = None;
 
         let segments = Timer::start();
         for i in 0..substreams {
             state.substream_index = i;
 
             if state.substream_mask >> i & 1 == 0 {
+                RestartHeader::peek_output_timing(state, reader)?;
+
                 let offset = state.substream_segment_start_pos
                     + ((state.substream_state()?.substream_end_ptr as u64) << 4)
                     - reader.position()?;

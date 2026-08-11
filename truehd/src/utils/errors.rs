@@ -62,6 +62,9 @@ pub enum DecodeError {
 
     #[error("Invalid presentation index: {0}")]
     InvalidPresentation(usize),
+
+    #[error("Outputs in substream {substream} use more than max_bits {max_bits} bits")]
+    OutputsExceedMaxBits { substream: usize, max_bits: u8 },
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -309,12 +312,14 @@ pub enum RestartHeaderError {
     InvalidRestartSyncWord(u16),
 
     #[error(
-        "output_timing must match across all substreams. Read {read}, substream {substream}, expected {expected}"
+        "output_timing must match across all substreams. \
+        Substream {substream} read {read}, substream {reference} read {expected}"
     )]
     OutputTimingMismatch {
-        read: u16,
         substream: usize,
-        expected: usize,
+        read: u16,
+        reference: usize,
+        expected: u16,
     },
 
     #[error("output_timing failure after jump: Read {read}, expected {expected}")]
@@ -393,6 +398,17 @@ pub enum RestartHeaderError {
     #[error("CRC mismatch in restart_header. Calculated {calculated:#02X}, Read {read:#02X}")]
     RestartHeaderCrcMismatch { calculated: u8, read: u8 },
 
+    #[error("heavy_drc_present must be false in FBB streams")]
+    HeavyDrcPresentInFbb,
+
+    #[error(
+        "heavy_drc_time_update = {heavy_drc_time_update}, but heavy_drc_count = {heavy_drc_count}"
+    )]
+    HeavyDrcTimeUpdateExceeded {
+        heavy_drc_time_update: u8,
+        heavy_drc_count: usize,
+    },
+
     #[error("Stream is invalid.")]
     InvalidStream,
 
@@ -416,6 +432,16 @@ pub enum SubstreamError {
 
     #[error("Too many blocks in the substream segment. Got {0}")]
     TooManyBlocks(usize),
+
+    #[error(
+        "Incorrect number of samples decoded for substream {substream}. \
+        Decoded {decoded}, should have decoded {expected}"
+    )]
+    SampleCountMismatch {
+        substream: usize,
+        decoded: usize,
+        expected: usize,
+    },
 
     #[error("drc_time_update = {drc_time_update}, but drc_count = {drc_count}")]
     DrcTimeUpdateExceeded { drc_time_update: u8, drc_count: usize },

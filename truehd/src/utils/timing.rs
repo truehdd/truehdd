@@ -48,7 +48,7 @@ impl HiresOutputTimingState {
     /// The arithmetic is 32-bit and wrapping: the value reconstructed here is the high
     /// half of a 32-bit sample position whose low half is `output_timing`, so a field
     /// running backwards is a sequence error to report, not an underflow to panic on.
-    /// Findings are informational — a stream carrying no field at all is legal.
+    /// Findings are informational: a stream carrying no field at all is legal.
     pub fn update(&mut self, ctx: &TimingContext, hires_present: bool) -> Option<usize> {
         let mut stream_start = None;
 
@@ -225,7 +225,7 @@ mod tests {
 
     /// A field that runs backwards is a sequence error, not an underflow. The subtraction
     /// is 32-bit and wrapping, so this must report rather than panic under debug overflow
-    /// checks — on exactly the malformed input the check exists to catch.
+    /// checks, on exactly the malformed input the check exists to catch.
     #[test]
     fn a_backwards_field_reports_instead_of_underflowing() {
         let (machine, stream_start) = drive(&[

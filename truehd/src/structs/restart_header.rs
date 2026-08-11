@@ -17,14 +17,14 @@ use crate::log_or_err;
 use crate::process::decode::DecoderState;
 use crate::process::parse::ParserState;
 use crate::structs::sync::{
-    BASE_SAMPLING_RATE_CD, MAJOR_SYNC_FBA, MAJOR_SYNC_FBB, UNIMPLEMENTED_FBB_MSG, samples_per_75ms,
+    BASE_SAMPLING_RATE_CD, MAJOR_SYNC_FBA, MAJOR_SYNC_FBB, samples_per_75ms,
 };
 use crate::utils::bitstream_io::BsIoSliceReader;
 use crate::utils::errors::RestartHeaderError;
 use crate::utils::timing::TimingContext;
 use anyhow::{Result, anyhow, bail};
 use log::Level::Warn;
-use log::{info, trace, warn};
+use log::{info, trace};
 
 /// Restart synchronization words identifying substream types.
 ///
@@ -122,22 +122,8 @@ impl RestartHeader {
         };
 
         'check_output_timing: {
-            if state.has_parsed_substream
-                && state.output_timing & 0xFFFF != rh.output_timing as usize
-            {
-                log_or_err!(
-                    state,
-                    Warn,
-                    anyhow!(RestartHeaderError::OutputTimingMismatch {
-                        read: rh.output_timing,
-                        substream: state.substream_index,
-                        expected: state.output_timing
-                    }),
-                    reader
-                );
-            }
+            Self::check_output_timing_matches(state, rh.output_timing, reader)?;
 
-            // TODO: check all substreams
             if state.has_parsed_substream {
                 break 'check_output_timing;
             }
@@ -388,13 +374,22 @@ impl RestartHeader {
                 let ss_state = state.substream_state_mut()?;
                 ss_state.heavy_drc_count += 1;
 
-                if ss_state.heavy_drc_active
-                    && (1 << ss_state.heavy_drc_time_update) < ss_state.heavy_drc_count
-                {
-                    warn!(
-                        "heavy_drc_time_update={}, but heavy_drc_count={}",
-                        ss_state.heavy_drc_time_update, ss_state.heavy_drc_count
-                    )
+                let (heavy_drc_active, heavy_drc_time_update, heavy_drc_count) = (
+                    ss_state.heavy_drc_active,
+                    ss_state.heavy_drc_time_update,
+                    ss_state.heavy_drc_count,
+                );
+
+                if heavy_drc_active && 1 << heavy_drc_time_update < heavy_drc_count {
+                    log_or_err!(
+                        state,
+                        Warn,
+                        anyhow!(RestartHeaderError::HeavyDrcTimeUpdateExceeded {
+                            heavy_drc_time_update,
+                            heavy_drc_count
+                        }),
+                        reader
+                    );
                 }
             }
         } else {
@@ -404,7 +399,13 @@ impl RestartHeader {
         // prev
         if state.substream_state_mut()?.heavy_drc_present {
             if state.format_sync == MAJOR_SYNC_FBB {
-                unimplemented!("{}", UNIMPLEMENTED_FBB_MSG)
+                // The field is FBA-only, so nothing follows it here; report and read on.
+                log_or_err!(
+                    state,
+                    Warn,
+                    anyhow!(RestartHeaderError::HeavyDrcPresentInFbb),
+                    reader
+                );
             } else {
                 rh.heavy_drc_gain_update = reader.get_s(9)?;
                 rh.heavy_drc_time_update = reader.get_n(3)?;
@@ -488,6 +489,62 @@ impl RestartHeader {
         Ok(rh)
     }
 
+    /// Compares one substream's `output_timing` against the first seen in this access
+    /// unit, adopting it as the reference when it is the first.
+    ///
+    /// Every substream present in the access unit takes part, including one whose segment
+    /// the presentation mask skips: its restart header is never read, so the comparison
+    /// would otherwise cover only the substreams a given presentation happens to need.
+    fn check_output_timing_matches(
+        state: &mut ParserState,
+        output_timing: u16,
+        reader: &mut BsIoSliceReader,
+    ) -> Result<()> {
+        let Some((reference, expected)) = state.au_output_timing else {
+            state.au_output_timing = Some((state.substream_index, output_timing));
+
+            return Ok(());
+        };
+
+        if expected != output_timing {
+            log_or_err!(
+                state,
+                Warn,
+                anyhow!(RestartHeaderError::OutputTimingMismatch {
+                    substream: state.substream_index,
+                    read: output_timing,
+                    reference,
+                    expected,
+                }),
+                reader
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Takes part in the `output_timing` comparison for a substream whose segment is
+    /// being skipped, leaving the reader where it was.
+    ///
+    /// Only the two block flags and the restart sync word stand between the segment start
+    /// and `output_timing`, so a skipped segment can still be held to the rule. A segment
+    /// that carries no restart header carries no `output_timing` to compare.
+    pub fn peek_output_timing(state: &mut ParserState, reader: &mut BsIoSliceReader) -> Result<()> {
+        if reader.available()? < 32 {
+            return Ok(());
+        }
+
+        let peek = reader.get_n::<u32>(32)?;
+        reader.seek(-32)?;
+
+        // block_header_exists, restart_header_exists, restart_sync_word, output_timing.
+        if peek >> 30 != 3 || RestartSyncWord::try_from((peek >> 16) as u16 & 0x3FFF).is_err() {
+            return Ok(());
+        }
+
+        Self::check_output_timing_matches(state, peek as u16, reader)
+    }
+
     pub fn update_decoder_state(&self, state: &mut DecoderState) -> Result<()> {
         let valid = state.valid;
 
@@ -542,6 +599,7 @@ impl RestartHeader {
 
         ss_state.restart_sync_word = self.restart_sync_word as u16;
         ss_state.output_timing = self.output_timing;
+        ss_state.max_bits = self.max_bits;
         ss_state.min_chan = self.min_chan as usize;
         ss_state.max_chan = self.max_chan as usize;
         ss_state.max_matrix_chan = self.max_matrix_chan as usize;
@@ -589,7 +647,141 @@ impl Guards {
 
 #[cfg(test)]
 mod tests {
-    use super::RestartSyncWord;
+    use super::*;
+    use crate::utils::crc::{CRC_RESTART_BLOCK_HEADER_ALG, Crc8};
+    use crate::utils::diagnostic::{DiagnosticMode, RestartHeaderRule, RuleId};
+
+    #[derive(Default)]
+    struct Bits {
+        data: Vec<u8>,
+        len: usize,
+    }
+
+    impl Bits {
+        fn push(&mut self, n: usize, value: u32) {
+            for i in 0..n {
+                if self.len.is_multiple_of(8) {
+                    self.data.push(0);
+                }
+
+                if (value >> (n - 1 - i)) & 1 == 1 {
+                    let last = self.data.len() - 1;
+                    self.data[last] |= 1 << (7 - (self.len & 7));
+                }
+
+                self.len += 1;
+            }
+        }
+    }
+
+    /// A one-channel restart header that states nothing, with a CRC that matches so it
+    /// reads to the end. `heavy_drc_fields` is the twelve bits of heavy DRC gain and time
+    /// update, which only an FBA stream carries.
+    fn crafted_restart_header(heavy_drc_fields: usize) -> Vec<u8> {
+        let mut bits = Bits::default();
+
+        bits.push(14, 0x31EA); // restart_sync_word
+        bits.push(16, 0); // output_timing
+        bits.push(4, 0); // min_chan
+        bits.push(4, 0); // max_chan
+        bits.push(4, 0); // max_matrix_chan
+        bits.push(4, 0); // dither_shift
+        bits.push(23, 0); // dither_seed
+        bits.push(4, 0); // max_shift
+        bits.push(5, 0); // max_lsbs
+        bits.push(5, 0); // max_bits
+        bits.push(5, 0); // max_bits_repeat
+        bits.push(1, 0); // error_protect
+        bits.push(8, 0); // lossless_check
+        bits.push(1, 0); // hires_output_timing
+        bits.push(2, 0);
+        bits.push(1, 0); // heavy_drc_present
+        bits.push(heavy_drc_fields, 0);
+        bits.push(6, 0); // ch_assign[0]
+
+        let crc = BsIoSliceReader::from_slice(&bits.data)
+            .crc8_check(
+                &Crc8::new(&CRC_RESTART_BLOCK_HEADER_ALG),
+                0,
+                bits.len as u64,
+            )
+            .unwrap();
+        bits.push(8, crc as u32);
+
+        bits.data
+    }
+
+    /// Reads a crafted restart header into a state prepared by `setup`, returning the
+    /// checks that fired.
+    fn checks_over_crafted_header(
+        format_sync: u32,
+        heavy_drc_fields: usize,
+        setup: impl FnOnce(&mut ParserState),
+    ) -> Vec<RuleId> {
+        let mut state = ParserState {
+            format_sync,
+            substreams: Some(1),
+            diagnostic_mode: DiagnosticMode::Collect,
+            ..Default::default()
+        };
+        setup(&mut state);
+
+        let data = crafted_restart_header(heavy_drc_fields);
+        let reader = &mut BsIoSliceReader::from_slice(&data);
+
+        RestartHeader::read(&mut state, reader).expect("the crafted header reads");
+
+        state
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.rule)
+            .collect()
+    }
+
+    /// heavy DRC updates must arrive at least as often as the last one promised, and the
+    /// count of restart headers since it is what says whether they did.
+    #[test]
+    fn heavy_drc_updates_must_keep_to_their_stated_interval() {
+        let rule = RuleId::RestartHeader(RestartHeaderRule::HeavyDrcTimeUpdateExceeded);
+
+        // heavy_drc_time_update 0 promises an update at every restart header, and this is
+        // the second one to pass without one.
+        let fired = checks_over_crafted_header(MAJOR_SYNC_FBA, 12, |state| {
+            state.flags = 0x2000;
+            let ss_state = &mut state.substream_state[0];
+            ss_state.heavy_drc_active = true;
+            ss_state.heavy_drc_time_update = 0;
+            ss_state.heavy_drc_count = 1;
+        });
+        assert!(fired.contains(&rule), "{fired:?}");
+
+        // One update per two restart headers, and this is the first to pass without one.
+        let quiet = checks_over_crafted_header(MAJOR_SYNC_FBA, 12, |state| {
+            state.flags = 0x2000;
+            let ss_state = &mut state.substream_state[0];
+            ss_state.heavy_drc_active = true;
+            ss_state.heavy_drc_time_update = 1;
+            ss_state.heavy_drc_count = 1;
+        });
+        assert!(!quiet.contains(&rule), "{quiet:?}");
+    }
+
+    /// heavy DRC is an FBA field. An FBB stream whose previous restart header claimed it
+    /// is reported, and read on from where the field would not have been.
+    #[test]
+    fn heavy_drc_carried_into_an_fbb_stream_is_reported() {
+        let rule = RuleId::RestartHeader(RestartHeaderRule::HeavyDrcPresentInFbb);
+
+        let fired = checks_over_crafted_header(MAJOR_SYNC_FBB, 0, |state| {
+            state.substream_state[0].heavy_drc_present = true;
+        });
+        assert!(fired.contains(&rule), "{fired:?}");
+
+        let quiet = checks_over_crafted_header(MAJOR_SYNC_FBB, 12, |state| {
+            state.substream_state[0].heavy_drc_present = false;
+        });
+        assert!(!quiet.contains(&rule), "{quiet:?}");
+    }
 
     #[test]
     fn restart_sync_word_rejects_invalid_values() {

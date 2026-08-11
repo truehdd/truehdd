@@ -156,6 +156,7 @@ impl SubstreamSegment {
 
         let mut ss = Self::default();
         let mut last_block_in_segment = false;
+        let mut decoded = 0;
         state.substream_state_mut()?.restart.block_index = 0;
 
         let blocks = Timer::start();
@@ -170,6 +171,7 @@ impl SubstreamSegment {
                 );
             }
             ss.block.push(Block::read(state, reader)?);
+            decoded += state.substream_state()?.restart.block_size;
             last_block_in_segment = reader.get()?;
             state.substream_state_mut()?.restart.block_index += 1;
         }
@@ -268,7 +270,22 @@ impl SubstreamSegment {
             }
 
             // TODO: check new matrixing and filter coeffs (for each channel) happens no more than once for each substream
-            // TODO: check if decoded more than it should be
+        }
+
+        // The blocks of a segment carry one access unit of samples between them, whatever
+        // sizes they are split into. A terminated segment is no exception: the termination
+        // word only marks how much of the completed access unit is silence.
+        if decoded != state.samples_per_au {
+            log_or_err!(
+                state,
+                log::Level::Warn,
+                anyhow!(SubstreamError::SampleCountMismatch {
+                    substream: state.substream_index,
+                    decoded,
+                    expected: state.samples_per_au,
+                }),
+                reader
+            );
         }
 
         let current_pos = reader.position()?;

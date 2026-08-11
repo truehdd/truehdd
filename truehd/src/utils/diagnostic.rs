@@ -101,6 +101,7 @@ rule_ids! {
         FilterBInputTooWide32 = "filter_b_input_too_wide32",
         FilterBInputTooWide24 = "filter_b_input_too_wide24",
         InvalidPresentation = "invalid_presentation",
+        OutputsExceedMaxBits = "outputs_exceed_max_bits",
     }
     ExtractError => Extract / ExtractRule / "extract" {
         SubstreamMismatch = "substream_mismatch",
@@ -181,6 +182,8 @@ rule_ids! {
         InvalidLsbBypass = "invalid_lsb_bypass",
     }
     RestartHeaderError => RestartHeader / RestartHeaderRule / "restart_header" {
+        HeavyDrcPresentInFbb = "heavy_drc_present_in_fbb",
+        HeavyDrcTimeUpdateExceeded = "heavy_drc_time_update_exceeded",
         InvalidRestartSyncWord = "invalid_restart_sync_word",
         OutputTimingMismatch = "output_timing_mismatch",
         OutputTimingAfterJump = "output_timing_after_jump",
@@ -206,6 +209,7 @@ rule_ids! {
         InvalidExtraSubstreamWordFbb = "invalid_extra_substream_word_fbb",
         InvalidRestartNonexistent = "invalid_restart_nonexistent",
         TooManyBlocks = "too_many_blocks",
+        SampleCountMismatch = "sample_count_mismatch",
         DrcTimeUpdateExceeded = "drc_time_update_exceeded",
         InvalidTerminationWord = "invalid_termination_word",
         InvalidTerminatorB = "invalid_terminator_b",

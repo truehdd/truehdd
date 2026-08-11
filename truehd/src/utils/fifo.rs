@@ -2,9 +2,9 @@
 //!
 //! The time-domain model bounds *when* an access unit may arrive; this bounds *how many
 //! bytes* the decoder has to hold while it does. Five accumulators sum the bytes of every
-//! access unit that has arrived but has not yet been played out — one for substream 0, one
+//! access unit that has arrived but has not yet been played out: one for substream 0, one
 //! each for the substream sets the 6-, 8- and 16-channel decoders read, and one for the
-//! whole stream — and each has its own byte cap.
+//! whole stream. Each has its own byte cap.
 //!
 //! The window works as follows: a record's bytes stay buffered until
 //! playback has passed its output time by more than one access unit (strictly), the record

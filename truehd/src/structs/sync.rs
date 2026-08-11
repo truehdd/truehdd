@@ -36,7 +36,6 @@ pub const MAJOR_SYNC_FBA: u32 = 0xF8_72_6F_BA;
 /// 32-bit sync word (0xF8726FBB) identifying Meridian MLP streams.
 pub const MAJOR_SYNC_FBB: u32 = 0xF8_72_6F_BB;
 
-pub const UNIMPLEMENTED_FBB_MSG: &str = "FBB format is not implemented yet";
 
 /// Base sampling rate for CD-family rates (44.1kHz, 88.2kHz, 176.4kHz).
 pub const BASE_SAMPLING_RATE_CD: u32 = 44100;

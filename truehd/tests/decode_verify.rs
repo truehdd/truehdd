@@ -11,6 +11,8 @@ use truehd::process::decode::Decoder;
 use truehd::process::extract::Extractor;
 use truehd::process::parse::Parser;
 use truehd::structs::channel::ChannelLabel;
+use truehd::utils::bitstream_io::BsIoSliceReader;
+use truehd::utils::crc::{CRC_RESTART_BLOCK_HEADER_ALG, Crc8};
 
 /// Access units 384..536 of an FBA encode with one substream carrying a
 /// two-channel presentation (presentations 1 and 2 are copies of it). The slice
@@ -176,6 +178,97 @@ fn corrupt_substream0(
         offset += au_len;
         index += 1;
     }
+}
+
+/// Overwrites `n` bits at bit offset `bit`, most significant bit first.
+fn set_bits(data: &mut [u8], bit: usize, n: usize, value: u32) {
+    for i in 0..n {
+        let position = bit + i;
+        let mask = 1u8 << (7 - (position & 7));
+
+        if (value >> (n - 1 - i)) & 1 == 1 {
+            data[position >> 3] |= mask;
+        } else {
+            data[position >> 3] &= !mask;
+        }
+    }
+}
+
+/// Restates `max_bits` in the first access unit's restart header, leaving a stream that
+/// is valid in every other respect: the restart header CRC and the segment's parity and
+/// CRC-8 are recomputed, and the decoded samples are untouched, so only a check that
+/// compares the outputs against the declaration can notice.
+fn understate_max_bits(data: &[u8], max_bits: u32) -> Vec<u8> {
+    // The restart header of substream 0's segment, which the stream places at bit 274:
+    // a 32-bit access unit header, a major sync info, one directory entry, then the
+    // block_header_exists and restart_header_exists flags. Its length follows from
+    // max_matrix_chan, 1 here: 113 bits plus six per matrix channel.
+    const RESTART_START: usize = 274;
+    const RESTART_LEN: usize = 125;
+    // max_shift, max_lsbs and then the two copies of max_bits, 78 bits in.
+    const MAX_BITS: usize = RESTART_START + 78;
+
+    let mut d = data.to_vec();
+
+    set_bits(&mut d, MAX_BITS, 5, max_bits);
+    set_bits(&mut d, MAX_BITS + 5, 5, max_bits);
+
+    let crc = BsIoSliceReader::from_slice(&d.clone())
+        .crc8_check(
+            &Crc8::new(&CRC_RESTART_BLOCK_HEADER_ALG),
+            RESTART_START as u64,
+            RESTART_LEN as u64,
+        )
+        .unwrap();
+    set_bits(&mut d, RESTART_START + RESTART_LEN, 8, crc as u32);
+
+    // The segment starts two bits before its restart header, on a byte boundary, and its
+    // directory entry is the word before that.
+    let seg_start = (RESTART_START - 2) / 8;
+    let entry = (d[seg_start - 2] as usize) << 8 | d[seg_start - 1] as usize;
+    assert!((entry >> 13) & 1 != 0, "fixture must carry parity + CRC");
+    let data_end = seg_start + (entry & 0xFFF) * 2 - 2;
+
+    let mut parity = 0u8;
+    let mut segment_crc = 0xA2u8;
+    for &b in &d[seg_start..data_end] {
+        parity ^= b;
+        for _ in 0..8 {
+            let hi = segment_crc & 0x80 != 0;
+            segment_crc <<= 1;
+            if hi {
+                segment_crc ^= 0x63;
+            }
+        }
+        segment_crc ^= b;
+    }
+    d[data_end] = parity ^ 0xA9;
+    d[data_end + 1] = segment_crc;
+
+    d
+}
+
+/// A restart header states how many bits the substream's outputs use, sign apart. One
+/// that understates it has to be reported, and only the decoded samples can show it: the
+/// stream is otherwise intact, and decodes to exactly the same PCM.
+#[test]
+fn outputs_wider_than_max_bits_are_reported() {
+    let understated = understate_max_bits(FBA_2CH_SLICE, 1);
+
+    let err = decode_stream(&understated, require(&[0]), Some(log::Level::Warn))
+        .expect_err("outputs wider than max_bits must be reported");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("Outputs in substream 0 use more than max_bits 1 bits"),
+        "unexpected error: {msg}"
+    );
+
+    // Nothing but the declaration changed: the same PCM comes out, and it is only the
+    // check that objects.
+    let out = decode_stream(&understated, require(&[0]), None).unwrap();
+    let p0 = out[0].as_ref().unwrap();
+    assert_eq!(p0.samples, 6080);
+    assert_eq!(p0.digest, 0xC566_B961_F699_3F02, "PCM must be unchanged");
 }
 
 /// FBA, single substream: the decoded PCM must be bit-exact against the

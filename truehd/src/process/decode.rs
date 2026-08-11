@@ -1,3 +1,4 @@
+use crate::log_or_err;
 use crate::process::{MAX_PRESENTATIONS, PresentationMap, PresentationType};
 use crate::structs::access_unit::AccessUnit;
 use crate::structs::channel::ChannelLabel;
@@ -146,6 +147,10 @@ pub struct DecodedAccessUnit {
 pub struct DecoderSubstreamState {
     pub restart_sync_word: u16,
     pub output_timing: u16,
+    pub max_bits: u8,
+    /// Every output of the access unit folded into one word, sign removed, so the widest
+    /// of them can be compared with `max_bits` once per substream.
+    pub output_bits: u32,
     pub min_chan: usize,
     pub max_chan: usize,
     pub max_matrix_chan: usize,
@@ -191,6 +196,8 @@ impl Default for DecoderSubstreamState {
         Self {
             restart_sync_word: 0,
             output_timing: 0,
+            max_bits: 0,
+            output_bits: 0,
             min_chan: 0,
             max_chan: 0,
             max_matrix_chan: 0,
@@ -717,9 +724,11 @@ impl DecoderState {
 
                 if *decoded_sample_len == 0 {
                     ss_state.lossless_check_i32 = 0;
+                    ss_state.output_bits = 0;
                 }
 
                 let mut lossless_check_data = 0;
+                let mut output_bits = 0u32;
 
                 for blki in 0..block_size {
                     let sample = rematrix_buffer[blki];
@@ -739,11 +748,13 @@ impl DecoderState {
                         }
 
                         lossless_check_data ^= (*output & 0xFFFFFF) << (chi & 7);
+                        output_bits |= (*output ^ (*output >> 31)) as u32;
                     }
 
                     output_buffer[blki] = output;
                 }
 
+                ss_state.output_bits |= output_bits;
                 ss_state.lossless_check_i32 ^= lossless_check_data;
                 ss_state.lossless_check_i32_accum ^= lossless_check_data;
 
@@ -768,6 +779,28 @@ impl DecoderState {
                     ss_state.lossless_check_i32_prev_au = ss_state.lossless_check_i32;
                 }
             }
+        }
+
+        // The restart header states how many bits the substream's outputs use, sign apart,
+        // and the widest of them is only known once the access unit is complete. It is a
+        // property of the decoded samples, so it cannot be checked while parsing, and a
+        // per-block check would report the same violation up to four times over.
+        let ss_state = self.substream_state()?;
+
+        if self.effective_presentations[current_substream_index]
+            && ss_state.decoded_sample_len + block_size == samples_per_au
+            && ss_state.output_bits >> ss_state.max_bits != 0
+        {
+            let max_bits = ss_state.max_bits;
+
+            log_or_err!(
+                self,
+                log::Level::Warn,
+                anyhow!(DecodeError::OutputsExceedMaxBits {
+                    substream: current_substream_index,
+                    max_bits,
+                })
+            );
         }
 
         self.substream_state_mut()?.decoded_sample_len += block_size;

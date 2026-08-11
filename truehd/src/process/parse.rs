@@ -420,6 +420,9 @@ pub struct ParserState {
     pub wrapped_input_timing: usize,
 
     pub output_timing: usize,
+    /// First `output_timing` of the access unit being parsed and the substream that
+    /// carried it, which every other substream in the access unit must agree with.
+    pub au_output_timing: Option<(usize, u16)>,
     pub first_output_timing: usize,
     /// 1456
     pub output_timing_deviation: usize,
@@ -516,6 +519,7 @@ impl Default for ParserState {
             wrapped_input_timing: 0,
 
             output_timing: 0,
+            au_output_timing: None,
             first_output_timing: 0,
             output_timing_deviation: 0,
             hires_output_timing: None,

@@ -1,12 +1,35 @@
 //! Collect-mode diagnostics over a whole stream.
 
-use truehd::process::EXAMPLE_DATA;
 use truehd::process::extract::Extractor;
 use truehd::process::parse::Parser;
+use truehd::process::{EXAMPLE_DATA, MAX_PRESENTATIONS};
 use truehd::utils::diagnostic::{
     AccessUnitRule, BlockRule, Diagnostic, DiagnosticMode, RestartHeaderRule, RuleId, SubstreamRule,
 };
-use truehd::utils::errors::SubstreamError;
+use truehd::utils::errors::{RestartHeaderError, SubstreamError};
+
+/// Access units 384..536 of an FBA encode with a single substream. Its first access unit
+/// splits the 40 samples over two blocks, of 8 and 32.
+const FBA_2CH: &[u8] = include_bytes!("assets/fba_2ch.mlp");
+
+/// Access units 2944..3080 of an FBA Atmos encode with four substreams, each an
+/// independent presentation, so a presentation mask can leave three of them unparsed.
+/// Its sixteen elements are all bed, so every presentation maps to source channels.
+const FBA_ATMOS_CBI: &[u8] = include_bytes!("assets/fba_atmos_cbi.mlp");
+
+/// Overwrites `n` bits at bit offset `bit`, most significant bit first.
+fn set_bits(data: &mut [u8], bit: usize, n: usize, value: u32) {
+    for i in 0..n {
+        let position = bit + i;
+        let mask = 1u8 << (7 - (position & 7));
+
+        if (value >> (n - 1 - i)) & 1 == 1 {
+            data[position >> 3] |= mask;
+        } else {
+            data[position >> 3] &= !mask;
+        }
+    }
+}
 
 /// The example stream repeated end to end. Every repetition restates the same input
 /// timing, which the timing and buffer rules read as a stream that violates them.
@@ -137,6 +160,109 @@ fn diagnostics_of(data: &[u8]) -> Vec<Diagnostic> {
     }
 
     parser.take_diagnostics()
+}
+
+/// Every check that fired over `data`, with only the given presentations required.
+fn diagnostics_of_presentations(
+    data: &[u8],
+    required: &[bool; MAX_PRESENTATIONS],
+) -> Vec<Diagnostic> {
+    let mut extractor = Extractor::default();
+    extractor.push_bytes(data);
+
+    let mut parser = Parser::default();
+    parser.set_diagnostic_mode(DiagnosticMode::Collect);
+    parser.set_required_presentations(required);
+
+    for frame in extractor.by_ref().flatten() {
+        parser.parse_recovering(&frame);
+    }
+
+    parser.take_diagnostics()
+}
+
+/// The blocks of a substream segment carry exactly one access unit of samples between
+/// them. Shrinking one block's `block_size` leaves the segment short, which the segment's
+/// own parity and CRC also notice, but neither of those says how many samples were lost.
+#[test]
+fn a_segment_must_decode_one_access_unit_of_samples() {
+    // block_size of the second block of substream 0 in the first access unit, which the
+    // stream sets to 32 to complete the 40 samples the first block's 8 leave.
+    const BLOCK_SIZE_BIT: usize = 796;
+
+    let mut data = FBA_2CH.to_vec();
+    set_bits(&mut data, BLOCK_SIZE_BIT, 9, 24);
+
+    let diagnostics = diagnostics_of(&data);
+    let fired = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.rule == RuleId::Substream(SubstreamRule::SampleCountMismatch))
+        .unwrap_or_else(|| panic!("a short segment violates the rule: {diagnostics:?}"));
+
+    assert_eq!(fired.severity, log::Level::Warn, "{fired}");
+    assert!(fired.location.bit_offset.is_some(), "{fired}");
+    assert!(matches!(
+        fired.source.as_ref().unwrap().downcast_ref::<SubstreamError>(),
+        Some(SubstreamError::SampleCountMismatch {
+            substream: 0,
+            decoded: 32,
+            expected: 40,
+        })
+    ));
+
+    assert!(
+        !diagnostics_of(FBA_2CH)
+            .iter()
+            .any(|diagnostic| diagnostic.rule
+                == RuleId::Substream(SubstreamRule::SampleCountMismatch)),
+        "the unmutated stream decodes a full access unit per segment"
+    );
+}
+
+/// `output_timing` must agree across every substream of an access unit. A presentation
+/// mask can skip a substream's segment entirely, and its restart header is then never
+/// read, so the comparison has to reach into a segment it does not parse.
+#[test]
+fn output_timing_is_compared_across_skipped_substreams() {
+    // output_timing of substream 1's restart header in the first access unit. Every
+    // substream of the stream states 52224 there.
+    const OUTPUT_TIMING_BIT: usize = 1296;
+
+    let rule = RuleId::RestartHeader(RestartHeaderRule::OutputTimingMismatch);
+    // Presentation 0 needs substream 0 alone, so substreams 1 to 3 are skipped.
+    let presentation_0 = [true, false, false, false];
+
+    let mut data = FBA_ATMOS_CBI.to_vec();
+    set_bits(&mut data, OUTPUT_TIMING_BIT, 16, 52225);
+
+    let diagnostics = diagnostics_of_presentations(&data, &presentation_0);
+    let fired = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.rule == rule)
+        .unwrap_or_else(|| panic!("a substream disagreeing violates the rule: {diagnostics:?}"));
+
+    assert_eq!(fired.severity, log::Level::Warn, "{fired}");
+    assert_eq!(fired.location.au_index, 0, "{fired}");
+    assert!(matches!(
+        fired
+            .source
+            .as_ref()
+            .unwrap()
+            .downcast_ref::<RestartHeaderError>(),
+        Some(RestartHeaderError::OutputTimingMismatch {
+            substream: 1,
+            read: 52225,
+            reference: 0,
+            expected: 52224,
+        })
+    ));
+
+    assert!(
+        !diagnostics_of_presentations(FBA_ATMOS_CBI, &presentation_0)
+            .iter()
+            .any(|diagnostic| diagnostic.rule == rule),
+        "every substream of the unmutated stream states the same output_timing"
+    );
 }
 
 /// The example stream repeated, with one byte replaced. The crate carries no bitstream
