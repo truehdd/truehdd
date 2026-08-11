@@ -15,6 +15,18 @@ use crate::utils::bitstream_io::BsIoSliceReader;
 use crate::utils::errors::ExtraDataError;
 
 /// Extra data container for auxiliary information
+///
+/// `extra_data` is a container with no type field of its own. Which of its three shapes an
+/// access unit carries is decided outside it, by the header word and by `flags` bit 12:
+///
+/// | header word | `flags & 0x1000` | shape |
+/// |---|---|---|
+/// | zero | either | padding: every remaining word of the access unit must be zero |
+/// | non-zero | set | an Evolution frame, in [`evo_frame`](Self::evo_frame) |
+/// | non-zero | clear | an opaque payload, in [`payload`](Self::payload) |
+///
+/// The opaque shape carries no parity byte and no zero requirement: it reads
+/// `extra_data_length` words and hands them on without interpreting them.
 #[derive(Debug, Default)]
 pub struct ExtraData {
     pub header_check_nibble: u8,
@@ -22,6 +34,11 @@ pub struct ExtraData {
     pub evo_frame_reserved: u8,
     pub evo_frame_byte_length: u16,
     pub evo_frame: Option<EvoFrame>,
+
+    /// The payload of a block that carries no Evolution frame, `extra_data_length` words of
+    /// it, uninterpreted. `None` for the Evolution and padding shapes.
+    pub payload: Option<Vec<u8>>,
+
     pub ectra_data_padding: usize,
     pub extra_data_parity: u8,
 
@@ -98,9 +115,43 @@ impl ExtraData {
                 }),
                 reader
             );
+
+            // The block does not fit, so there is nothing to read: abandon
+            // the access unit here rather than reading past its end.
+            return Ok(extra_data);
         }
 
-        extra_data.evo_frame = if state.flags & 0x1000 != 0 {
+        // Without the Evolution flag the payload is opaque: no parity byte, no zero
+        // requirement, handed on unexamined.
+        if state.flags & 0x1000 == 0 {
+            let mut payload = Vec::with_capacity(extra_data_bits >> 3);
+
+            for _ in 0..(extra_data_bits >> 3) {
+                payload.push(reader.get_n(8)?);
+            }
+
+            trace!("Extra data carries {} opaque bytes", payload.len());
+            extra_data.payload = Some(payload);
+
+            return Ok(extra_data);
+        }
+
+        // An Evolution block declares at least its own 16-bit header; below that the
+        // read runs past the access unit and it is rejected whatever was found.
+        if extra_data_bits < 16 {
+            log_or_err!(
+                state,
+                log::Level::Warn,
+                anyhow!(ExtraDataError::EvoFrameNoRoom {
+                    extra_len: extra_data.extra_data_length
+                }),
+                reader
+            );
+
+            return Ok(extra_data);
+        }
+
+        extra_data.evo_frame = {
             extra_data.evo_frame_reserved = reader.get_n(4)?;
             extra_data.evo_frame_byte_length = reader.get_n(12)?;
 
@@ -114,6 +165,10 @@ impl ExtraData {
                     }),
                     reader
                 );
+
+                // The declared frame does not fit, so there is no frame to read and no
+                // parity byte to compare, so the access unit is abandoned here.
+                return Ok(extra_data);
             }
 
             if reader.position()? & 0x7 != 0 {
@@ -125,9 +180,19 @@ impl ExtraData {
                 );
             }
 
-            let start_pos = reader.position()?;
-            let evo_frame = EvoFrame::read(reader)?;
-            let actual_evo_frame_bits = (reader.position()? - start_pos) as usize;
+            // A zero length is how a block that carries no Evolution frame this access unit
+            // says so, and the whole payload is then padding. There is no
+            // frame from it: it skips its digest check and writes nothing to its Evolution
+            // sink. Reading one anyway would invent a frame out of the padding.
+            let evo_frame = if extra_data.evo_frame_byte_length == 0 {
+                None
+            } else {
+                let start_pos = reader.position()?;
+                let evo_frame = EvoFrame::read(reader)?;
+                Some((evo_frame, (reader.position()? - start_pos) as usize))
+            };
+
+            let actual_evo_frame_bits = evo_frame.as_ref().map_or(0, |(_, bits)| *bits);
 
             for _ in 0..(extra_data_bits - 24 - actual_evo_frame_bits) {
                 if reader.get()? {
@@ -140,12 +205,19 @@ impl ExtraData {
                 }
             }
 
-            Some(evo_frame)
-        } else {
-            None
+            evo_frame.map(|(frame, _)| frame)
         };
 
-        let parity = reader.parity_check_for_last_n_bits(extra_data_bits as u64 - 8)? ^ 0xA9;
+        // The fold covers the evolution header, the frame and its padding. Both
+        // implementations seed it with `evo_frame_byte_length ^ evo_frame_reserved ^ 0xA9`
+        // and fold the high byte down at the end, which puts the four bits of
+        // `evo_frame_reserved` at positions 0..3 where the bitstream has them at 4..7. The
+        // difference is the correction below; it vanishes for the zero the encoder writes.
+        let reserved = extra_data.evo_frame_reserved;
+        let parity = reader.parity_check_for_last_n_bits(extra_data_bits as u64 - 8)?
+            ^ 0xA9
+            ^ (reserved << 4)
+            ^ reserved;
         extra_data.extra_data_parity = reader.get_n(8)?;
 
         if parity != extra_data.extra_data_parity {

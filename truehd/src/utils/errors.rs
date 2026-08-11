@@ -264,6 +264,11 @@ pub enum ExtraDataError {
     )]
     EvoFrameTooLong { evo_len: u16, extra_len: u16 },
 
+    #[error(
+        "extra_data_length leaves no room for an evo_frame(). extra_data_length = {extra_len}"
+    )]
+    EvoFrameNoRoom { extra_len: u16 },
+
     #[error("evo_frame() in extra_data does not begin on a byte boundary")]
     EvoFrameMisaligned,
 

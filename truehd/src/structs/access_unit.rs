@@ -224,7 +224,11 @@ impl AccessUnit {
         }
         segments.record(&mut state.perf.substream_segments);
 
-        if state.expected_au_end_pos() > reader.position()? as usize + 16 {
+        // One whole 16-bit word is enough. `extra_data` is entered whenever the
+        // access unit has a word left, so a lone trailing word is a block like any other:
+        // its header nibble is checked, and a non-zero header that declares a length it has
+        // no room for is an error. Gating on *more* than a word left skipped it entirely.
+        if state.expected_au_end_pos() >= reader.position()? as usize + 16 {
             let timer = Timer::start();
             let extra_data = ExtraData::read(state, reader)?;
             timer.record(&mut state.perf.extra_data);

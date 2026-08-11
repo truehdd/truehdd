@@ -163,6 +163,7 @@ rule_ids! {
         LengthParityFailed = "length_parity_failed",
         ExtraDataTooLong = "extra_data_too_long",
         EvoFrameTooLong = "evo_frame_too_long",
+        EvoFrameNoRoom = "evo_frame_no_room",
         EvoFrameMisaligned = "evo_frame_misaligned",
         EvoFramePaddingNotZero = "evo_frame_padding_not_zero",
         ExtraDataParityMismatch = "extra_data_parity_mismatch",

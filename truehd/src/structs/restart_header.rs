@@ -695,8 +695,8 @@ mod tests {
     }
 
     /// A one-channel restart header that states nothing, with a CRC that matches so it
-    /// `heavy_drc_present` is the field; `heavy_drc_fields` the twelve bits after it, a gain
-/// and time update in FBA and reserved otherwise.
+    /// `heavy_drc_present` is the field; `heavy_drc_fields` the twelve bits after it,
+    /// a gain and time update in FBA and reserved otherwise.
     fn crafted_restart_header(heavy_drc_present: u32, heavy_drc_fields: usize) -> Vec<u8> {
         let mut bits = Bits::default();
 
