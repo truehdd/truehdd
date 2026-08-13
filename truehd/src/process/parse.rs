@@ -181,6 +181,18 @@ impl Parser {
         &self.state.branches
     }
 
+    /// Takes the branch points recorded so far, leaving the list empty.
+    ///
+    /// The list grows for the life of the parser, one entry per point the stream's
+    /// timing restarts at. A pass over a file reads it at the end, and its size is
+    /// bounded by the file; a decoder that runs for as long as something is playing has
+    /// no end to read it at, and a stream that restarts its timing often enough grows it
+    /// without bound. Such a consumer takes the list periodically — or takes it only to
+    /// drop it, which is the point.
+    pub fn take_branches(&mut self) -> Vec<Branch> {
+        std::mem::take(&mut self.state.branches)
+    }
+
     pub fn invalid_branches(&self) -> usize {
         self.state.branches.iter().filter(|b| !b.is_valid()).count()
     }
@@ -209,6 +221,16 @@ impl Parser {
     /// which is what a conformance pass over a stream that is not spliced wants.
     pub fn set_allow_seamless_branch(&mut self, allow: bool) {
         self.state.allow_seamless_branch = allow;
+    }
+
+    /// Whether the byte-domain FIFO depth model runs.
+    ///
+    /// `true` (the default) accounts every access unit against the buffer model and
+    /// reports an accumulator that exceeds its cap. The model answers whether a stream
+    /// is *authorable*, which a conformance pass wants and a decoder does not: the
+    /// samples are the same either way. A consumer that only decodes can turn it off.
+    pub fn set_check_fifo(&mut self, check: bool) {
+        self.state.check_fifo = check;
     }
 
     /// Deepest each byte-domain FIFO accumulator has been, in bytes.
@@ -833,8 +855,35 @@ impl ParserState {
 
 #[cfg(test)]
 mod tests {
-    use super::Parser;
+    use super::{Branch, Parser};
     use log::Level;
+
+    /// The branch list has no end to be read at in a decoder that runs for as long as
+    /// something is playing, so it must be possible to empty it.
+    #[test]
+    fn taking_the_branches_empties_the_list() {
+        let mut parser = Parser::default();
+        parser.state.branches.push(Branch::default());
+        parser.state.branches.push(Branch::default());
+
+        assert_eq!(parser.take_branches().len(), 2);
+        assert!(parser.branches().is_empty(), "the list is left empty");
+        assert!(
+            parser.take_branches().is_empty(),
+            "taking twice is harmless"
+        );
+    }
+
+    /// The buffer model answers whether a stream is authorable, which a decoder does not
+    /// ask. It runs by default and a consumer that only decodes can turn it off.
+    #[test]
+    fn the_fifo_depth_model_can_be_turned_off() {
+        let mut parser = Parser::default();
+        assert!(parser.state.check_fifo, "on by default");
+
+        parser.set_check_fifo(false);
+        assert!(!parser.state.check_fifo);
+    }
 
     #[test]
     fn reset_preserves_configuration() {
