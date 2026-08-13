@@ -3,32 +3,42 @@
 /// At or below the sink's fail level the error is returned from the enclosing function,
 /// otherwise it is logged. Pass the bit reader as a fourth argument wherever the check
 /// holds one, so a collected diagnostic can name the bit it fired at.
+///
+/// `$err` is evaluated only where the error is used: returned, collected, or logged at
+/// a level a logger is listening to. Building one allocates, and a check that fires
+/// against a filtered level in a parser that is not collecting has nothing to build it
+/// for. A check that fires on every access unit — a stream declaring a peak data rate
+/// over the ceiling does — would otherwise allocate on every access unit of the stream,
+/// reporting nothing.
 #[macro_export]
 macro_rules! log_or_err {
     (@at $state:expr, $level:expr, $err:expr, $bit:expr) => {{
-        let error = $err;
         let level: ::log::Level = $level;
         let fatal = level <= $crate::utils::diagnostic::DiagnosticSink::fail_level(&*$state);
         let collecting = $crate::utils::diagnostic::DiagnosticSink::is_collecting(&*$state);
 
-        if fatal {
-            if collecting {
-                $crate::utils::diagnostic::record(&mut *$state, level, &error, $bit);
+        if fatal || collecting || ::log::log_enabled!(level) {
+            let error = $err;
+
+            if fatal {
+                if collecting {
+                    $crate::utils::diagnostic::record(&mut *$state, level, &error, $bit);
+                }
+
+                return Err(error);
             }
 
-            return Err(error);
-        }
+            match level {
+                ::log::Level::Error => ::log::error!("{}", error),
+                ::log::Level::Warn => ::log::warn!("{}", error),
+                ::log::Level::Info => ::log::info!("{}", error),
+                ::log::Level::Debug => ::log::debug!("{}", error),
+                ::log::Level::Trace => ::log::trace!("{}", error),
+            }
 
-        match level {
-            ::log::Level::Error => ::log::error!("{}", error),
-            ::log::Level::Warn => ::log::warn!("{}", error),
-            ::log::Level::Info => ::log::info!("{}", error),
-            ::log::Level::Debug => ::log::debug!("{}", error),
-            ::log::Level::Trace => ::log::trace!("{}", error),
-        }
-
-        if collecting {
-            $crate::utils::diagnostic::record_owned(&mut *$state, level, error, $bit);
+            if collecting {
+                $crate::utils::diagnostic::record_owned(&mut *$state, level, error, $bit);
+            }
         }
     }};
 
@@ -677,4 +687,61 @@ pub enum FifoError {
 
     #[error("FIFO underrun: accumulator {index} holds fewer bytes than the access unit leaving it")]
     Underrun { index: usize },
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::process::parse::ParserState;
+    use crate::utils::diagnostic::DiagnosticMode;
+    use crate::utils::errors::SubstreamError;
+    use anyhow::{Result, anyhow};
+
+    /// Fires one check, reporting how many times its error was built.
+    fn fire(state: &mut ParserState, built: &mut usize) -> Result<()> {
+        log_or_err!(state, ::log::Level::Warn, {
+            *built += 1;
+            anyhow!(SubstreamError::InvalidTerminationWord(0))
+        });
+
+        Ok(())
+    }
+
+    /// Building an error allocates, and a check firing at a level nothing is listening
+    /// to has nothing to build one for. This is what keeps a check that fires on every
+    /// access unit — a stream declaring a peak data rate over the ceiling does — from
+    /// allocating on every access unit while reporting nothing.
+    ///
+    /// No logger is installed under `cargo test`, so `Warn` is filtered here.
+    #[test]
+    fn a_check_with_nowhere_to_report_does_not_build_its_error() {
+        let mut state = ParserState::default();
+        let mut built = 0;
+
+        assert!(
+            fire(&mut state, &mut built).is_ok(),
+            "Warn is not fatal here"
+        );
+        assert_eq!(built, 0, "nothing asked for the error");
+    }
+
+    /// The paths that use the error must still get one.
+    #[test]
+    fn a_check_that_is_reported_builds_its_error() {
+        let mut fatal = ParserState {
+            fail_level: ::log::Level::Warn,
+            ..Default::default()
+        };
+        let mut built = 0;
+        assert!(fire(&mut fatal, &mut built).is_err());
+        assert_eq!(built, 1, "the returned error had to be built");
+
+        let mut collecting = ParserState {
+            diagnostic_mode: DiagnosticMode::Collect,
+            ..Default::default()
+        };
+        let mut built = 0;
+        assert!(fire(&mut collecting, &mut built).is_ok());
+        assert_eq!(built, 1, "the collected diagnostic had to be built");
+        assert_eq!(collecting.diagnostics.len(), 1);
+    }
 }
