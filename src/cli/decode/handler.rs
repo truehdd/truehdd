@@ -705,7 +705,7 @@ impl DecodeHandler {
             let mut conf =
                 Configuration::with_oamd_payload(oamd, sample_rate, segment_relative_pos)?;
 
-            let (events_diff, remove_header) = if !self.prev_events.is_empty() {
+            let (mut events_diff, remove_header) = if !self.prev_events.is_empty() {
                 (
                     Event::compare_event_vectors(&self.prev_events, &conf.events),
                     true,
@@ -713,6 +713,10 @@ impl DecodeHandler {
             } else {
                 (conf.events.clone(), false)
             };
+
+            if conf.restates_current_state && remove_header {
+                Event::drop_re_asserted_ramps(&mut events_diff);
+            }
 
             self.prev_events = conf.events.clone();
             conf.events = events_diff;

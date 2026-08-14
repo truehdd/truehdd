@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `decode` no longer writes an Atmos event where the stream only restated the metadata already in force. An encoder that has no fresh object metadata to send re-emits the last payload with its update timing zeroed, which changes nothing about the objects but does change the ramp length, and a ramp was enough to bring the whole event back with a new sample position. Any gap long enough to trigger a restatement gained an event the source never had, once per object. A payload whose timing is entirely zero and whose values all match the previous one is now written as nothing at all. A restatement that does move an object is still an event
+
 ## [0.6.0] - 2026-08-11
 
 ### Added

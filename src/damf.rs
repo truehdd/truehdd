@@ -348,6 +348,9 @@ pub struct Configuration {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sample_rate: Option<u32>,
     pub events: Vec<Event>,
+    /// The payload carried no update timing, so it restates what is already in force.
+    #[serde(skip)]
+    pub restates_current_state: bool,
 }
 
 impl Configuration {
@@ -380,6 +383,7 @@ impl Configuration {
             return Ok(Self {
                 sample_rate: Some(sample_rate),
                 events: vec![],
+                restates_current_state: false,
             });
         };
 
@@ -411,6 +415,13 @@ impl Configuration {
         }
 
         let sample_offset = object_element.md_update_info.sample_offset as u64;
+        let restates_current_state = sample_offset == 0
+            && object_element
+                .md_update_info
+                .block_update_info
+                .iter()
+                .all(|block| block.block_offset_factor_bits == 0 && block.ramp_duration == 0);
+
         let ramp_duration =
             object_element.md_update_info.block_update_info[0].ramp_duration as usize;
 
@@ -484,6 +495,7 @@ impl Configuration {
         Ok(Self {
             sample_rate: Some(sample_rate),
             events,
+            restates_current_state,
         })
     }
 }
@@ -623,6 +635,21 @@ impl Event {
             .zip(events2)
             .map(|(event1, event2)| event1.diff(event2))
             .collect()
+    }
+
+    /// A payload that restates values already in force zeroes its timing, which leaves the ramp as
+    /// the only field that moved. A ramp to values that did not change is not an event.
+    pub fn drop_re_asserted_ramps(events: &mut [Event]) {
+        for event in events.iter_mut() {
+            let mut rest = event.clone();
+            rest.id = None;
+            rest.sample_pos = None;
+            rest.ramp_length = None;
+
+            if event.ramp_length == Some(0) && rest == Event::default() {
+                *event = Event::default();
+            }
+        }
     }
 }
 
@@ -931,4 +958,68 @@ fn keeps_damf_bare_values() {
         .unwrap()
         .serialize_events(false);
     assert!(events.contains("\n    gain: 0\n"), "{events}");
+}
+
+/// An encoder that has no fresh metadata for a while re-asserts the last payload it sent, with
+/// the timing zeroed. The values are unchanged, so it says nothing new, and it must not turn
+/// into an event: the source never had one there.
+#[test]
+fn a_re_asserted_payload_writes_no_event() {
+    use truehd::structs::oamd::TEST_DATA_TRIM;
+
+    let oamd = ObjectAudioMetadataPayload::read(TEST_DATA_TRIM).unwrap();
+    let first = Configuration::with_oamd_payload(&oamd, 48000, 0).unwrap();
+
+    let mut repeat = oamd.clone();
+    let update = &mut repeat.object_element.as_mut().unwrap().md_update_info;
+    update.sample_offset = 0;
+    for block in update.block_update_info.iter_mut() {
+        block.block_offset_factor_bits = 0;
+        block.ramp_duration = 0;
+    }
+
+    let mut later = Configuration::with_oamd_payload(&repeat, 48000, 5120).unwrap();
+    assert!(later.restates_current_state);
+
+    let mut events = Event::compare_event_vectors(&first.events, &later.events);
+    Event::drop_re_asserted_ramps(&mut events);
+    later.events = events;
+
+    assert_eq!(
+        later.serialize_events(true),
+        "",
+        "a re-assert of the same values is not an event"
+    );
+}
+
+/// The re-assert rule keys on the values being unchanged, so a payload that zeroes its timing
+/// and moves an object is still an event.
+#[test]
+fn a_re_asserted_payload_still_reports_a_move() {
+    use truehd::structs::oamd::TEST_DATA_TRIM;
+
+    let oamd = ObjectAudioMetadataPayload::read(TEST_DATA_TRIM).unwrap();
+    let first = Configuration::with_oamd_payload(&oamd, 48000, 0).unwrap();
+
+    let mut repeat = oamd.clone();
+    let object_element = repeat.object_element.as_mut().unwrap();
+
+    let update = &mut object_element.md_update_info;
+    update.sample_offset = 0;
+    for block in update.block_update_info.iter_mut() {
+        block.block_offset_factor_bits = 0;
+        block.ramp_duration = 0;
+    }
+
+    let render = &mut object_element.object_data[1][0].object_render_info;
+    render.pos3d = [0.25, 0.75, 0.5];
+
+    let mut later = Configuration::with_oamd_payload(&repeat, 48000, 5120).unwrap();
+    let mut events = Event::compare_event_vectors(&first.events, &later.events);
+    Event::drop_re_asserted_ramps(&mut events);
+    later.events = events;
+
+    let written = later.serialize_events(true);
+    assert!(written.contains("pos: [-0.5, -0.5, 0.5]"), "{written}");
+    assert!(written.contains("samplePos: 5120"), "{written}");
 }
