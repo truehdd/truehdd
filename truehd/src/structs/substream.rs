@@ -347,7 +347,7 @@ impl SubstreamSegment {
                 log::Level::Error,
                 anyhow!(SubstreamError::SubstreamEndMismatch {
                     substream: state.substream_index,
-                    read: reader.position()?,
+                    read: end_pos,
                     expected: expected_end_pos
                 }),
                 reader

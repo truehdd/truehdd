@@ -241,7 +241,9 @@ impl AccessUnit {
         state.segment_start = false;
         access_unit.record(&mut state.perf.access_unit_total);
 
-        if reader.position()? <= state.expected_au_end_pos() as u64 {
+        let au_end_pos = reader.position()?;
+
+        if au_end_pos <= state.expected_au_end_pos() as u64 {
             state.total_access_unit_length += au.access_unit_length as usize;
             state.max_access_unit_size = state
                 .max_access_unit_size
@@ -251,7 +253,7 @@ impl AccessUnit {
                 state,
                 Error,
                 anyhow!(AccessUnitError::AccessUnitTooLong(
-                    reader.position()? as usize,
+                    au_end_pos as usize,
                     state.expected_au_end_pos()
                 )),
                 reader
