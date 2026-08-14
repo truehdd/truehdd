@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-08-15
+
 ### Added
 - `Parser::take_branches` returns the branch points recorded so far and leaves the list empty, mirroring `take_diagnostics`. The list grows for the life of the parser, one entry per point the stream's timing restarts at. A pass over a file reads it at the end and its size is bounded by the file, but a consumer that runs for as long as something is playing has no end to read it at, and a stream that restarts its timing often enough grows it without bound. Take it between access units rather than during one: a jump is reported once per substream that reads its restart header, and the records are merged through the last entry in the list, so emptying it part way through an access unit would record that access unit's branch twice and lose the merge
 - `Parser::set_check_fifo` turns the byte-domain FIFO depth model off, alongside the `set_allow_seamless_branch` switch already there. The model reports whether a stream is legal to author, which a conformance pass asks and a decoder does not, and the decoded samples are the same either way. The default is unchanged, and like the other parser settings it survives a major sync reset
