@@ -890,6 +890,8 @@ mod tests {
         let mut parser = Parser::default();
         parser.set_fail_level(Level::Warn);
         parser.set_required_presentations(&[true, false, true, false]);
+        parser.set_allow_seamless_branch(true);
+        parser.set_check_fifo(false);
 
         // Simulate accumulated stream state
         parser.state.has_parsed_au = true;
@@ -903,6 +905,8 @@ mod tests {
             parser.state.required_presentations,
             [true, false, true, false]
         );
+        assert!(parser.state.allow_seamless_branch);
+        assert!(!parser.state.check_fifo);
         assert!(!parser.state.has_parsed_au);
         assert_eq!(parser.state.au_counter, 0);
         assert_eq!(parser.state.input_timing, 0);
