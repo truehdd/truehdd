@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `Parser::take_branches` returns the branch points recorded so far and leaves the list empty, mirroring `take_diagnostics`. The list grows for the life of the parser, one entry per point the stream's timing restarts at. A pass over a file reads it at the end and its size is bounded by the file, but a consumer that runs for as long as something is playing has no end to read it at, and a stream that restarts its timing often enough grows it without bound. Take it between access units rather than during one: a jump is reported once per substream that reads its restart header, and the records are merged through the last entry in the list, so emptying it part way through an access unit would record that access unit's branch twice and lose the merge
+- `Parser::set_check_fifo` turns the byte-domain FIFO depth model off, alongside the `set_allow_seamless_branch` switch already there. The model reports whether a stream is legal to author, which a conformance pass asks and a decoder does not, and the decoded samples are the same either way. The default is unchanged, and like the other parser settings it survives a major sync reset
+
+### Changed
+- `log_or_err!` builds a check's error only where it is used: returned, collected, or logged at a level a logger is listening to. It bound the error into a local before deciding, so every check that fired built one, and building one allocates because the call sites box. A check evaluated per access unit rather than per stream paid this for the length of the stream while reporting nothing: a stream declaring a peak data rate over the ceiling exceeds it on every access unit, so a consumer at the default fail level with no `Warn` logger allocated and dropped an error every access unit. Callers of the exported macro whose error expression has a side effect will now see it run only when the error is used; every call site in this crate is a plain construction of an error value, so nothing else changes
+
 ## [0.7.0] - 2026-08-11
 
 ### Added
