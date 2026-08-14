@@ -286,21 +286,24 @@ jobs:
             echo "$text" | sed '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}'
           }
 
+          # Assets are served under the tag once the draft is published, so the table can
+          # link straight to them rather than name a file to go and find among the assets.
+          DOWNLOAD="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${VERSION}"
+
           {
             echo "## Downloads"
             echo
             echo "Pick one file. If unsure which CPU you have, choose Intel or AMD."
             echo
-            echo "| Platform | CPU | File |"
-            echo "| --- | --- | --- |"
+            echo "| Platform | CPU | File | Checksum |"
+            echo "| --- | --- | --- | --- |"
             # The same list the artifacts were checked against, so the table cannot promise
             # a file the release does not carry.
             while IFS='|' read -r platform cpu file; do
-              echo "| ${platform} | ${cpu} | \`${file}\` |"
+              echo "| ${platform} | ${cpu} | [\`${file}\`](${DOWNLOAD}/${file}) | [\`.sha256\`](${DOWNLOAD}/${file}.sha256) |"
             done < "${RUNNER_TEMP}/artifacts.txt"
             echo
             echo "The static Linux builds run on distributions with an older or different C library."
-            echo "Each archive ships a matching \`.sha256\` file for verification."
             echo
             echo "## Changes"
             echo
