@@ -326,6 +326,61 @@ fn a_non_legacy_encode_carries_the_optional_metadata_elements() -> anyhow::Resul
     Ok(())
 }
 
+/// The extended precision positions refine the coarse position grid by fifths. A quarter-step
+/// reading is plausible enough to be worth pinning to a stream: this one places two objects at
+/// an offset of 16/310, which no coarse code can reach, so the denominator is observable in the
+/// output rather than only in the parse.
+#[test]
+fn extended_precision_positions_refine_the_coarse_grid_by_fifths() -> anyhow::Result<()> {
+    let mut extractor = Extractor::default();
+    extractor.push_bytes(FBA_ATMOS_DIMTRIM);
+
+    let mut parser = Parser::default();
+    let mut decoder = Decoder::default();
+    let required = require(&[3]);
+
+    // 16/310 in the internal grid, mapped through the presentation's inverted y.
+    let refined = (0.5 - 16.0 / 310.0) * 2.0;
+    let mut hits = 0usize;
+    let mut elements = 0usize;
+
+    for result in &mut extractor {
+        let Ok(frame) = result else { break };
+        let access_unit = parser.parse(&frame)?;
+        let decoded = decoder.decode_presentations(&access_unit, &required)?;
+
+        for oamd in decoded.iter().flatten().flat_map(|d| &d.oamd) {
+            if oamd.extended_object_element.is_none() {
+                continue;
+            }
+            elements += 1;
+
+            for object in oamd.get_damf_pos() {
+                let Some(pos) = object.first() else { continue };
+                if (pos[1] - refined).abs() < 1e-12 {
+                    hits += 1;
+                }
+                assert!(
+                    (-1.0..=1.0).contains(&pos[1]),
+                    "position stays in range, got {}",
+                    pos[1]
+                );
+            }
+        }
+    }
+
+    assert_eq!(
+        elements, 1,
+        "the stream carries one extended object element"
+    );
+    assert_eq!(
+        hits, 2,
+        "two objects sit a fifth of a coarse step off the grid at {refined}"
+    );
+
+    Ok(())
+}
+
 /// FBA Atmos, four substreams: all four presentations decoded in one pass
 /// must each be bit-exact against their source WAVs (digests are
 /// source-derived), with the channel order the stream declares.
