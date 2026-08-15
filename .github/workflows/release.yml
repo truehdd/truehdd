@@ -271,12 +271,23 @@ jobs:
             ' "$2"
           }
 
+          # Where a crate's notes stop: the version that crate was at when the previous tag
+          # was cut, read from that tag's own manifest. Matching the tag name against the
+          # headings instead would key the library's changelog on the binary's version, and
+          # the two version lines have both been at 0.6.0, so a tag can name a heading from
+          # an unrelated release and sweep in everything down to it.
+          released_at() {
+            [ -n "$PREVIOUS" ] || return 0
+            git show "${PREVIOUS}:$1" 2>/dev/null | grep -m1 '^version = ' | cut -d'"' -f2
+          }
+
           notes() {
-            local version="$1" file="$2" stop="" text
-            # Collect intervening versions only when the file records the
-            # previous release; the crates do not always move together
-            if [ -n "$PREVIOUS" ] && grep -q "^## \[$PREVIOUS\]" "$file"; then
-              stop="$PREVIOUS"
+            local version="$1" file="$2" manifest="$3" stop text
+            # Collect intervening versions only when the file records that release;
+            # the crates do not always move together
+            stop=$(released_at "$manifest")
+            if [ -n "$stop" ] && ! grep -q "^## \[$stop\]" "$file"; then
+              stop=""
             fi
             text=$(section "$version" "$file" "$stop")
             if [ -z "$(echo "$text" | tr -d '[:space:]')" ]; then
@@ -307,8 +318,8 @@ jobs:
             echo
             echo "## Changes"
             echo
-            notes "$VERSION" CHANGELOG.md
-            LIB=$(notes "$LIB_VERSION" truehd/CHANGELOG.md)
+            notes "$VERSION" CHANGELOG.md Cargo.toml
+            LIB=$(notes "$LIB_VERSION" truehd/CHANGELOG.md truehd/Cargo.toml)
             if [ -n "$(echo "$LIB" | tr -d '[:space:]')" ]; then
               echo
               echo "## Library (truehd crate)"
