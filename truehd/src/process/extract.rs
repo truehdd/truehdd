@@ -1,4 +1,5 @@
 use crate::log_or_err;
+use crate::structs::sync::{MAJOR_SYNC_FBA, MAJOR_SYNC_FBB};
 use crate::structs::timestamp::Timestamp;
 use crate::utils::buffer_pool::BufferPool;
 use crate::utils::crc::{CRC_MAJOR_SYNC_INFO_ALG, Crc16};
@@ -179,15 +180,16 @@ impl Extractor {
         self.locked = false;
 
         loop {
-            // A major sync starts four bytes into its access unit. Search every complete
-            // four-byte candidate currently buffered; excluding a trailing search range used
-            // to discard the access-unit header when the sync itself arrived one byte at a
-            // time. Before the first sync, also retain the optional 16-byte timestamp that may
-            // precede that header. Three more bytes preserve a partial sync candidate.
+            // A major sync starts four bytes into its access unit, so the scan starts there
+            // and every complete candidate buffered is searched. What is kept when none is
+            // found has to cover whatever a sync still arriving needs: the access-unit header
+            // in front of it, three bytes of a partial sync word, and before the first sync
+            // the optional timestamp that precedes the header.
             let keep = if self.inited { 4 + 3 } else { 16 + 4 + 3 };
             let sync = self.buffered().get(4..).and_then(|bytes| {
                 bytes.windows(4).position(|window| {
-                    window == [0xF8, 0x72, 0x6F, 0xBA] || window == [0xF8, 0x72, 0x6F, 0xBB]
+                    let word = u32::from_be_bytes([window[0], window[1], window[2], window[3]]);
+                    word == MAJOR_SYNC_FBA || word == MAJOR_SYNC_FBB
                 })
             });
 
