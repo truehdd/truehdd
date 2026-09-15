@@ -179,35 +179,23 @@ impl Extractor {
         self.locked = false;
 
         loop {
-            let trailing_bytes = if self.inited { 4 } else { 16 };
-            let search_range = self.buffered_len().saturating_sub(trailing_bytes);
-            if search_range < 4 {
-                return self.insufficient();
-            }
+            // A major sync starts four bytes into its access unit. Search every complete
+            // four-byte candidate currently buffered; excluding a trailing search range used
+            // to discard the access-unit header when the sync itself arrived one byte at a
+            // time. Before the first sync, also retain the optional 16-byte timestamp that may
+            // precede that header. Three more bytes preserve a partial sync candidate.
+            let keep = if self.inited { 4 + 3 } else { 16 + 4 + 3 };
+            let sync = self.buffered().get(4..).and_then(|bytes| {
+                bytes.windows(4).position(|window| {
+                    window == [0xF8, 0x72, 0x6F, 0xBA] || window == [0xF8, 0x72, 0x6F, 0xBB]
+                })
+            });
 
-            let mut offset = 0;
-            let mut state = 0;
-            let buffer = self.buffered();
-            for (i, &byte) in buffer[4..search_range].iter().enumerate() {
-                match (state, byte) {
-                    (_, 0xF8) => {
-                        state = 1;
-                        offset = i;
-                    }
-                    (1, 0x72) => state = 2,
-                    (2, 0x6F) => state = 3,
-                    (3, 0xBA) | (3, 0xBB) => {
-                        state = 4;
-                        break;
-                    }
-                    _ => state = 0,
-                }
-            }
-
-            if state != 4 {
-                self.consume_front(search_range);
+            let Some(offset) = sync else {
+                let discard = self.buffered_len().saturating_sub(keep);
+                self.consume_front(discard);
                 return self.insufficient();
-            }
+            };
 
             // Try only once
             self.timestamp = if !self.inited && offset >= 16 {
@@ -581,6 +569,68 @@ fn buf_extract() -> anyhow::Result<()> {
 
     let frame = extractor.next().unwrap().unwrap();
     assert_eq!(frame.as_ref().len(), 20);
+    Ok(())
+}
+
+/// A sync candidate must survive until all four sync bytes and the containing access unit have
+/// arrived. This is the smallest-fragment regression for the resync retention window.
+#[test]
+fn one_byte_fragments_preserve_the_first_major_sync() -> anyhow::Result<()> {
+    use crate::process::EXAMPLE_DATA;
+
+    let mut extractor = Extractor::default();
+    let mut frames = Vec::new();
+    for byte in EXAMPLE_DATA {
+        extractor.push_bytes(std::slice::from_ref(byte));
+        loop {
+            match extractor.next() {
+                Some(Ok(frame)) => frames.push(frame),
+                Some(Err(ExtractError::InsufficientData)) | None => break,
+                Some(Err(error)) => return Err(error.into()),
+            }
+        }
+    }
+
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[0].offset, 16);
+    assert_eq!(frames[0].as_ref().len(), 84);
+    assert_eq!(frames[1].offset, 100);
+    assert_eq!(frames[1].as_ref().len(), 20);
+    assert_eq!(extractor.stream_position(), EXAMPLE_DATA.len() as u64);
+    Ok(())
+}
+
+/// Once locked, resynchronization must retain the four-byte access-unit header and a partial
+/// major sync while the replacement access unit arrives one byte at a time.
+#[test]
+fn one_byte_fragments_preserve_a_major_sync_during_resync() -> anyhow::Result<()> {
+    use crate::process::EXAMPLE_DATA;
+
+    let mut data = Vec::new();
+    data.extend_from_slice(EXAMPLE_DATA);
+    data.extend_from_slice(&[0; 6]);
+    data.extend_from_slice(&EXAMPLE_DATA[16..]);
+
+    let mut extractor = Extractor::default();
+    let mut frames = Vec::new();
+    for byte in &data {
+        extractor.push_bytes(std::slice::from_ref(byte));
+        loop {
+            match extractor.next() {
+                Some(Ok(frame)) => frames.push(frame),
+                Some(Err(ExtractError::InsufficientData)) | None => break,
+                Some(Err(error)) => return Err(error.into()),
+            }
+        }
+    }
+
+    assert_eq!(frames.len(), 4);
+    assert_eq!(frames[2].offset, 126);
+    assert_eq!(frames[2].as_ref().len(), 84);
+    assert_eq!(frames[3].offset, 210);
+    assert_eq!(frames[3].as_ref().len(), 20);
+    assert_eq!(extractor.error_count(), 1);
+    assert_eq!(extractor.stream_position(), data.len() as u64);
     Ok(())
 }
 
