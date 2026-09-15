@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-09-15
+
+### Fixed
+- Reading a stream from a pipe could extract nothing at all. `decode -` hands each read straight to the extractor, and a pipe may deliver fewer than 24 bytes at a time, which the extractor could not lock on to; input arriving in pieces also lost the stream's timestamp. Both come from truehd 0.7.2. Reading a file is unaffected, since those reads are 64 KiB
+
 ## [0.6.1] - 2026-08-15
 
 ### Fixed

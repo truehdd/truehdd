@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-09-15
+
 ### Fixed
 - The stream timestamp was dropped unless the whole first access unit arrived in one push. It is read from ahead of that access unit, before the frame that carries it exists, and every further piece sends `resync` round again, where the assignment wrote `None` over the value the first pass had stored. Any consumer feeding the extractor incrementally, a pipe into `truehdd decode -` among them, therefore never saw a timestamp
 - Resynchronisation discarded the access-unit header before a major sync had fully arrived, so a caller pushing small buffers could never lock on: the search range doubled as the retention, leaving four trailing bytes, and a sync arriving in pieces then settled below the index the scan starts at, where it could not be found again. Feeding a valid stream one byte at a time extracted nothing at all, and anything pushing 23 bytes or fewer at a time was affected. The retained window now covers the access-unit header, a partial sync word and the optional timestamp ahead of the first one (#33, fixed by @P0SlX)
