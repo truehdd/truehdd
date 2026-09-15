@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Resynchronisation discarded the access-unit header before a major sync had fully arrived, so a caller pushing small buffers could never lock on: the search range doubled as the retention, leaving four trailing bytes, and a sync arriving in pieces then settled below the index the scan starts at, where it could not be found again. Feeding a valid stream one byte at a time extracted nothing at all, and anything pushing 23 bytes or fewer at a time was affected. The retained window now covers the access-unit header, a partial sync word and the optional timestamp ahead of the first one (#33, fixed by @P0SlX)
+
 ## [0.7.1] - 2026-08-15
 
 ### Added
