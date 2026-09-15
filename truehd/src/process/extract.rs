@@ -199,16 +199,17 @@ impl Extractor {
                 return self.insufficient();
             };
 
-            // Try only once
-            self.timestamp = if !self.inited && offset >= 16 {
+            // Try only once, and write the field only in the branch that reads it: an
+            // access unit arriving in pieces sends resync round again once the timestamp
+            // is already read, and assigning in the other arm clears it before the frame
+            // that carries it exists.
+            if !self.inited && offset >= 16 {
                 self.consume_front(offset - 16);
-                let timestamp = Timestamp::from_bytes(&self.buffered()[..16]).ok();
+                self.timestamp = Timestamp::from_bytes(&self.buffered()[..16]).ok();
                 self.consume_front(16);
-                timestamp
             } else {
                 self.consume_front(offset);
-                None
-            };
+            }
 
             // Now frame candidate is at offset 0
             self.inited = true;
@@ -634,6 +635,41 @@ fn one_byte_fragments_preserve_a_major_sync_during_resync() -> anyhow::Result<()
     assert_eq!(extractor.error_count(), 1);
     assert_eq!(extractor.stream_position(), data.len() as u64);
     Ok(())
+}
+
+/// The timestamp sits ahead of the first access unit, so it is read before the frame that
+/// carries it exists. Every piece of a split access unit sends resync round again, and the
+/// second pass used to clear the field the first had filled.
+#[test]
+fn a_split_first_access_unit_keeps_its_timestamp() {
+    use crate::process::EXAMPLE_DATA;
+
+    let mut whole = Extractor::default();
+    whole.push_bytes(EXAMPLE_DATA);
+    let expected = whole.next().expect("a frame").expect("a frame").timestamp;
+    assert!(expected.is_some(), "the example stream carries a timestamp");
+    let expected = format!("{expected:?}");
+
+    for chunk in [1, 7, 23, 24, 64] {
+        let mut extractor = Extractor::default();
+        let mut first = None;
+        let mut frames = 0;
+
+        for piece in EXAMPLE_DATA.chunks(chunk) {
+            extractor.push_bytes(piece);
+            while let Some(Ok(frame)) = extractor.next() {
+                first.get_or_insert_with(|| format!("{:?}", frame.timestamp));
+                frames += 1;
+            }
+        }
+
+        assert_eq!(frames, 2, "chunk {chunk}: frame count");
+        assert_eq!(
+            first.unwrap_or_default(),
+            expected,
+            "chunk {chunk}: timestamp"
+        );
+    }
 }
 
 /// The offset a frame carries must address that frame's first byte in the pushed stream.
