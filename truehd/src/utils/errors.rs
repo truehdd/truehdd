@@ -79,6 +79,9 @@ pub enum DecodeError {
 
 #[derive(thiserror::Error, Debug)]
 pub enum ExtractError {
+    #[error("Access unit length {actual} bytes is shorter than its {minimum}-byte header")]
+    InvalidAccessUnitLength { actual: usize, minimum: usize },
+
     #[error("Mismatch in substream count: found {found}, expected {expected}")]
     SubstreamMismatch { found: usize, expected: usize },
 
