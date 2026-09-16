@@ -730,6 +730,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "oamd"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76c4b9119cf66c5cdbc555ac0dbb9607a92a71e8fd6409c3217f429c05872f93"
+dependencies = [
+ "anyhow",
+ "bitstream-io",
+ "log",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1042,6 +1053,7 @@ dependencies = [
  "bitstream-io",
  "hmac",
  "log",
+ "oamd",
  "sha2",
  "thiserror",
 ]

@@ -23,6 +23,7 @@ evo-protection = ["dep:hmac", "dep:sha2"]
 
 [dependencies]
 anyhow = "1.0.104"
+oamd = "0.1.0"
 bitstream-io = "4.10.0"
 thiserror = "2.0.19"
 log = "0.4.33"
