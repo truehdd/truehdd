@@ -13,6 +13,10 @@ use std::sync::Arc;
 /// Frame boundary detection by searching for major sync patterns.
 /// Implements low-level frame extraction for bitstreams.
 ///
+/// Invalid lengths and CRC failures encountered while finding a major sync are
+/// returned as errors and counted by [`Self::error_count`]. The rejected candidate
+/// is consumed, so callers may continue iterating to recover at a later major sync.
+///
 /// # Example
 ///
 /// ```rust,no_run
@@ -219,15 +223,29 @@ impl Extractor {
                 return self.insufficient();
             };
 
-            if self.buffered_len() < 4 + major_sync_info_len {
-                return self.insufficient();
-            };
-
             let Some(access_unit_len) = self.access_unit_len() else {
                 return self.insufficient();
             };
 
-            if self.buffered_len() < access_unit_len || access_unit_len <= major_sync_info_len + 6 {
+            // Header, major sync, CRC, and at least one substream directory entry.
+            // An impossible length cannot become valid when more bytes arrive. Move
+            // past the candidate so a caller recovering from the error can make progress.
+            let minimum = major_sync_info_len + 8;
+            if access_unit_len < minimum {
+                self.error_count += 1;
+                self.consume_front(1);
+                log_or_err!(
+                    self,
+                    log::Level::Error,
+                    ExtractError::InvalidAccessUnitLength {
+                        actual: access_unit_len,
+                        minimum,
+                    }
+                );
+                continue;
+            }
+
+            if self.buffered_len() < access_unit_len {
                 return self.insufficient();
             }
 
@@ -236,6 +254,7 @@ impl Extractor {
             let crc = u16::from_be_bytes([crc_bytes[0], crc_bytes[1]]);
             if crc != self.crc16_major_sync_info(&(&access_unit_bytes[4..])[..major_sync_info_len])
             {
+                self.error_count += 1;
                 self.consume_front(access_unit_len);
                 log_or_err!(self, log::Level::Error, ExtractError::ParityCheckFailed);
                 continue;
@@ -327,8 +346,12 @@ impl Iterator for Extractor {
 
         loop {
             'locked: {
-                if !self.locked && self.resync().is_err() {
-                    return None;
+                if !self.locked {
+                    match self.resync() {
+                        Ok(()) => {}
+                        Err(ExtractError::InsufficientData) => return None,
+                        Err(error) => return Some(Err(error)),
+                    }
                 }
 
                 if self.buffered_len() < 6 {
@@ -428,6 +451,18 @@ impl Iterator for Extractor {
                     return self.iter_insufficient();
                 };
 
+                // Even a parity-valid directory must fit inside the declared frame.
+                // In particular, never emit a zero-length frame without consuming input.
+                if access_unit_len < offset {
+                    self.error_count += 1;
+                    self.locked = false;
+                    self.consume_front(1);
+                    return Some(Err(ExtractError::InvalidAccessUnitLength {
+                        actual: access_unit_len,
+                        minimum: offset,
+                    }));
+                }
+
                 if self.buffered_len() < access_unit_len {
                     return self.iter_insufficient();
                 };
@@ -459,7 +494,8 @@ impl Iterator for Extractor {
 
             match self.resync() {
                 Ok(_) => continue,
-                Err(_) => return None,
+                Err(ExtractError::InsufficientData) => return None,
+                Err(error) => return Some(Err(error)),
             }
         }
     }
@@ -679,7 +715,11 @@ fn a_rejected_candidate_does_not_stamp_the_next_frame() {
     bytes.extend_from_slice(&EXAMPLE_DATA[16..]); // The next candidate has no timestamp.
     let mut extractor = Extractor::default();
     extractor.push_bytes(&bytes[..100]);
-    assert!(extractor.next().is_none());
+    assert!(matches!(
+        extractor.next(),
+        Some(Err(ExtractError::ParityCheckFailed))
+    ));
+    assert_eq!(extractor.error_count(), 1);
     extractor.push_bytes(&bytes[100..]);
     let frames: Vec<_> = extractor.filter_map(Result::ok).collect();
     assert_eq!(frames.len(), 2);
@@ -688,6 +728,92 @@ fn a_rejected_candidate_does_not_stamp_the_next_frame() {
         frames[0].timestamp.is_none(),
         "timestamp from a rejected candidate leaked"
     );
+}
+
+#[test]
+fn invalid_major_sync_lengths_are_reported_and_allow_recovery() {
+    use crate::process::{EXAMPLE_DATA, EXAMPLE_DATA_FBB_UNEXTRACTABLE};
+
+    for data in [EXAMPLE_DATA, EXAMPLE_DATA_FBB_UNEXTRACTABLE] {
+        let mut original = Extractor::default();
+        original.push_bytes(data);
+        let major = original.next().unwrap().unwrap();
+
+        for length in (0..34).step_by(2) {
+            let mut invalid = major.as_ref()[..31].to_vec();
+            invalid[0] &= 0xf0;
+            invalid[1] = length as u8 / 2;
+            invalid.extend_from_slice(major.as_ref());
+
+            let mut extractor = Extractor::default();
+            extractor.push_bytes(&invalid);
+            assert!(matches!(
+                extractor.next(),
+                Some(Err(ExtractError::InvalidAccessUnitLength { actual, minimum: 34 }))
+                    if actual == length
+            ));
+            assert_eq!(extractor.error_count(), 1);
+
+            // A caller may recover without pushing more bytes; the bad candidate
+            // cannot trap the scan or hide the valid frame already in the buffer.
+            let recovered = extractor.next().unwrap().unwrap();
+            assert_eq!(recovered.offset, 31);
+            assert_eq!(recovered.as_ref(), major.as_ref());
+            assert_eq!(extractor.error_count(), 1);
+        }
+    }
+}
+
+#[test]
+fn invalid_locked_frame_length_cannot_emit_an_empty_frame() {
+    use crate::process::EXAMPLE_DATA;
+
+    let mut original = Extractor::default();
+    original.push_bytes(EXAMPLE_DATA);
+    let major = original.next().unwrap().unwrap();
+    let minor = original.next().unwrap().unwrap();
+    let mut invalid = minor.as_ref().to_vec();
+    let original_parity = invalid[0] ^ invalid[1];
+    invalid[0] &= 0xf0;
+    invalid[1] = 0;
+    let delta = original_parity ^ invalid[0] ^ invalid[1];
+    invalid[0] ^= ((delta ^ (delta >> 4)) & 0xf) << 4;
+
+    let mut extractor = Extractor::default();
+    extractor.push_bytes(major.as_ref());
+    extractor.push_bytes(&invalid);
+    extractor.push_bytes(major.as_ref());
+    assert!(extractor.next().unwrap().is_ok());
+    assert!(matches!(
+        extractor.next(),
+        Some(Err(ExtractError::InvalidAccessUnitLength { actual: 0, .. }))
+    ));
+    let recovered = extractor.next().unwrap().unwrap();
+    assert_eq!(
+        recovered.offset,
+        (major.as_ref().len() + invalid.len()) as u64
+    );
+    assert_eq!(recovered.as_ref(), major.as_ref());
+    assert_eq!(extractor.error_count(), 1);
+}
+
+#[test]
+fn initial_crc_failure_does_not_hide_already_buffered_frames() {
+    use crate::process::EXAMPLE_DATA;
+
+    let mut data = EXAMPLE_DATA[..100].to_vec();
+    data[46] ^= 1; // First major-sync CRC byte, after the timestamp and 26-byte sync.
+    data.extend_from_slice(&EXAMPLE_DATA[16..]);
+    let mut extractor = Extractor::default();
+    extractor.push_bytes(&data);
+    assert!(matches!(
+        extractor.next(),
+        Some(Err(ExtractError::ParityCheckFailed))
+    ));
+    assert_eq!(extractor.error_count(), 1);
+    let frames: Vec<_> = extractor.filter_map(Result::ok).collect();
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[0].offset, 100);
 }
 
 /// The offset a frame carries must address that frame's first byte in the pushed stream.
