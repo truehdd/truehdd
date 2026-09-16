@@ -205,8 +205,9 @@ impl Extractor {
             // that carries it exists.
             if !self.inited && offset >= 16 {
                 self.consume_front(offset - 16);
-                self.timestamp = Timestamp::from_bytes(&self.buffered()[..16]).ok();
+                let timestamp = Timestamp::from_bytes(&self.buffered()[..16]).ok();
                 self.consume_front(16);
+                self.timestamp = timestamp;
             } else {
                 self.consume_front(offset);
             }
@@ -261,6 +262,10 @@ impl Extractor {
     }
 
     fn consume_front(&mut self, cnt: usize) {
+        if cnt != 0 {
+            // A pending timestamp belongs to the candidate at the current cursor.
+            self.timestamp = None;
+        }
         self.cursor = self.cursor.saturating_add(cnt);
         self.consumed = self.consumed.saturating_add(cnt as u64);
         self.compact_if_needed(0);
@@ -431,16 +436,8 @@ impl Iterator for Extractor {
                 let mut frame_buffer = self.buffer_pool.acquire();
                 frame_buffer.extend_from_slice(&self.buffered()[..access_unit_len]);
                 let offset = self.consumed;
+                let timestamp = self.timestamp.take();
                 self.consume_front(access_unit_len);
-
-                let timestamp = if self.timestamp.is_some() {
-                    let timestamp = self.timestamp.clone();
-                    self.timestamp = None;
-
-                    timestamp
-                } else {
-                    None
-                };
 
                 let frame = Frame {
                     timestamp,
@@ -670,6 +667,27 @@ fn a_split_first_access_unit_keeps_its_timestamp() {
             "chunk {chunk}: timestamp"
         );
     }
+}
+
+/// A timestamp belongs to its candidate, even when that candidate is rejected during resync.
+#[test]
+fn a_rejected_candidate_does_not_stamp_the_next_frame() {
+    use crate::process::EXAMPLE_DATA;
+
+    let mut bytes = EXAMPLE_DATA[..100].to_vec();
+    bytes[24] ^= 1; // Corrupt the first candidate's major-sync CRC without changing its length.
+    bytes.extend_from_slice(&EXAMPLE_DATA[16..]); // The next candidate has no timestamp.
+    let mut extractor = Extractor::default();
+    extractor.push_bytes(&bytes[..100]);
+    assert!(extractor.next().is_none());
+    extractor.push_bytes(&bytes[100..]);
+    let frames: Vec<_> = extractor.filter_map(Result::ok).collect();
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[0].offset, 100);
+    assert!(
+        frames[0].timestamp.is_none(),
+        "timestamp from a rejected candidate leaked"
+    );
 }
 
 /// The offset a frame carries must address that frame's first byte in the pushed stream.
