@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING**: `structs::oamd` re-exports the [`oamd`](https://crates.io/crates/oamd) crate, which now owns these structures. Every type and function keeps the path it had, but `TEST_DATA` is `EXAMPLE_DATA` there and the other test payloads are no longer public
 
 ### Fixed
+- Impossible access-unit lengths now raise `ExtractError::InvalidAccessUnitLength` instead of waiting indefinitely for more input. Initial major-sync CRC failures are counted and returned to callers, preventing a corrupted stream from finishing successfully without output. Low-level extraction can resume at the next candidate after either error.
 - A timestamp read for a sync candidate that then failed its major-sync CRC was left behind for the next valid frame to inherit, so a stream whose leading bytes happen to validate as a timestamp had it attributed to whatever access unit followed. A pending timestamp belongs to the candidate at the cursor, so it is now discarded whenever bytes are. Introduced in 0.7.2 (#34, fixed by @P0SlX)
 
 ## [0.7.2] - 2026-09-15
@@ -200,4 +201,3 @@ The panic-free parsing, recovery API, DRC state, OAMD distance and extractor buf
 - **BREAKING**: Replaced `fail_on_warning: bool` with `fail_level: log::Level` in `ParserState` and `DecoderState`
 - **BREAKING**: `ParserState::default()` now uses `log::Level::Error` instead of `fail_on_warning: false`
 - **BREAKING**: `DecoderState::default()` now uses `log::Level::Error` instead of `fail_on_warning: false`
-

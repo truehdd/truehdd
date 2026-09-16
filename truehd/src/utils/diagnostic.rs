@@ -104,6 +104,7 @@ rule_ids! {
         OutputsExceedMaxBits = "outputs_exceed_max_bits",
     }
     ExtractError => Extract / ExtractRule / "extract" {
+        InvalidAccessUnitLength = "invalid_access_unit_length",
         SubstreamMismatch = "substream_mismatch",
         ParityCheckFailed = "parity_check_failed",
         InsufficientData = "insufficient_data",
