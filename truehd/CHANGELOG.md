@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- A timestamp read for a sync candidate that then failed its major-sync CRC was left behind for the next valid frame to inherit, so a stream whose leading bytes happen to validate as a timestamp had it attributed to whatever access unit followed. A pending timestamp belongs to the candidate at the cursor, so it is now discarded whenever bytes are. Introduced in 0.7.2 (#34, fixed by @P0SlX)
+
 ## [0.7.2] - 2026-09-15
 
 ### Fixed
