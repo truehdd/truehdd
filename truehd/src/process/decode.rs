@@ -256,6 +256,7 @@ pub struct DecoderState {
     pub valid: bool,
     pub counter: usize,
     pub has_valid_branch: bool,
+    pub has_invalid_branch: bool,
     pub has_duplicate_timing: bool,
     pub has_duplicate_sample: bool,
 
@@ -290,6 +291,7 @@ impl Default for DecoderState {
             valid: false,
             counter: 0,
             has_valid_branch: false,
+            has_invalid_branch: false,
             has_duplicate_timing: false,
             has_duplicate_sample: false,
             sampling_frequency: 0,
