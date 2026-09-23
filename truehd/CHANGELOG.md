@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING**: `structs::oamd` re-exports the [`oamd`](https://crates.io/crates/oamd) crate, which now owns these structures. Every type and function keeps the path it had, but `TEST_DATA` is `EXAMPLE_DATA` there and the other test payloads are no longer public
 
 ### Fixed
+- A branch the buffer-model conditions reject restarts the stream, but the `hires_output_timing` reader was carried across it. The field is serialised one bit per restart header over many access units, and the stream after a splice begins its own from the preamble, so the reader could take that preamble for data bits of the field it was part way through, `RestartHeaderError::InvalidHiresOutputTiming`, or compare the new stream's first field with the old stream's last, `RestartHeaderError::InvalidHiresOutputTimingSequence`, and report either once per substream about a field that was never malformed. The reader now starts over wherever the stream does, as it already did past a branch the conditions accept
 - A timestamp read for a sync candidate that then failed its major-sync CRC was left behind for the next valid frame to inherit, so a stream whose leading bytes happen to validate as a timestamp had it attributed to whatever access unit followed. A pending timestamp belongs to the candidate at the cursor, so it is now discarded whenever bytes are. Introduced in 0.7.2 (#34, fixed by @P0SlX)
 
 ## [0.7.2] - 2026-09-15
