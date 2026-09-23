@@ -42,6 +42,14 @@ const FBB_6CH_SLICE: &[u8] = include_bytes!("assets/fbb_6ch.mlp");
 /// 88 access units, 3520 samples at 48 kHz.
 const FBB_COPY_SLICE: &[u8] = include_bytes!("assets/fbb_copy.mlp");
 
+/// FBA encodes with three substreams spliced end to end: 512 access units, starting over
+/// at access units 44 and 344, where both branch points fail the buffer-model conditions.
+const FBA_SPLICED: &[u8] = include_bytes!("assets/fba_spliced.mlp");
+
+/// FBB encodes with two substreams spliced end to end: 416 access units, starting over at
+/// access units 44 and 344, where both branch points fail the buffer-model conditions.
+const FBB_SPLICED: &[u8] = include_bytes!("assets/fbb_spliced.mlp");
+
 /// FNV-1a 64 digest of decoded PCM: every valid sample of every decoded
 /// access unit, sample-major, each 24-bit value as an i32 in little-endian
 /// byte order. Matches the digests computed from the source WAVs.
@@ -487,6 +495,60 @@ fn lossless_check_fires_on_corrupted_payload() {
     let bad = corrupt_substream0(FBA_2CH_SLICE, 40, 1, 20);
     let err = decode_stream(&bad, require(&[0]), Some(log::Level::Warn))
         .expect_err("corrupted PCM must fail the lossless check");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("lossless_check failed for substream 0"),
+        "unexpected error: {msg}"
+    );
+}
+
+/// Decodes every presentation of a spliced stream. The parser keeps its default fail
+/// level, since the splices themselves are warnings, and the decoder fails on a warning,
+/// which makes every lossless_check comparison a hard assertion. Returns how many access
+/// units were flagged `has_invalid_branch`.
+fn decode_spliced(data: &[u8], parser: &mut Parser) -> anyhow::Result<usize> {
+    let mut extractor = Extractor::default();
+    extractor.push_bytes(data);
+
+    let mut decoder = Decoder::default();
+    decoder.set_fail_level(log::Level::Warn);
+
+    let mut rejected = 0;
+
+    for result in &mut extractor {
+        let Ok(frame) = result else { break };
+        let access_unit = parser.parse(&frame)?;
+        rejected += access_unit.has_invalid_branch as usize;
+
+        decoder.decode_presentations(&access_unit, &require(&[0, 1, 2, 3]))?;
+    }
+
+    Ok(rejected)
+}
+
+/// The first restart header past a splice states a lossless_check over what its own
+/// stream decoded before the splice, which is not in this one, so it cannot match what was
+/// decoded here. A branch the buffer-model conditions accept is excused from the
+/// comparison; one they reject restarts the stream and is excused likewise.
+#[test]
+fn a_rejected_branch_is_excused_from_the_lossless_check() {
+    for (name, data) in [("fba_spliced", FBA_SPLICED), ("fbb_spliced", FBB_SPLICED)] {
+        let mut parser = Parser::default();
+        let rejected =
+            decode_spliced(data, &mut parser).unwrap_or_else(|e| panic!("{name}: {e:#}"));
+
+        assert!(rejected > 0, "{name} is spliced");
+        assert_eq!(rejected, parser.invalid_branches(), "{name}");
+    }
+}
+
+/// Only the restart header at the splice is excused. A payload corrupted after it, in the
+/// second encode, still fails the comparison at the next restart header.
+#[test]
+fn corruption_past_a_rejected_branch_still_fails_the_lossless_check() {
+    let bad = corrupt_substream0(FBA_SPLICED, 50, 3, 20);
+    let err = decode_spliced(&bad, &mut Parser::default())
+        .expect_err("corrupted PCM past the splice must fail the lossless check");
     let msg = format!("{err:#}");
     assert!(
         msg.contains("lossless_check failed for substream 0"),

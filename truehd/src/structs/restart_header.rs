@@ -619,7 +619,10 @@ impl RestartHeader {
                 lossless_check_i32 &= 0xFF;
 
                 if lossless_check_i32 != self.lossless_check as i32 {
-                    if state.has_valid_branch {
+                    // Past a splice the check covers samples of the new stream from before
+                    // the splice, which this decoder never saw, whether or not the branch
+                    // met the buffer-model conditions.
+                    if state.has_valid_branch || state.has_invalid_branch {
                         log::debug!(
                             "lossless_check failure is allowed on first access unit immediately after the jump"
                         )

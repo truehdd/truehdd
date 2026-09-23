@@ -64,6 +64,10 @@ pub struct AccessUnit {
 
     /// Indicates if this access unit is at a valid branch point.
     pub has_valid_branch: bool,
+
+    /// Indicates if this access unit is at a branch point the buffer-model conditions
+    /// reject, where the parser restarts the stream.
+    pub has_invalid_branch: bool,
 }
 
 impl AccessUnit {
@@ -238,6 +242,7 @@ impl AccessUnit {
         }
 
         state.has_parsed_au = true;
+        au.has_invalid_branch = state.segment_start;
         state.segment_start = false;
         access_unit.record(&mut state.perf.access_unit_total);
 
@@ -608,6 +613,7 @@ impl AccessUnit {
 
     pub fn update_decoder_state(&self, state: &mut DecoderState) -> Result<()> {
         state.has_valid_branch = self.has_valid_branch;
+        state.has_invalid_branch = self.has_invalid_branch;
         if let Some(major_sync_info) = &self.major_sync_info {
             major_sync_info.update_decoder_state(state)?;
         } else if !state.valid {
