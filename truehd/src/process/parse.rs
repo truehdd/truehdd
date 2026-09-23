@@ -810,7 +810,8 @@ impl ParserState {
         self.substream_state[self.substream_index].restart = ParserRestartState::default();
     }
 
-    /// Restarts the timing and FIFO model as if the stream began at this access unit.
+    /// Restarts the timing and FIFO model, and the `hires_output_timing` reader, as if the
+    /// stream began at this access unit.
     pub fn restart_stream_for_branch(&mut self, output_timing: usize) {
         self.output_timing_deviation = 0;
         self.unwrapped_input_timing = self.input_timing;
@@ -829,6 +830,11 @@ impl ParserState {
         for ss_state in &mut self.substream_state {
             ss_state.history_index = 0;
         }
+
+        // The stream starting here serialises its own hires_output_timing field from the
+        // beginning, as it does past a branch the conditions accept. The field the reader
+        // was part way through belonged to the stream before the splice.
+        self.reset_for_branch();
 
         self.fifo_depth.restart();
         self.segment_start = true;
@@ -855,8 +861,43 @@ impl ParserState {
 
 #[cfg(test)]
 mod tests {
-    use super::{Branch, Parser};
+    use super::{Branch, Parser, ParserState};
+    use crate::utils::timing::TimingContext;
     use log::Level;
+
+    /// Past a rejected branch the stream starts its `hires_output_timing` field again from
+    /// the preamble. The reader must take that preamble as one, not as data bits of the field
+    /// it was part way through, and go on to decode the new field.
+    #[test]
+    fn a_rejected_branch_restarts_the_hires_output_timing_reader() {
+        let ctx = TimingContext {
+            samples_per_au: 40,
+            ..Default::default()
+        };
+        let mut state = ParserState::default();
+
+        // The stream before the splice: its preamble and the start of a field.
+        for bit in [false, false, false, false, false, true, true] {
+            state.substream_state[0]
+                .hires_output_timing_state
+                .update(&ctx, bit);
+        }
+
+        state.restart_stream_for_branch(0);
+
+        // The stream after it: its preamble, then a field carrying 1.
+        let mut stream_start = None;
+
+        for bit in [
+            false, false, false, false, false, true, true, true, false, false, false, false, false,
+        ] {
+            let reader = &mut state.substream_state[0].hires_output_timing_state;
+            stream_start = reader.update(&ctx, bit).or(stream_start);
+            assert_eq!(reader.fault, None, "the new stream's field is well formed");
+        }
+
+        assert_eq!(stream_start, Some(1 << 16), "and it is decoded");
+    }
 
     /// The branch list has no end to be read at in a decoder that runs for as long as
     /// something is playing, so it must be possible to empty it.

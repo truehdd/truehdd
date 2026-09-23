@@ -386,6 +386,31 @@ fn the_branch_causes_are_reported_one_by_one() {
     )));
 }
 
+/// A splice the buffer-model conditions reject restarts the stream, and the stream after
+/// it serialises its hires_output_timing field from the start. Carrying the reader across
+/// the seam read the new stream's preamble as data bits of the old field, or compared the
+/// new stream's first field with the old stream's last.
+#[test]
+fn a_rejected_branch_restarts_the_hires_output_timing_field() {
+    let diagnostics = diagnostics_of(FBA_SPLICED);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| diagnostic.rule
+            == RuleId::RestartHeader(RestartHeaderRule::InvalidSeamlessBranch)),
+        "the splices are still reported"
+    );
+
+    for rule in [
+        RuleId::RestartHeader(RestartHeaderRule::InvalidHiresOutputTiming),
+        RuleId::RestartHeader(RestartHeaderRule::InvalidHiresOutputTimingSequence),
+    ] {
+        assert!(
+            !diagnostics.iter().any(|diagnostic| diagnostic.rule == rule),
+            "{rule} fired across a splice: {diagnostics:?}"
+        );
+    }
+}
+
 /// Every huffman table reaches its deepest leaf through a nine-bit code, and only the
 /// code ending in 1 is legal. The tables decode both, so the rule has to be checked.
 #[test]
