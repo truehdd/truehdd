@@ -12,7 +12,7 @@ use crate::structs::restart_header::RestartHeader;
 use crate::structs::substream::{SubstreamDirectory, SubstreamSegment};
 use crate::structs::sync::{MAJOR_SYNC_FBA, MAJOR_SYNC_FBB, MajorSyncInfo};
 use crate::utils::bitstream_io::BsIoSliceReader;
-use crate::utils::errors::{AccessUnitError, FifoError};
+use crate::utils::errors::{AccessUnitError, FifoError, SubstreamError};
 use crate::utils::fifo::{ACCUMULATORS, Accumulator, FifoContribution, SUBSTREAMS};
 use crate::utils::perf::Timer;
 
@@ -215,9 +215,16 @@ impl AccessUnit {
             if state.substream_mask >> i & 1 == 0 {
                 RestartHeader::peek_output_timing(state, reader)?;
 
-                let offset = state.substream_segment_start_pos
-                    + ((state.substream_state()?.substream_end_ptr as u64) << 4)
-                    - reader.position()?;
+                let expected_end_pos = state.substream_segment_start_pos
+                    + ((state.substream_state()?.substream_end_ptr as u64) << 4);
+                let current_pos = reader.position()?;
+                let offset = expected_end_pos.checked_sub(current_pos).ok_or_else(|| {
+                    anyhow!(SubstreamError::SubstreamSizeUnderflow {
+                        substream: i,
+                        end_pos: expected_end_pos,
+                        current_pos,
+                    })
+                })?;
                 reader.skip_n(offset as u32)?;
 
                 trace!("Skipping substream {i} segment of length {offset}");
