@@ -170,6 +170,50 @@ fn a_failed_access_unit_does_not_end_the_stream() {
     );
 }
 
+/// A corrupt cumulative pointer for an unselected substream can point behind the
+/// segment already read. The parser must report it instead of panicking on subtraction.
+#[test]
+fn skipped_substream_with_backward_end_pointer_returns_an_error() {
+    let mut data = FBA_ATMOS_CBI.to_vec();
+    let sync = major_syncs(&data, MAJOR_SYNC_FBA)[0];
+    let first_directory = major_sync_info_end(&data, sync);
+    let first_word = u16::from_be_bytes([data[first_directory], data[first_directory + 1]]);
+    let second_directory = first_directory + if first_word & 0x8000 != 0 { 4 } else { 2 };
+    let second_word = u16::from_be_bytes([data[second_directory], data[second_directory + 1]]);
+    let old_pointer = second_word & 0x0FFF;
+    assert!(old_pointer > first_word & 0x0FFF);
+
+    // Zero the second end pointer and preserve the access unit's nibble parity.
+    data[second_directory] &= 0xF0;
+    data[second_directory + 1] = 0;
+    let parity_delta = ((old_pointer >> 8) ^ (old_pointer >> 4) ^ old_pointer) as u8 & 0xF;
+    data[sync - 4] ^= parity_delta << 4;
+
+    let mut extractor = Extractor::default();
+    extractor.push_bytes(&data);
+    let frame = extractor
+        .next()
+        .expect("first frame")
+        .expect("valid frame header");
+
+    let mut parser = Parser::default();
+    parser.set_required_presentations(&[true, false, false, false]);
+    let error = parser
+        .parse(&frame)
+        .expect_err("backward end pointer must fail");
+    let underflow = error
+        .downcast_ref::<SubstreamError>()
+        .expect("substream size underflow error");
+    assert!(matches!(
+        underflow,
+        SubstreamError::SubstreamSizeUnderflow {
+            substream: 1,
+            end_pos,
+            current_pos,
+        } if current_pos > end_pos
+    ));
+}
+
 /// Every check that fired over `data`.
 fn diagnostics_of(data: &[u8]) -> Vec<Diagnostic> {
     let mut extractor = Extractor::default();
