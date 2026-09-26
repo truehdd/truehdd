@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- `decode` writes silence in place of access units it cannot parse or decode, where it used to leave them out and move everything after them earlier. `--json` counts them as `concealedFrames`, and `frames` includes them
 - `decode` no longer reports success when it could not decode a single access unit, as with an empty file, bytes that are not TrueHD, or a stream whose only major sync is damaged. It used to write nothing and exit 0; it now exits 4, as `verify` already did
 - `decode` warns when it stops at an access unit too short for its own header, where it used to stop there without a word. Comes from truehd
 - `verify` no longer reports `hires_output_timing` or lossless check faults at a splice the buffer-model conditions reject. Nothing was wrong with the audio. Comes from truehd

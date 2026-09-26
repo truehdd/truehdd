@@ -196,6 +196,7 @@ Evolution frames carry protection words holding a truncated HMAC-SHA-256 over th
   "input": "movie.thd",
   "frames": 225526,
   "skippedFrames": 0,
+  "concealedFrames": 0,
   "branches": 0,
   "invalidBranches": 0,
   "evoChecked": 0,
@@ -209,7 +210,7 @@ Evolution frames carry protection words holding a truncated HMAC-SHA-256 over th
 }
 ```
 
-`channels` is `null` until the channel count is known. `skippedFrames` counts frames the extractor could not use and resynchronised past. `branches` counts seamless branch points that satisfy the decoder buffer model and `invalidBranches` those that do not; the latter is a conformance finding and does not change the decoded samples. Logs stay on stderr, so stdout carries only this object. Use `--log-format json` for machine-readable logs as well.
+`channels` is `null` until the channel count is known. `skippedFrames` counts frames the extractor could not use and resynchronised past. `concealedFrames` counts frames that could not be parsed or decoded and were written as silence instead; `frames` includes them. `branches` counts seamless branch points that satisfy the decoder buffer model and `invalidBranches` those that do not; the latter is a conformance finding and does not change the decoded samples. Logs stay on stderr, so stdout carries only this object. Use `--log-format json` for machine-readable logs as well.
 
 The exit code identifies which stage failed:
 
@@ -228,7 +229,7 @@ With `--strict`, skipped frames are treated as a failure as well.
 
 **Damaged Streams:**
 
-A frame that fails to parse or decode is reported and skipped, and decoding resumes at the next major sync instead of aborting. Pass `--strict` to fail on the first problem instead.
+A frame that fails to parse or decode is reported, and decoding resumes at the next major sync instead of aborting. Once decoding has started, frames lost that way are written as silence, so what follows stays in sync. Pass `--strict` to fail on the first problem instead.
 
 **Warp Mode Options:**
 
