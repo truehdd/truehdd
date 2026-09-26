@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING**: `structs::oamd` re-exports the [`oamd`](https://crates.io/crates/oamd) crate, which now owns these structures. Every type and function keeps the path it had, but `TEST_DATA` is `EXAMPLE_DATA` there and the other test payloads are no longer public
 
 ### Fixed
+- `Parser::parse` no longer reports `FifoError::Underrun` on every access unit of a stream resumed after `reset_for_next_major_sync`. `parse_recovering` was never affected
 - After a branch the buffer-model conditions reject, `hires_output_timing` could be reported malformed as `RestartHeaderError::InvalidHiresOutputTiming` or `InvalidHiresOutputTimingSequence`, because its reader was not restarted with the stream. It now is, as it already was past a branch they accept (#37, fixed by @sven-pke)
 - The first restart header after a branch the buffer-model conditions reject could fail with `RestartHeaderError::LosslessCheckMismatch` although nothing was decoded wrong, since its check covers samples from before the splice. That access unit is now excused, as past an accepted branch; later restart headers are checked as before (#37, fixed by @sven-pke)
 - An access unit too short for its own header raises `ExtractError::InvalidAccessUnitLength` instead of waiting indefinitely for more input, and errors met while resynchronising, such as a failed major-sync CRC, are now returned instead of ending iteration. Extraction can continue at the next candidate after either (#36, fixed by @P0SlX)

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- `decode` no longer warns of a FIFO underrun on every access unit after recovering from a damaged one. `verify` never did. Comes from truehd
 - `decode` writes silence in place of access units it cannot parse or decode, where it used to leave them out and move everything after them earlier. `--json` counts them as `concealedFrames`, and `frames` includes them
 - `decode` no longer reports success when it could not decode a single access unit, as with an empty file, bytes that are not TrueHD, or a stream whose only major sync is damaged. It used to write nothing and exit 0; it now exits 4, as `verify` already did
 - `decode` warns when it stops at an access unit too short for its own header, where it used to stop there without a word. Comes from truehd
