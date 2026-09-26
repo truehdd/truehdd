@@ -16,7 +16,6 @@ A command-line tool for decoding Dolby TrueHD audio streams.
 > 
 > If you have ideas for useful features, please let us know by opening an issue or starting a discussion.
 
-
 ## Overview
 
 `truehdd` is a command-line interface for the [truehd](truehd/) library, enabling decoding of Dolby TrueHD audio streams.
@@ -87,15 +86,9 @@ truehdd info movie.thd
 
 ### `verify` - Conformance Checking
 
-Parses a whole stream and reports every conformance check that fires, rather than stopping
-at the first. Each diagnostic prints its rule ID, severity, access unit and byte.bit
-position, followed by a summary: a per-rule tally, the stream's format and FIFO peaks
-against their caps, the branch points a splice leaves behind, which disc formats the stream
-is legal for, and a verdict.
+Parses a whole stream and reports every conformance check that fires, rather than stopping at the first. Each diagnostic prints its rule ID, severity, access unit and byte.bit position, followed by a summary: a per-rule tally, the stream's format and FIFO peaks against their caps, the branch points a splice leaves behind, which disc formats the stream is legal for, and a verdict.
 
-A stream can be a conformant bitstream and still be inadmissible on every disc format, which
-is reported as `CONFORMANT, NOT DISC-AUTHORABLE` and exits 0: the disc rules and the codec
-rules are different rules.
+A stream can be a conformant bitstream and still be inadmissible on every disc format, which is reported as `CONFORMANT, NOT DISC-AUTHORABLE` and exits 0: the disc rules and the codec rules are different rules.
 
 **Usage:** `truehdd verify [OPTIONS] <INPUT>`
 
@@ -195,8 +188,7 @@ Evolution frames carry protection words holding a truncated HMAC-SHA-256 over th
 
 **Machine-Readable Output:**
 
-`--json` prints a single result object on stdout when decoding finishes, so a
-calling program does not have to guess which files were written:
+`--json` prints a single result object on stdout when decoding finishes, so a calling program does not have to guess which files were written:
 
 ```json
 {
@@ -217,12 +209,7 @@ calling program does not have to guess which files were written:
 }
 ```
 
-`channels` is `null` until the channel count is known. `skippedFrames` counts
-frames the extractor could not use and resynchronised past. `branches` counts seamless branch points that satisfy the decoder buffer
-model and `invalidBranches` those that do not; the latter is a conformance
-finding and does not change the decoded samples. Logs stay on stderr, so
-stdout carries only this object. Use `--log-format json` for machine-readable
-logs as well.
+`channels` is `null` until the channel count is known. `skippedFrames` counts frames the extractor could not use and resynchronised past. `branches` counts seamless branch points that satisfy the decoder buffer model and `invalidBranches` those that do not; the latter is a conformance finding and does not change the decoded samples. Logs stay on stderr, so stdout carries only this object. Use `--log-format json` for machine-readable logs as well.
 
 The exit code identifies which stage failed:
 
