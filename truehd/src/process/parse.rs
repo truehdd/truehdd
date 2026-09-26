@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 
 use crate::process::extract::Frame;
 use crate::process::{MAX_PRESENTATIONS, PresentationMap};
@@ -11,7 +11,7 @@ use crate::utils::crc::{
 use crate::utils::diagnostic::{
     Diagnostic, DiagnosticMode, DiagnosticSink, Location, Rule, bit_position,
 };
-use crate::utils::errors::ParseError;
+use crate::utils::errors::{AccessUnitError, ParseError};
 use crate::utils::fifo::{ACCUMULATORS, FifoDepthState, FifoPeak, SUBSTREAMS};
 // Re-exported so the type is nameable where the method returning it lives
 pub use crate::utils::perf::ParserPerfStats;
@@ -44,6 +44,11 @@ impl Parser {
         self.state.perf = ParserPerfStats::default();
         self.state.au_index = frame.index;
         self.state.au_offset = frame.offset;
+
+        // Refused before reading, since reading the header moves the timing state.
+        if !self.state.has_parsed_au && !frame.is_major_sync() {
+            return (Err(anyhow!(AccessUnitError::MissingInitialSync)), Some(32));
+        }
 
         let reader = &mut BsIoSliceReader::from_slice(frame.as_ref());
         let access_unit = AccessUnit::read(&mut self.state, reader);
@@ -924,6 +929,39 @@ mod tests {
 
         parser.set_check_fifo(false);
         assert!(!parser.state.check_fifo);
+    }
+
+    /// Frames refused while resynchronising must not move the clock the next stream starts on.
+    #[test]
+    fn frames_refused_while_resynchronising_leave_the_clock_alone() {
+        use crate::process::EXAMPLE_DATA;
+
+        // Refused frames at input_timing 0x1100 then 0 wrap past the major sync's 65452.
+        // Changing two nibbles by one each keeps the check nibble valid.
+        let first_len =
+            (u16::from_be_bytes([EXAMPLE_DATA[16], EXAMPLE_DATA[17]]) & 0xFFF) as usize * 2;
+        let second = &EXAMPLE_DATA[16 + first_len..];
+        let mut ahead = second.to_vec();
+        ahead[2] = 0x11;
+
+        let mut data = EXAMPLE_DATA[..16 + first_len].to_vec();
+        data.extend_from_slice(&ahead);
+        data.extend_from_slice(second);
+
+        let mut extractor = crate::process::extract::Extractor::default();
+        extractor.push_bytes(&data);
+        let frames: Vec<_> = extractor.map_while(Result::ok).collect();
+        assert_eq!(frames.len(), 3);
+
+        let mut parser = Parser::default();
+        parser.set_fail_level(Level::Warn);
+        parser.reset_for_next_major_sync();
+        assert!(parser.parse(&frames[1]).is_err());
+        assert!(parser.parse(&frames[2]).is_err());
+
+        parser
+            .parse(&frames[0])
+            .expect("the stream starts as if nothing had been refused");
     }
 
     #[test]
