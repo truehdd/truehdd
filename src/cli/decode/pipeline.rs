@@ -168,6 +168,9 @@ pub fn run_threaded_pipeline(
         });
 
         match run_writer_main(rx_decode, &mut outputs, pb, progress_counter) {
+            Ok(()) if outputs.summary().decoded_frames == 0 => Err(PipelineError::Parse(anyhow!(
+                "no access unit in the stream could be decoded"
+            ))),
             Ok(()) => Ok(DecodeSummary {
                 skipped_frames: skipped_frames.load(Ordering::Relaxed),
                 branches: branches.load(Ordering::Relaxed),
@@ -668,5 +671,55 @@ impl DecodeSummary {
             self.final_sample_rate,
             presentations.join(",")
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PipelineError, run_threaded_pipeline};
+    use crate::cli::command::{Cli, Commands};
+    use clap::Parser;
+    use log::Level;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicU64;
+
+    fn decode(bytes: &[u8]) -> Result<u64, PipelineError> {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("input.thd");
+        std::fs::write(&input, bytes).unwrap();
+        let output = dir.path().join("out");
+
+        let cli = Cli::try_parse_from([
+            "truehdd".as_ref(),
+            "decode".as_ref(),
+            input.as_os_str(),
+            "--output-path".as_ref(),
+            output.as_os_str(),
+        ])
+        .unwrap();
+        let Commands::Decode(args) = cli.command else {
+            unreachable!()
+        };
+
+        run_threaded_pipeline(
+            &args,
+            Level::Error,
+            false,
+            None,
+            Arc::new(AtomicU64::new(0)),
+        )
+        .map(|summary| summary.decoded_frames)
+    }
+
+    #[test]
+    fn a_stream_with_nothing_decodable_is_a_parse_failure() {
+        for bytes in [&[][..], &[0x5a; 4096][..]] {
+            assert!(matches!(decode(bytes), Err(PipelineError::Parse(_))));
+        }
+    }
+
+    #[test]
+    fn a_decodable_stream_still_succeeds() {
+        assert_eq!(decode(truehd::process::EXAMPLE_DATA).unwrap(), 2);
     }
 }
