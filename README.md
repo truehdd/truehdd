@@ -1,4 +1,5 @@
 # truehdd
+
 [![CI](https://github.com/truehdd/truehdd/workflows/CI/badge.svg)](https://github.com/truehdd/truehdd/actions/workflows/ci.yml)
 [![Artifacts](https://github.com/truehdd/truehdd/workflows/Artifacts/badge.svg)](https://github.com/truehdd/truehdd/actions/workflows/release.yml)
 [![Github all releases](https://img.shields.io/github/downloads/truehdd/truehdd/total.svg)](https://GitHub.com/truehdd/truehdd/releases/)
@@ -7,13 +8,13 @@ A command-line tool for decoding Dolby TrueHD audio streams.
 
 **Language:** English | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
 
-> ⚠️ **Experimental** 
-> 
+> ⚠️ **Experimental**
+>
 > This tool is designed for research and development purposes.  
 > It is not intended for production environments or consumer playback systems.
-> 
-> 💡 **Got a new idea?**  
-> 
+>
+> 💡 **Got a new idea?**
+>
 > If you have ideas for useful features, please let us know by opening an issue or starting a discussion.
 
 ## Overview
@@ -79,6 +80,7 @@ Options:
 ```
 
 **Examples:**
+
 ```bash
 # Analyze a TrueHD file
 truehdd info movie.thd
@@ -112,6 +114,7 @@ Options:
 ```
 
 **Examples:**
+
 ```bash
 # Check a stream against the conformance rules
 truehdd verify movie.thd
@@ -167,7 +170,6 @@ When `--output-path` is specified, the tool generates appropriate output files:
   - `output.pcm` - Raw PCM (if `--format pcm`)
   - `output.wav` - Wave64 format (if `--format w64`)
 
-
 - **Object presentation:** Dolby Atmos master file set, with presentation index 3 (if available)
   1. `output.atmos` - Essential information about the presentation
   2. `output.atmos.audio` - Audio for all bed signals and objects in Core Audio format
@@ -175,8 +177,9 @@ When `--output-path` is specified, the tool generates appropriate output files:
 
   **Note:** Presentation 3 always uses CAF format regardless of `--format` option. Use `--bed-conform` to convert bed channels to 7.1.2 layout.
 
-
 - **Multiple presentations:** selecting a list, `all`, or several presentations suffixes every output with its presentation index, for example `output_p1.caf` and `output_p3.atmos`, even when only one presentation turns out to exist. Selected presentations are decoded in a single pass, sharing the work their substreams have in common.
+
+Changes in output configuration or effective presentation start a new segment. Its name includes the source access-unit index where it starts, for example `output_136.caf`. Audio, Atmos headers, and metadata within a segment share that same base name.
 
 **Metadata Only:**
 
@@ -204,26 +207,32 @@ Evolution frames carry protection words holding a truncated HMAC-SHA-256 over th
   "samples": 9021040,
   "sampleRate": 48000,
   "presentations": [
-    {"index": 3, "format": "damf", "channels": 12,
-     "files": ["out.atmos", "out.atmos.audio", "out.atmos.metadata"]}
+    {
+      "index": 3,
+      "format": "damf",
+      "channels": 12,
+      "files": ["out.atmos", "out.atmos.audio", "out.atmos.metadata"]
+    }
   ]
 }
 ```
 
 `channels` is `null` until the channel count is known. `skippedFrames` counts frames the extractor could not use and resynchronised past. `concealedFrames` counts frames that could not be parsed or decoded and were written as silence instead; `frames` includes them. `branches` counts seamless branch points that satisfy the decoder buffer model and `invalidBranches` those that do not; the latter is a conformance finding and does not change the decoded samples. Logs stay on stderr, so stdout carries only this object. Use `--log-format json` for machine-readable logs as well.
 
+`frames` counts each accepted access unit once, even when the effective presentation changes or several presentations are selected. `samples` adds the longest selected output length for each accepted access unit; duplicate access units advance neither total.
+
 The exit code identifies which stage failed:
 
-| Code | Meaning |
-| --- | --- |
-| 0 | Success |
-| 1 | Unspecified failure |
-| 2 | Invalid command line |
-| 3 | Input could not be read |
-| 4 | Bitstream could not be parsed |
-| 5 | Audio could not be decoded |
-| 6 | Output could not be written |
-| 7 | Stream is non-conformant (`verify` only) |
+| Code | Meaning                                  |
+| ---- | ---------------------------------------- |
+| 0    | Success                                  |
+| 1    | Unspecified failure                      |
+| 2    | Invalid command line                     |
+| 3    | Input could not be read                  |
+| 4    | Bitstream could not be parsed            |
+| 5    | Audio could not be decoded               |
+| 6    | Output could not be written              |
+| 7    | Stream is non-conformant (`verify` only) |
 
 With `--strict`, skipped frames are treated as a failure as well.
 
@@ -236,13 +245,14 @@ A frame that fails to parse or decode is reported, and decoding resumes at the n
 The `--warp-mode` option controls how Dolby Atmos content handles downmix rendering when the metadata doesn't specify a warp mode:
 
 - `normal` - Direct render
-- `warping` - Direct render with room balance  
+- `warping` - Direct render with room balance
 - `prologiciix` - Dolby Pro Logic IIx
 - `loro` - Standard (Lo/Ro)
 
 This option only applies when the original OAMD metadata lacks warp mode information. If warp mode is already present in the metadata, this option is ignored.
 
 **Examples:**
+
 ```bash
 # Decode a TrueHD file with progress
 truehdd decode --progress audio.thd --output-path decoded_audio
