@@ -26,9 +26,12 @@
 //!
 //! Steps for processing audio streams:
 //!
-//! 1. Extract access units from a bitstream using [`process::extract::Extractor`]
-//! 2. Parse access units into structured data using [`process::parse::Parser`]
-//! 3. Decode audio to PCM samples using [`process::decode::Decoder`]
+//! For incremental applications, prefer [`process::stream::StreamDecoder`], which owns the three
+//! processing stages and their timeline as one state machine. Users can drive them separately:
+//!
+//! 1. Extract access units from a bitstream using [`process::extract::Extractor`].
+//! 2. Parse access units into structured data using [`process::parse::Parser`].
+//! 3. Decode audio to PCM samples using [`process::decode::Decoder`].
 //!
 //! ```rust,no_run
 //! use truehd::process::{extract::Extractor, parse::Parser, decode::Decoder, EXAMPLE_DATA};
@@ -72,6 +75,9 @@
 ///    representations.
 ///
 /// 3. **Decoding** ([`process::decode`]): Audio decoding using MLP algorithm.
+///
+/// 4. **Incremental decoding** ([`process::stream`]): Synchronized PCM, typed OAMD, and timeline
+///    events from arbitrary byte fragments.
 pub mod process;
 
 /// Data structures representing TrueHD format components.

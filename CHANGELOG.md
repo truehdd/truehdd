@@ -7,26 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `decode`, `info` and `verify` use less temporary memory when reading TrueHD streams. Decoded audio and reported results are unchanged.
+
 ### Fixed
+
 - `decode` no longer warns of a FIFO underrun on every access unit after recovering from a damaged one. `verify` never did. Comes from truehd
 - `decode` writes silence in place of access units it cannot parse or decode, where it used to leave them out and move everything after them earlier. `--json` counts them as `concealedFrames`, and `frames` includes them
 - `decode` no longer reports success when it could not decode a single access unit, as with an empty file, bytes that are not TrueHD, or a stream whose only major sync is damaged. It used to write nothing and exit 0; it now exits 4, as `verify` already did
 - `decode` warns when it stops at an access unit too short for its own header, where it used to stop there without a word. Comes from truehd
 - `verify` no longer reports `hires_output_timing` or lossless check faults at a splice the buffer-model conditions reject. Nothing was wrong with the audio. Comes from truehd
+- A single presentation that switches between independent and copied output now names each segment by its source access-unit index, preventing different presentation handlers from overwriting one another's files. Frame and sample totals count each accepted access unit once across these switches.
+- Atmos probing gets its full window in every segment. Delayed metadata and buffered audio retain the segment's original base name, including when a CAF file must be renamed to `.atmos.audio`.
 
 ## [0.6.2] - 2026-09-15
 
 ### Fixed
+
 - Reading a stream from a pipe could extract nothing at all. `decode -` hands each read straight to the extractor, and a pipe may deliver fewer than 24 bytes at a time, which the extractor could not lock on to; input arriving in pieces also lost the stream's timestamp. Both come from truehd 0.7.2. Reading a file is unaffected, since those reads are 64 KiB
 
 ## [0.6.1] - 2026-08-15
 
 ### Fixed
+
 - `decode` no longer writes an Atmos event where the stream only restated the metadata already in force. An encoder that has no fresh object metadata to send re-emits the last payload with its update timing zeroed, which changes nothing about the objects but does change the ramp length, and a ramp was enough to bring the whole event back with a new sample position. Any gap long enough to trigger a restatement gained an event the source never had, once per object. A payload whose timing is entirely zero and whose values all match the previous one is now written as nothing at all. A restatement that does move an object is still an event
 
 ## [0.6.0] - 2026-08-11
 
 ### Added
+
 - `decode --frame-rate <23.976|24|25|29.97|29.97df|30>` records a timecode frame rate in the Atmos master, which was fixed at 24. It states what rate the master's timecode is in and nothing else: no audio is resampled and no metadata is retimed, so a master authored at one rate does not become a master at another by relabelling it
 - `decode --format w64` states the channel layout as a `dwChannelMask`, in the extensible form, where the decoded order is one a mask can describe. A mask names the speakers and the header then implies their order, ascending by bit, so an order that does not ascend cannot be stated: a DVD-Audio 5.1 presentation, whose surrounds precede its centre, and an 8-channel presentation, whose sides precede its backs, are written as before with no mask rather than a wrong one. Samples are never reordered to fit a mask
 - `verify` reports a stream that ends part way through an access unit. The extractor hands over whole access units and waits for the rest of a partial one, which is right at a chunk boundary and wrong at the end of the input, so a file cut mid-access-unit verified clean: everything before the cut parses, nothing says the rest was never read. The bytes left over at the end are now measured, and a stream carrying any is `UNPARSEABLE`, exit 4. How much of the stream is missing cannot be known, so the message states where the input stopped rather than how much it lost. A stream ending where an access unit does is unaffected
@@ -43,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `decode --evo-key` verifies Evolution frame protection against a supplied HMAC-SHA-256 key, given as hex or as `@FILE`. Mismatches warn and are counted as `evoChecked` and `evoFailed`, or abort under `--strict`
 
 ### Fixed
+
 - `info` and `verify` disagreed about how to print the same three things. The format sync is now named and then given in hex in both, `FBA (F8726FBA)`, where `info` printed the bare word; every byte offset is upper-case hex in both the tables and the diagnostic lines, where the two differed in case; and a branch offset is no longer padded to eight digits, which invented leading zeros under 4 GB and stopped being uniform over it. Offsets have always been 64-bit, so a stream past 4 GB reports the right value and its column simply widens
 - The CAF `chan` chunk was written without its channel-description count, four bytes every reader expects between the layout tag and the descriptions. The chunk was therefore malformed and the layout ignored altogether: Core Audio reported "no channel layout" for every file this ever wrote. The chunk is now written per the specification, so the layout is read, and the unused bitmap field is zero instead of a stray bit. Only the chunk changes; the PCM payload of every output is byte-identical
 - `decode --format caf` picked the channel layout tag from the channel count alone, so it described a layout the samples were not in. A DVD-Audio (FBB) 5.1 stream decodes as `L R Ls Rs C LFE` and was tagged `MPEG_5_1_A` (`L R C LFE Ls Rs`), which routes centre to the surrounds on a player that honours the tag; it is now `MPEG_5_1_B`. An 8-channel TrueHD presentation decodes as `L R C LFE Ls Rs Lb Rb` and was tagged `MPEG_7_1_A`, whose last pair is a front centre pair, putting the rear surrounds in front of the listener; it is now `MPEG_7_1_C`. The tag now comes from the channel labels the decoder reports, an order no standard tag names is written as channel descriptions, and an order the stream does not state leaves the file without a layout rather than with a guess. Samples are never reordered to fit a tag
@@ -55,11 +66,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.5.3] - 2026-08-04
 
 ### Fixed
+
 - Decoding a stream that does not carry the requested presentation wrote no output at all and still reported success. The default `--presentation max` asks for index 3, so any stream with fewer than four substreams — a plain stereo or 5.1 TrueHD stream, for example — logged `Presentation 3 is not available, using presentation 0`, then finished with `0 frames, 0 samples` and exit code 0 without creating a file. An explicit `--presentation` naming an absent index behaved the same way. Output is byte-identical to 0.4.0 again. This affected 0.5.0 through 0.5.2
 
 ## [0.5.2] - 2026-08-04
 
 ### Fixed
+
 - Decoding Atmos without `--bed-conform` wrote an audio file header that understated the channel count by the number of bed channels, while the PCM payload still carried every channel. An LFE-only bed with 11 objects produced a CAF declaring 11 channels for 12-channel interleaved data, so every frame boundary but the first fell in the wrong place and Dolby Atmos tooling rejected the master (#29). The count now comes from the decoded count, so a bed assignment naming more channels than the presentation carries cannot skew it either
 - An output path whose name contains a dot lost everything after the last dot when the audio and metadata extensions were added, so `--output-path Movie.2024.1080p` wrote `Movie.2024.atmos.audio` while the Dolby Atmos master header referenced `Movie.2024.1080p.atmos.audio`, leaving the master incomplete. Non-Atmos output was misnamed the same way (`Movie.2024.caf`). This affected 0.5.0 and 0.5.1
 
@@ -68,11 +81,13 @@ The channel count fix is @sven-pke's, from #29.
 ## [0.5.1] - 2026-08-01
 
 ### Fixed
+
 - `cargo install truehdd` failed to compile because the version string required git metadata that a published crate does not carry; builds outside a checkout now report the package version. This affected every published version
 
 ## [0.5.0] - 2026-08-01
 
 ### Added
+
 - `--presentation` accepts a list (`0,1,3`), `all`, or `max` in addition to a single index; multiple presentations decode in a single pass with shared extraction and parsing, writing one output per presentation with `_p{index}` filename suffixes
 - Extraction, parsing and decoding run on separate threads
 - Decode now recovers from mid-stream corruption: after a parse or decode failure, both stages reset in lockstep and resume at the next major sync instead of continuing on damaged state
@@ -82,6 +97,7 @@ The channel count fix is @sven-pke's, from #29.
 - `--probe-range` sets how many access units are probed for Atmos metadata when `--bed-conform` is used (default 12000)
 
 ### Changed
+
 - Minimum supported Rust version for building the CLI is now 1.95.0
 - Updated dependencies (clap 4.6, vergen-gitcl 10, darling 0.24 with syn 3 in truehdd-macros)
 - Decode pipeline errors now travel in-band with the data: failures report the originating stage (input/parse/decode/write) instead of always "Write error", and output file headers are finalized even when decoding fails, keeping partial output playable
@@ -90,6 +106,7 @@ The channel count fix is @sven-pke's, from #29.
 - **BREAKING**: `--strict` treats frames the extractor had to skip as a failure, so it now exits non-zero on input it previously accepted
 
 ### Fixed
+
 - The presentation list parser failed to build on Windows, where an extra `FromIterator` implementation made the element type ambiguous
 - Errors are reported on stderr even when logging is turned off
 - DAMF YAML no longer corrupts file references containing double spaces, `- ` or single quotes, and keeps quoting for names that need it so the output stays valid YAML (#17, #18)
@@ -101,30 +118,36 @@ The DAMF YAML fix above builds on @nekno's report and first fix in #18.
 ## [0.4.0] - 2025-08-15
 
 ### Added
+
 - Handle substream info changes that cause channel count changes by creating segmented output files with `_{AU_index}` suffix
 
 ## [0.3.0] - 2025-08-12
 
 ### Added
+
 - `--warp-mode` option to specify warp mode when not present in metadata
 
 ## [0.2.0] - 2025-08-12
 
 ### Added
+
 - Wave64 (w64) format support for audio output with `.wav` extension
 - `--bed-conform` flag for Dolby Atmos content to conform bed channels to 7.1.2 layout
 
 ### Changed
+
 - **BREAKING**: `--format` option is now ignored for presentation 3, which always uses CAF format
 - DAMF header files are now created immediately when Atmos is detected rather than at the end of processing
 - Build timestamps now respect SOURCE_DATE_EPOCH for reproducible builds (thanks @al3xtjames)
 
 ### Fixed
+
 - Corrected bed channel assignments for 7.1.2 configuration in Atmos content
 
 ## [0.1.3] - 2025-08-03
 
 ### Fixed
+
 - Atmos output files now get correct extensions when OAMD is detected after initial file creation
 - PCM format files are properly wrapped with CAF headers when Atmos content is discovered
 - Resolved format corruption where PCM files contained CAF data due to late Atmos detection
@@ -132,16 +155,19 @@ The DAMF YAML fix above builds on @nekno's report and first fix in #18.
 ## [0.1.2] - 2025-07-22
 
 ### Changed
+
 - Connect `--strict` mode to level-based error handling
 - Add GNU Linux targets to CI for better performance
 
 ## [0.1.1] - 2025-07-21
 
 ### Fixed
+
 - Fixed incorrect field mapping for `front_back_balance_listener` in DAMF output
 - Fixed example usage in documentation
 
 ## [0.1.0] - 2025-07-21
 
 ### Added
+
 - Initial release

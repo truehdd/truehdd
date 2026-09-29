@@ -492,7 +492,12 @@ pub struct Branch {
     pub au_index: usize,
     /// Byte offset of that access unit from the start of the stream.
     pub byte_offset: u64,
-    /// Samples played before it.
+    /// Source access-unit index multiplied by the samples per access unit at this branch.
+    ///
+    /// This includes duplicate access units and does not accumulate sample lengths across
+    /// configuration changes. It is not the number of accepted or played samples; incremental
+    /// consumers can use [`StreamBranch::position`](crate::process::stream::StreamBranch::position)
+    /// for a position on each decoded presentation's accepted timeline.
     pub sample: u64,
     /// Samples the decoder is running ahead of playback at the branch.
     pub advance: usize,
