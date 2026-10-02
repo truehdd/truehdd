@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `AccessUnit::has_invalid_branch` and `DecoderState::has_invalid_branch` mark the access unit where the stream restarts at a branch the buffer-model conditions reject, the counterpart of `has_valid_branch` (#37)
 
 ### Changed
+- `Crc8::update` advances eight bytes per step instead of one, with the same result. The substream check runs over every byte of the stream, and decoding takes 1 to 5% less time
 - **BREAKING**: `structs::oamd` re-exports the [`oamd`](https://crates.io/crates/oamd) crate, which now owns these structures. Every type and function keeps the path it had, but `TEST_DATA` is `EXAMPLE_DATA` there and the other test payloads are no longer public
 
 ### Fixed
