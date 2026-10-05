@@ -30,6 +30,11 @@ jobs:
         run: |
           cargo test --workspace --all-targets
 
+      - name: Test packaged library
+        run: |
+          cargo package -p truehd --locked
+          cargo test --manifest-path target/package/truehd-*/Cargo.toml --lib --locked
+
       - name: Rustfmt
         run: |
           cargo fmt --check

@@ -142,6 +142,33 @@ pub struct DecodedAccessUnit {
     pub substream_info_changed: bool,
 }
 
+/// Owned snapshot of a decoded presentation's sample rate and channel layout.
+#[derive(Debug, Clone)]
+pub struct AudioConfiguration {
+    sampling_frequency: u32,
+    channel_count: usize,
+    channel_labels: Vec<ChannelLabel>,
+}
+
+impl From<&DecodedAccessUnit> for AudioConfiguration {
+    fn from(decoded: &DecodedAccessUnit) -> Self {
+        Self {
+            sampling_frequency: decoded.sampling_frequency,
+            channel_count: decoded.channel_count,
+            channel_labels: decoded.channel_labels.clone(),
+        }
+    }
+}
+
+impl AudioConfiguration {
+    /// Compares the native audio configuration without allocating.
+    pub fn matches(&self, decoded: &DecodedAccessUnit) -> bool {
+        self.sampling_frequency == decoded.sampling_frequency
+            && self.channel_count == decoded.channel_count
+            && self.channel_labels == decoded.channel_labels
+    }
+}
+
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub struct DecoderSubstreamState {
@@ -331,7 +358,7 @@ impl DecoderState {
     ) -> Result<[Option<DecodedAccessUnit>; MAX_PRESENTATIONS]> {
         access_unit.update_decoder_state(self)?;
 
-        if !self.valid {
+        if !self.valid || access_unit.major_sync_info.is_some() {
             self.update_presentations(required_presentations)?;
 
             for (i, &required) in self.effective_presentations.iter().enumerate() {
@@ -360,7 +387,7 @@ impl DecoderState {
             }
         }
 
-        for i in 0..=self.presentation {
+        for i in 0..MAX_PRESENTATIONS {
             if (self.substream_mask >> i) & 1 == 0 {
                 continue;
             }
@@ -424,16 +451,15 @@ impl DecoderState {
         // Set presentation field for compatibility (using highest required)
         match presentation_map.presentation_type_by_index(highest_required) {
             PresentationType::Invalid => {
-                if !self.valid {
-                    let Some(max_independent) = presentation_map.max_independent_presentation()
-                    else {
-                        bail!("No presentation is available");
-                    };
+                let Some(max_independent) = presentation_map.max_independent_presentation() else {
+                    bail!("No presentation is available");
+                };
+                if !self.valid || self.presentation != max_independent {
                     info!(
                         "Presentation {highest_required} is not available, using presentation {max_independent}"
                     );
-                    self.presentation = max_independent;
                 }
+                self.presentation = max_independent;
             }
             PresentationType::CopyOf(copy_index) => {
                 if !self.valid {

@@ -9,6 +9,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+use truehd::process::decode::AudioConfiguration;
 use truehd::structs::channel::ChannelLabel;
 
 const EMPTY_BED_INDICES: &[usize] = &[];
@@ -25,7 +26,7 @@ pub struct DecodeHandler {
     metadata_writer: Option<BufWriter<File>>,
     current_audio_path: Option<PathBuf>,
     produced_files: Vec<PathBuf>,
-    segment_index: u32,
+    segment_start_au: Option<u64>,
     sample_buffer: Vec<i32>,
     progress_buffer: String,
     has_atmos: bool,
@@ -35,8 +36,6 @@ pub struct DecodeHandler {
     pub total_samples: u64,
     pub final_sample_rate: u32,
     segment_start_samples: u64,
-    is_segmented: bool,
-    au_index: u64,
     pub start_time: Instant,
 
     // Bed conformance buffering
@@ -54,6 +53,8 @@ pub struct DecodeHandler {
     /// Empty once the written channels stop being the decoded ones, which is what
     /// bed conformance does.
     channel_labels: Vec<ChannelLabel>,
+
+    output_configuration: Option<AudioConfiguration>,
 
     // Cached bed conformance parameters to avoid recalculation during audio writes
     cached_bed_indices: Option<Vec<usize>>, // Resolved bed indices for performance
@@ -195,7 +196,7 @@ impl DecodeHandler {
             metadata_writer: None,
             current_audio_path: None,
             produced_files: Vec::new(),
-            segment_index: 0,
+            segment_start_au: None,
             sample_buffer: Vec::with_capacity(160 * 16), // TrueHD theoretical maximum
             progress_buffer: String::with_capacity(64),
             has_atmos: false,
@@ -205,8 +206,6 @@ impl DecodeHandler {
             total_samples: 0,
             final_sample_rate: 48000,
             segment_start_samples: 0,
-            is_segmented: false,
-            au_index: 0,
             start_time: Instant::now(),
 
             // Bed conformance buffering
@@ -220,6 +219,7 @@ impl DecodeHandler {
             // Cached channel count
             effective_channel_count: None,
             channel_labels: Vec::new(),
+            output_configuration: None,
 
             // Cached bed conformance parameters
             cached_bed_indices: None,
@@ -280,11 +280,7 @@ impl DecodeHandler {
                 }
 
                 if let Some(ref base_path) = self.output_path {
-                    let effective_base = if self.is_segmented {
-                        self.get_segmented_base_path(base_path)
-                    } else {
-                        base_path.clone()
-                    };
+                    let effective_base = self.get_base_path_with_segment(base_path);
 
                     if self.bed_conform {
                         if self.bed_indices.is_some() {
@@ -314,8 +310,7 @@ impl DecodeHandler {
                     self.record_file(&create_path_with_suffix(&effective_base, "atmos"));
                 }
 
-                // Handle first-time Atmos file rename (not for segmented mode and not if we were probing)
-                if self.audio_writer.is_some() && !self.is_segmented && !was_atmos {
+                if self.audio_writer.is_some() && !was_atmos {
                     self.handle_atmos_rename(&decoded)?;
                 }
             }
@@ -334,24 +329,18 @@ impl DecodeHandler {
 
         self.decoded_frames += 1;
         self.total_samples += decoded.sample_length as u64;
-        self.au_index += 1;
 
         self.update_progress(pb, start_time)?;
 
         Ok(())
     }
 
-    pub(crate) fn handle_stream_restart(&mut self) -> Result<()> {
-        info!(
-            "Stream restart detected at AU {}, creating new segment {}",
-            self.au_index,
-            self.segment_index + 1
-        );
+    pub(crate) fn handle_stream_restart(&mut self, source_au: u64) -> Result<()> {
+        info!("Stream restart detected at AU {source_au}, creating new segment");
 
-        self.segment_start_samples = self.total_samples;
         self.finalize()?;
-        self.segment_index += 1;
-        self.is_segmented = true;
+        self.segment_start_samples = self.total_samples;
+        self.segment_start_au = Some(source_au);
 
         // Reset for new segment
         self.audio_writer = None;
@@ -380,6 +369,22 @@ impl DecodeHandler {
         self.current_frame_processed = false; // Reset frame processing flag
 
         Ok(())
+    }
+
+    pub(crate) fn observe_output_configuration(
+        &mut self,
+        decoded: &truehd::process::decode::DecodedAccessUnit,
+    ) -> bool {
+        let changed = self
+            .output_configuration
+            .as_ref()
+            .is_some_and(|current| !current.matches(decoded));
+
+        if changed || self.output_configuration.is_none() {
+            self.output_configuration = Some(AudioConfiguration::from(decoded));
+        }
+
+        changed
     }
 
     fn write_audio(&mut self, decoded: &truehd::process::decode::DecodedAccessUnit) -> Result<()> {
@@ -425,7 +430,7 @@ impl DecodeHandler {
         self.atmos_probe_buffer.push(frame_samples);
 
         // Check if we should stop probing
-        if self.decoded_frames + 1 >= self.atmos_probe_range {
+        if self.atmos_probe_buffer.len() as u64 >= self.atmos_probe_range {
             self.finalize_probing_phase()?;
         }
 
@@ -695,12 +700,7 @@ impl DecodeHandler {
         }
 
         if let Some(ref mut writer) = self.metadata_writer {
-            let segment_relative_pos = if self.is_segmented {
-                self.total_samples
-                    .saturating_sub(self.segment_start_samples)
-            } else {
-                self.total_samples
-            };
+            let segment_relative_pos = self.total_samples - self.segment_start_samples;
 
             let mut conf =
                 Configuration::with_oamd_payload(oamd, sample_rate, segment_relative_pos)?;
@@ -845,39 +845,11 @@ impl DecodeHandler {
         Ok(())
     }
 
-    fn get_segmented_base_path(&self, base_path: &Path) -> PathBuf {
-        if let Some(ref current_path) = self.current_audio_path {
-            // For segmented mode, derive base path by removing specific audio extensions
-            // but preserve the original base structure
-            let mut segmented_base = current_path.clone();
-            let path_str = current_path.to_string_lossy();
-
-            if path_str.ends_with(".atmos.audio") {
-                // Remove .atmos.audio extension
-                let base_name = path_str.strip_suffix(".atmos.audio").unwrap();
-                segmented_base = PathBuf::from(base_name);
-            } else if path_str.ends_with(".atmos.metadata") {
-                // Remove .atmos.metadata extension
-                let base_name = path_str.strip_suffix(".atmos.metadata").unwrap();
-                segmented_base = PathBuf::from(base_name);
-            } else {
-                // For other extensions, remove just the last extension
-                if let Some(stem) = current_path.file_stem() {
-                    segmented_base = current_path.with_file_name(stem);
-                }
-            }
-            segmented_base
-        } else {
-            // Use the segment naming convention for base path
-            self.get_base_path_with_segment(base_path)
-        }
-    }
-
     fn get_base_path_with_segment(&self, base_path: &Path) -> PathBuf {
-        if self.segment_index > 0 {
-            let filename = base_path.file_name().unwrap().to_string_lossy();
-            let parent = base_path.parent().unwrap_or(Path::new("."));
-            parent.join(format!("{}_{}", filename, self.au_index))
+        if let Some(source_au) = self.segment_start_au {
+            let mut path = base_path.as_os_str().to_owned();
+            path.push(format!("_{source_au}"));
+            PathBuf::from(path)
         } else {
             base_path.to_path_buf()
         }
@@ -937,6 +909,10 @@ impl DecodeHandler {
     }
 
     pub(crate) fn finalize(&mut self) -> Result<()> {
+        if self.atmos_probing && !self.atmos_probe_buffer.is_empty() {
+            self.finalize_probing_phase()?;
+        }
+
         if self.metadata_only && !self.has_atmos && self.decoded_frames > 0 {
             warn!("No object audio metadata in this presentation, nothing written");
         }

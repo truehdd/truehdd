@@ -100,7 +100,7 @@ enum ParseMsg {
 
 enum DecodeMsg {
     // One entry per presentation; substreams are decoded once and shared
-    Decoded(Box<[Option<DecodedAccessUnit>; MAX_PRESENTATIONS]>),
+    Decoded(u64, Box<[Option<DecodedAccessUnit>; MAX_PRESENTATIONS]>),
     Fatal(PipelineError),
 }
 
@@ -135,6 +135,10 @@ pub fn run_threaded_pipeline(
         frame_rate: args.frame_rate,
         probe_range: args.probe_range,
         start_time: Instant::now(),
+        active_presentations: [false; MAX_PRESENTATIONS],
+        decoded_frames: 0,
+        total_samples: 0,
+        final_sample_rate: 48000,
     };
 
     scope(|s| {
@@ -379,7 +383,7 @@ fn run_decoder_thread(
                                 slot.substream_info_changed = true;
                             }
                         }
-                        if tx.send(DecodeMsg::Decoded(decoded)).is_err() {
+                        if tx.send(DecodeMsg::Decoded(index, decoded)).is_err() {
                             return;
                         }
                     }
@@ -480,7 +484,7 @@ impl Concealment {
         });
         self.concealed_frames.fetch_add(1, Ordering::Relaxed);
 
-        tx.send(DecodeMsg::Decoded(silence.clone())).is_ok()
+        tx.send(DecodeMsg::Decoded(index, silence.clone())).is_ok()
     }
 
     fn end_run(&mut self) {
@@ -534,6 +538,10 @@ struct PresentationOutputs {
     frame_rate: Option<FrameRate>,
     probe_range: u64,
     start_time: Instant,
+    active_presentations: [bool; MAX_PRESENTATIONS],
+    decoded_frames: u64,
+    total_samples: u64,
+    final_sample_rate: u32,
 }
 
 impl PresentationOutputs {
@@ -602,19 +610,15 @@ impl PresentationOutputs {
             invalid_branches: 0,
             evo_checked: 0,
             evo_failed: 0,
-            decoded_frames: 0,
-            total_samples: 0,
-            final_sample_rate: 48000,
+            decoded_frames: self.decoded_frames,
+            total_samples: self.total_samples,
+            final_sample_rate: self.final_sample_rate,
             start_time: self.start_time,
             presentations: Vec::new(),
         };
 
         for (index, handler) in self.handlers.iter().enumerate() {
             let Some(handler) = handler else { continue };
-
-            summary.decoded_frames = summary.decoded_frames.max(handler.decoded_frames);
-            summary.total_samples = summary.total_samples.max(handler.total_samples);
-            summary.final_sample_rate = handler.final_sample_rate;
 
             let format = match (handler.has_atmos(), index) {
                 (true, _) => "damf",
@@ -653,17 +657,38 @@ fn run_writer_main(
 ) -> Result<(), PipelineError> {
     for msg in rx {
         match msg {
-            DecodeMsg::Decoded(mut slots) => {
+            DecodeMsg::Decoded(source_au, mut slots) => {
+                let mut active_presentations = [false; MAX_PRESENTATIONS];
+                let mut sample_length = 0;
+                let mut sample_rate = None;
                 for slot in 0..MAX_PRESENTATIONS {
                     let Some(decoded) = slots[slot].take() else {
                         continue;
                     };
+                    if decoded.is_duplicate {
+                        continue;
+                    }
 
+                    active_presentations[slot] = true;
+                    sample_length = sample_length.max(decoded.sample_length);
+                    sample_rate = Some(decoded.sampling_frequency);
+
+                    let presentation_changed =
+                        outputs.decoded_frames > 0 && !outputs.active_presentations[slot];
                     let handler = outputs.handler_for(slot);
-                    if let Err(e) = process_frame(handler, decoded, pb) {
+                    if let Err(e) =
+                        process_frame(handler, source_au, decoded, presentation_changed, pb)
+                    {
                         outputs.finalize_best_effort();
                         return Err(PipelineError::Write(e));
                     }
+                }
+
+                if let Some(sample_rate) = sample_rate {
+                    outputs.active_presentations = active_presentations;
+                    outputs.decoded_frames += 1;
+                    outputs.total_samples += sample_length as u64;
+                    outputs.final_sample_rate = sample_rate;
                 }
 
                 let count = progress_counter.fetch_add(1, Ordering::Relaxed) + 1;
@@ -685,11 +710,19 @@ fn run_writer_main(
 
 fn process_frame(
     handler: &mut DecodeHandler,
+    source_au: u64,
     decoded: DecodedAccessUnit,
+    presentation_changed: bool,
     pb: Option<&ProgressBar>,
 ) -> Result<()> {
-    if decoded.substream_info_changed {
-        handler.handle_stream_restart()?;
+    if decoded.is_duplicate {
+        return Ok(());
+    }
+    if handler.observe_output_configuration(&decoded)
+        || decoded.substream_info_changed
+        || presentation_changed
+    {
+        handler.handle_stream_restart(source_au)?;
     }
 
     handler.handle_decoded_frame(decoded, &pb.cloned(), handler.start_time)?;
@@ -962,9 +995,351 @@ mod tests {
 
         let written = rx_decode
             .iter()
-            .filter(|msg| matches!(msg, DecodeMsg::Decoded(_)))
+            .filter(|msg| matches!(msg, DecodeMsg::Decoded(_, _)))
             .count() as u64;
         assert_eq!(written, ACCESS_UNITS, "every access unit is written");
         assert_eq!(concealed_frames.load(Ordering::Relaxed), 2);
+    }
+}
+
+#[cfg(test)]
+mod presentation_tests {
+    use super::*;
+    use crate::caf::{ChannelLabel as CafChannelLabel, ChannelLayoutTag, parse_caf_file};
+    use truehd::structs::channel::ChannelLabel;
+
+    fn decoded(sample_rate: u32, labels: &[ChannelLabel]) -> DecodedAccessUnit {
+        DecodedAccessUnit {
+            sampling_frequency: sample_rate,
+            sample_length: 1,
+            channel_count: labels.len(),
+            pcm_data: [[0; 16]; 160],
+            channel_labels: labels.to_vec(),
+            oamd: Vec::new(),
+            is_duplicate: false,
+            substream_info_changed: false,
+        }
+    }
+
+    fn channel_tag_and_first_label(path: &Path) -> (u32, Option<u32>) {
+        let data = std::fs::read(path).unwrap();
+        let offset = data
+            .windows(4)
+            .position(|chunk| chunk == b"chan")
+            .expect("CAF channel layout chunk");
+        let tag = u32::from_be_bytes(data[offset + 12..offset + 16].try_into().unwrap());
+        let first_label = (tag == ChannelLayoutTag::UseChannelDescriptions as u32)
+            .then(|| u32::from_be_bytes(data[offset + 24..offset + 28].try_into().unwrap()));
+        (tag, first_label)
+    }
+
+    #[test]
+    fn caf_headers_follow_sample_rate_and_channel_order_changes() {
+        use ChannelLabel::{L, R};
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut handler = DecodeHandler::new(
+            Some(dir.path().join("output")),
+            AudioFormat::Caf,
+            false,
+            false,
+            None,
+            None,
+            0,
+        );
+
+        for (index, frame) in [
+            decoded(48_000, &[L, R]),
+            decoded(48_000, &[L, R]),
+            decoded(44_100, &[L, R]),
+            decoded(44_100, &[R, L]),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            process_frame(&mut handler, index as u64, frame, false, None).unwrap();
+        }
+        handler.finalize().unwrap();
+
+        let files = handler.produced_files();
+        assert_eq!(files.len(), 3, "unchanged frames share one CAF segment");
+
+        for (path, expected_rate) in files.iter().zip([48_000.0, 44_100.0, 44_100.0]) {
+            let info = parse_caf_file(std::fs::File::open(path).unwrap()).unwrap();
+            assert_eq!(info.audio_format.unwrap().sample_rate, expected_rate);
+        }
+
+        assert_eq!(
+            channel_tag_and_first_label(&files[0]),
+            (ChannelLayoutTag::Stereo as u32, None)
+        );
+        assert_eq!(
+            channel_tag_and_first_label(&files[1]),
+            (ChannelLayoutTag::Stereo as u32, None)
+        );
+        assert_eq!(
+            channel_tag_and_first_label(&files[2]),
+            (
+                ChannelLayoutTag::UseChannelDescriptions as u32,
+                Some(CafChannelLabel::Right as u32),
+            )
+        );
+    }
+
+    fn assert_caf_samples(path: &Path, rate: u32, channels: usize, samples: &[i32]) {
+        use crate::caf::Endianness;
+
+        let data = std::fs::read(path).unwrap();
+        let info = parse_caf_file(std::io::Cursor::new(&data)).unwrap();
+        let format = info.audio_format.unwrap();
+        assert_eq!(format.sample_rate, f64::from(rate));
+        assert_eq!(format.channels_per_frame as usize, channels);
+        let pcm = &data[info.data_chunk_start as usize..];
+        assert_eq!(pcm.len(), samples.len() * 3);
+        let actual: Vec<_> = pcm
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|bytes| match info.endianness {
+                Endianness::BigEndian => i32::from_be_bytes([bytes[0], bytes[1], bytes[2], 0]) >> 8,
+                Endianness::LittleEndian => {
+                    i32::from_le_bytes([0, bytes[0], bytes[1], bytes[2]]) >> 8
+                }
+            })
+            .collect();
+        assert_eq!(actual, samples);
+    }
+
+    #[test]
+    fn configuration_changes_preserve_pending_probe_samples() {
+        use ChannelLabel::{C, L, R};
+
+        for (rate, labels) in [
+            (44_100, &[L, R][..]),
+            (48_000, &[R, L][..]),
+            (48_000, &[C][..]),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut handler = DecodeHandler::new(
+                Some(dir.path().join("output")),
+                AudioFormat::Caf,
+                true,
+                false,
+                None,
+                None,
+                3,
+            );
+
+            let mut first = decoded(48_000, &[L, R]);
+            first.pcm_data[0][..2].copy_from_slice(&[1, -2]);
+            process_frame(&mut handler, 0, first, false, None).unwrap();
+            assert!(handler.produced_files().is_empty());
+
+            for (index, samples) in [[3, -4], [5, -6]].into_iter().enumerate() {
+                let mut next = decoded(rate, labels);
+                next.pcm_data[0][..2].copy_from_slice(&samples);
+                process_frame(&mut handler, index as u64 + 1, next, false, None).unwrap();
+            }
+            handler.finalize().unwrap();
+
+            let files = handler.produced_files();
+            assert_eq!(files.len(), 2);
+            assert_eq!(handler.total_samples, 3);
+            assert_caf_samples(&files[0], 48_000, 2, &[1, -2]);
+            let expected = if labels.len() == 1 {
+                vec![3, 5]
+            } else {
+                vec![3, -4, 5, -6]
+            };
+            assert_caf_samples(&files[1], rate, labels.len(), &expected);
+            assert_eq!(
+                channel_tag_and_first_label(&files[0]),
+                (ChannelLayoutTag::Stereo as u32, None)
+            );
+            if labels == [R, L] {
+                assert_eq!(
+                    channel_tag_and_first_label(&files[1]),
+                    (
+                        ChannelLayoutTag::UseChannelDescriptions as u32,
+                        Some(CafChannelLabel::Right as u32),
+                    )
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn finalization_flushes_pending_probe_samples_once_and_skips_empty_input() {
+        use ChannelLabel::{L, R};
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut handler = DecodeHandler::new(
+            Some(dir.path().join("output")),
+            AudioFormat::Caf,
+            true,
+            false,
+            None,
+            None,
+            100,
+        );
+        handler.finalize().unwrap();
+        assert!(handler.produced_files().is_empty());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+
+        let mut frame = decoded(48_000, &[L, R]);
+        frame.pcm_data[0][..2].copy_from_slice(&[7, -8]);
+        process_frame(&mut handler, 0, frame, false, None).unwrap();
+        handler.finalize().unwrap();
+        handler.finalize().unwrap();
+
+        assert_eq!(handler.produced_files().len(), 1);
+        assert_caf_samples(&handler.produced_files()[0], 48_000, 2, &[7, -8]);
+    }
+
+    #[test]
+    fn returning_presentation_starts_a_segment_after_a_duplicate_transition() {
+        use ChannelLabel::{L, R};
+
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("output");
+        let mut outputs = PresentationOutputs {
+            handlers: core::array::from_fn(|_| None),
+            base_path: Some(base),
+            requested_format: AudioFormat::Caf,
+            single_output: true,
+            bed_conform: false,
+            metadata_only: false,
+            warp_mode: None,
+            frame_rate: None,
+            probe_range: 0,
+            start_time: Instant::now(),
+            active_presentations: [false; MAX_PRESENTATIONS],
+            decoded_frames: 0,
+            total_samples: 0,
+            final_sample_rate: 48000,
+        };
+        let (tx, rx) = bounded(4);
+        for (source_au, slot, label, sample, duplicate) in [
+            (10, 2, L, 1, false),
+            (11, 0, R, 2, false),
+            (12, 2, L, 3, true),
+            (13, 2, L, 4, false),
+        ] {
+            let mut frame = decoded(48_000, &[label]);
+            frame.pcm_data[0][0] = sample;
+            frame.is_duplicate = duplicate;
+            frame.substream_info_changed = duplicate;
+            let mut slots = Box::new(core::array::from_fn(|_| None));
+            slots[slot] = Some(frame);
+            tx.send(DecodeMsg::Decoded(source_au, slots)).unwrap();
+        }
+        drop(tx);
+        run_writer_main(rx, &mut outputs, None, Arc::new(AtomicU64::new(0))).unwrap();
+
+        let summary = outputs.summary();
+        assert_eq!(summary.decoded_frames, 3);
+        assert_eq!(summary.total_samples, 3);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
+        for (name, sample) in [
+            ("output.caf", 1),
+            ("output_11.caf", 2),
+            ("output_13.caf", 4),
+        ] {
+            assert_caf_samples(&dir.path().join(name), 48_000, 1, &[sample]);
+        }
+    }
+
+    #[test]
+    fn each_segment_gets_its_full_probe_window_and_a_fixed_file_name() {
+        use ChannelLabel::{L, R};
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut handler = DecodeHandler::new(
+            Some(dir.path().join("output")),
+            AudioFormat::Caf,
+            true,
+            false,
+            None,
+            None,
+            3,
+        );
+        for index in 0..3 {
+            process_frame(&mut handler, index, decoded(48_000, &[L, R]), false, None).unwrap();
+        }
+        assert_eq!(handler.produced_files().len(), 1);
+
+        for index in 99..102 {
+            process_frame(
+                &mut handler,
+                index,
+                decoded(48_000, &[L, R]),
+                index == 99,
+                None,
+            )
+            .unwrap();
+            assert_eq!(
+                handler.produced_files().len(),
+                if index < 101 { 1 } else { 2 }
+            );
+        }
+        handler.finalize().unwrap();
+        assert_caf_samples(&dir.path().join("output_99.caf"), 48_000, 2, &[0; 6]);
+    }
+
+    #[test]
+    fn delayed_atmos_metadata_uses_the_segment_audio_base_name() {
+        use truehd::process::stream::StreamDecoder;
+
+        let mut decoder = StreamDecoder::for_presentation(3).unwrap();
+        let frame = decoder
+            .push_bytes(include_bytes!(
+                "../../../truehd/tests/assets/fba_atmos_obj.mlp"
+            ))
+            .unwrap()
+            .into_iter()
+            .find_map(|frame| {
+                let presentation = frame.presentations.get(3)?;
+                (!presentation.decoded.oamd.is_empty()).then(|| presentation.decoded.clone())
+            })
+            .unwrap();
+        for bed_conform in [false, true] {
+            for metadata_only in [false, true] {
+                let dir = tempfile::tempdir().unwrap();
+                let mut handler = DecodeHandler::new(
+                    Some(dir.path().join("output")),
+                    AudioFormat::Caf,
+                    bed_conform,
+                    metadata_only,
+                    None,
+                    None,
+                    10,
+                );
+                for index in [0, 10, 11, 12] {
+                    let mut next = frame.clone();
+                    if index != 12 {
+                        next.oamd.clear();
+                    }
+                    process_frame(&mut handler, index, next, index == 10, None).unwrap();
+                }
+                handler.finalize().unwrap();
+
+                let header = std::fs::read_to_string(dir.path().join("output_10.atmos")).unwrap();
+                assert!(header.contains("output_10.atmos.audio"));
+                assert!(header.contains("output_10.atmos.metadata"));
+                assert!(dir.path().join("output_10.atmos.metadata").exists());
+                assert!(!dir.path().join("output_10.caf").exists());
+                let audio = dir.path().join("output_10.atmos.audio");
+                assert_eq!(audio.exists(), !metadata_only);
+                if !metadata_only {
+                    let data = std::fs::read(audio).unwrap();
+                    let info = parse_caf_file(std::io::Cursor::new(&data)).unwrap();
+                    let channels = info.audio_format.unwrap().channels_per_frame as usize;
+                    assert_eq!(
+                        data.len() - info.data_chunk_start as usize,
+                        3 * frame.sample_length * channels * 3,
+                    );
+                }
+            }
+        }
     }
 }
