@@ -6,13 +6,37 @@
 use std::io;
 use std::io::SeekFrom;
 
-use bitstream_io::{
-    BigEndian, BitRead, BitReader, SignedInteger, UnsignedInteger, define_huffman_tree,
-};
+use bitstream_io::{BigEndian, BitRead, BitReader, SignedInteger, UnsignedInteger};
 
 use crate::utils::crc::{Crc8, Crc16, crc8, crc16};
 
 const STACK_BUF_SIZE: usize = 256;
+
+/// `bitstream_io::define_huffman_tree!` without its writing half.
+///
+/// Since bitstream-io 4.10, `ToBits::to_bits` expands both children of every
+/// node in both orders, so its code doubles with each level of the tree. These
+/// trees are nine levels deep and never written, but `to_bits` is generic, so
+/// its MIR is still optimized for the crate metadata: about 150,000 locals and
+/// 140,000 blocks per tree, which took a release build of this crate past 13 GB
+/// of memory.
+macro_rules! define_huffman_tree {
+    ($name:ident : $type:ty = $nodes:tt) => {
+        #[derive(Copy, Clone, Debug)]
+        struct $name;
+
+        impl bitstream_io::huffman::FromBits for $name {
+            type Symbol = $type;
+
+            fn from_bits<F, E>(mut next: F) -> Result<Self::Symbol, E>
+            where
+                F: FnMut() -> Result<bool, E>,
+            {
+                bitstream_io::compile_read_tree_nodes!(next, $nodes)
+            }
+        }
+    };
+}
 
 define_huffman_tree!(HuffTree1 : i32 = [
         [
