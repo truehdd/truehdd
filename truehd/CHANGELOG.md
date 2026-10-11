@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `AccessUnit::has_invalid_branch` and `DecoderState::has_invalid_branch` mark the access unit where the stream restarts at a branch the buffer-model conditions reject, the counterpart of `has_valid_branch` (#37)
 
 ### Changed
+- **BREAKING**: `Block::bypassed_lsb`, `Block::block_data` and `DecodedAccessUnit::pcm_data` are `Vec<[i32; 16]>` with one row per sample instead of 160-row arrays. Indexing by sample and channel works as before; code that names the array type or reads rows past the block or access unit has to change. Decoding an Atmos stream takes about 30% less time, most of it formerly spent copying unused rows
 - **BREAKING**: `structs::oamd` re-exports the [`oamd`](https://crates.io/crates/oamd) crate, which now owns these structures. Every type and function keeps the path it had, but `TEST_DATA` is `EXAMPLE_DATA` there and the other test payloads are no longer public
 
 ### Fixed

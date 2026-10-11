@@ -506,13 +506,14 @@ impl Concealment {
 /// Silence in the layout of `decoded`, a whole access unit long even where a terminator
 /// shortened `decoded`.
 fn silence_like(decoded: &DecodedAccessUnit) -> DecodedAccessUnit {
+    // As `FormatInfo::samples_per_au`: 40 at 44.1/48 kHz, 80 at 88.2/96, 160 at 176.4/192.
+    let sample_length =
+        (decoded.sampling_frequency / BASE_SAMPLING_RATE_CD) as usize * BASE_SAMPLES_PER_AU;
     DecodedAccessUnit {
         sampling_frequency: decoded.sampling_frequency,
-        // As `FormatInfo::samples_per_au`: 40 at 44.1/48 kHz, 80 at 88.2/96, 160 at 176.4/192.
-        sample_length: (decoded.sampling_frequency / BASE_SAMPLING_RATE_CD) as usize
-            * BASE_SAMPLES_PER_AU,
+        sample_length,
         channel_count: decoded.channel_count,
-        pcm_data: [[0; 16]; 160],
+        pcm_data: vec![[0; 16]; sample_length],
         channel_labels: decoded.channel_labels.clone(),
         oamd: Vec::new(),
         is_duplicate: false,
