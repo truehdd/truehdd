@@ -141,7 +141,7 @@ pub fn run_threaded_pipeline(
         let input_path = args.input.clone();
 
         let skipped = Arc::clone(&skipped_frames);
-        s.spawn(move |_| run_extractor_thread(input_path, tx_extract, strict_mode, skipped));
+        s.spawn(move |_| run_extractor_thread(input_path, tx_extract, skipped));
 
         let counters = ParserCounters {
             branches: Arc::clone(&branches),
@@ -196,11 +196,12 @@ pub fn run_threaded_pipeline(
 fn run_extractor_thread(
     input_path: PathBuf,
     tx: Sender<ExtractMsg>,
-    strict_mode: bool,
     skipped_frames: Arc<AtomicU64>,
 ) {
     let mut extractor = Extractor::default();
     let mut frame_index = 0u64;
+    let mut supplied = 0u64;
+    let mut extracted_end = 0u64;
 
     let mut input_reader = match InputReader::new(&input_path) {
         Ok(reader) => reader,
@@ -210,43 +211,74 @@ fn run_extractor_thread(
         }
     };
 
-    let result = input_reader.process_chunks(64 * 1024, |chunk| {
-        extractor.push_bytes(chunk);
+    let mut chunk = [0u8; 64 * 1024];
+    loop {
+        let read = match input_reader.read_chunk(&mut chunk) {
+            Ok(read) => read,
+            Err(e) => {
+                let _ = tx.send(ExtractMsg::Fatal(PipelineError::Input(e)));
+                return;
+            }
+        };
+        if read == 0 {
+            if supplied > extracted_end {
+                let _ = tx.send(ExtractMsg::Fatal(PipelineError::Parse(anyhow!(
+                    "{} trailing byte(s) outside a complete access unit; output is incomplete",
+                    supplied - extracted_end
+                ))));
+            }
+            return;
+        }
+        supplied += read as u64;
+        extractor.push_bytes(&chunk[..read]);
 
-        for frame_result in extractor.by_ref() {
+        while let Some(frame_result) = extractor.next() {
+            // Some extractor failures are visible only through the rejection counter.
+            let skipped = extractor.error_count() as u64;
+            skipped_frames.store(skipped, Ordering::Relaxed);
+            if skipped != 0 {
+                let _ = tx.send(ExtractMsg::Fatal(PipelineError::Parse(anyhow!(
+                    "{skipped} rejected frame candidate(s); output is incomplete"
+                ))));
+                return;
+            }
             match frame_result {
                 Ok(frame) => {
+                    let expected = if frame_index == 0 && frame.timestamp.is_some() {
+                        16
+                    } else {
+                        extracted_end
+                    };
+                    if frame.offset != expected {
+                        let _ = tx.send(ExtractMsg::Fatal(PipelineError::Parse(anyhow!(
+                            "access unit at byte {} does not follow byte {expected}; output is incomplete",
+                            frame.offset
+                        ))));
+                        return;
+                    }
+                    extracted_end = frame.offset + frame.data.len() as u64;
                     if tx.send(ExtractMsg::Frame(frame_index, frame)).is_err() {
-                        // Downstream exited; stop reading
-                        return Ok(false);
+                        return;
                     }
                     frame_index += 1;
                 }
                 Err(truehd::utils::errors::ExtractError::InsufficientData) => break,
                 Err(e) => {
-                    if strict_mode {
-                        return Err(anyhow!("Extract error: {e}"));
-                    }
-                    // The extractor resyncs internally; the frame is lost
-                    warn!("Extract error: {e}");
+                    let _ = tx.send(ExtractMsg::Fatal(PipelineError::Parse(anyhow!(
+                        "Extract error: {e}; output is incomplete"
+                    ))));
+                    return;
                 }
             }
         }
-        // The extractor resyncs over damaged frames on its own, so the count
-        // is the only trace they leave
         let skipped = extractor.error_count() as u64;
-        if skipped > skipped_frames.swap(skipped, Ordering::Relaxed) && strict_mode {
+        skipped_frames.store(skipped, Ordering::Relaxed);
+        if skipped != 0 {
             let _ = tx.send(ExtractMsg::Fatal(PipelineError::Parse(anyhow!(
-                "{skipped} corrupt frame(s) skipped"
+                "{skipped} rejected frame candidate(s); output is incomplete"
             ))));
-            return Ok(false);
+            return;
         }
-
-        Ok(true)
-    });
-
-    if let Err(e) = result {
-        let _ = tx.send(ExtractMsg::Fatal(PipelineError::Input(e)));
     }
 }
 
