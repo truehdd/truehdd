@@ -15,7 +15,7 @@
 //!
 //! Optional 8-bit parity check and CRC protection.
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use log::trace;
 
 use crate::log_or_err;
@@ -163,15 +163,25 @@ impl SubstreamSegment {
 
         while !last_block_in_segment {
             if ss.block.len() > 4 || ss.block.len() >= 3 && state.format_sync == MAJOR_SYNC_FBA {
-                log_or_err!(
-                    state,
-                    log::Level::Warn,
-                    anyhow!(SubstreamError::TooManyBlocks(ss.block.len())),
-                    reader
-                );
+                bail!(SubstreamError::TooManyBlocks(ss.block.len()));
             }
-            ss.block.push(Block::read(state, reader)?);
+            if decoded >= state.samples_per_au {
+                bail!(SubstreamError::SampleCountMismatch {
+                    substream: state.substream_index,
+                    decoded,
+                    expected: state.samples_per_au,
+                });
+            }
+            let block = Block::read(state, reader)?;
             decoded += state.substream_state()?.restart.block_size;
+            if decoded > state.samples_per_au {
+                bail!(SubstreamError::SampleCountMismatch {
+                    substream: state.substream_index,
+                    decoded,
+                    expected: state.samples_per_au,
+                });
+            }
+            ss.block.push(block);
             last_block_in_segment = reader.get()?;
             state.substream_state_mut()?.restart.block_index += 1;
         }

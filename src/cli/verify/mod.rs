@@ -101,6 +101,7 @@ impl Verification<'_> {
         let mut extracted_end = 0;
 
         let mut supplied = 0u64;
+        let mut gap_reported = false;
 
         let read = input.process_chunks(64 * 1024, |chunk| {
             supplied += chunk.len() as u64;
@@ -109,12 +110,31 @@ impl Verification<'_> {
             for frame in extractor.by_ref() {
                 match frame {
                     Ok(frame) => {
+                        // A recognized timestamp is the only prefix outside the access units.
+                        let expected_offset =
+                            if self.facts.extracted_frames == 0 && frame.timestamp.is_some() {
+                                16
+                            } else {
+                                extracted_end
+                            };
+                        if frame.offset > expected_offset && !gap_reported {
+                            self.extract_failure(
+                                &ExtractError::SkippedBytes {
+                                    bytes: frame.offset - expected_offset,
+                                },
+                                expected_offset,
+                            )?;
+                        }
+                        gap_reported = false;
                         extracted_end = frame.offset + frame.data.len() as u64;
                         self.access_unit(&frame, &mut parser)?;
                     }
                     // A chunk boundary, not a defect.
                     Err(ExtractError::InsufficientData) => break,
-                    Err(error) => self.extract_failure(&error, extracted_end)?,
+                    Err(error) => {
+                        self.extract_failure(&error, extracted_end)?;
+                        gap_reported = true;
+                    }
                 }
             }
 

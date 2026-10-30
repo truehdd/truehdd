@@ -856,8 +856,12 @@ impl ParserState {
             bail!(ParseError::NoSubstream);
         };
 
-        if substreams <= i {
-            bail!(ParseError::InvalidSubstreamIndex(i + 1, substreams));
+        let limit = substreams.min(self.substream_state.len());
+        if i >= limit {
+            bail!(ParseError::InvalidSubstreamIndex(
+                i.saturating_add(1),
+                limit
+            ));
         }
 
         Ok(())
