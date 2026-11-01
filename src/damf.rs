@@ -425,7 +425,11 @@ impl Configuration {
         let ramp_duration =
             object_element.md_update_info.block_update_info[0].ramp_duration as usize;
 
-        let sample_pos = sample_pos + sample_offset + oamd.evo_sample_offset;
+        // OAMD block offsets are measured in 32-sample units.
+        let block_offset =
+            u64::from(object_element.md_update_info.block_update_info[0].block_offset_factor_bits)
+                * 32;
+        let sample_pos = sample_pos + sample_offset + block_offset + oamd.evo_sample_offset;
 
         let mut events = Vec::with_capacity(object_count);
 
@@ -1022,4 +1026,21 @@ fn a_re_asserted_payload_still_reports_a_move() {
     let written = later.serialize_events(true);
     assert!(written.contains("pos: [-0.5, -0.5, 0.5]"), "{written}");
     assert!(written.contains("samplePos: 5120"), "{written}");
+}
+
+#[test]
+fn damf_timestamp_includes_block_offset() {
+    let mut oamd = ObjectAudioMetadataPayload::read(TEST_DATA_TRIM).unwrap();
+    oamd.evo_sample_offset = 7;
+    let update = &mut oamd.object_element.as_mut().unwrap().md_update_info;
+    update.sample_offset = 16;
+    update.block_update_info[0].block_offset_factor_bits = 1;
+
+    let config = Configuration::with_oamd_payload(&oamd, 48000, 3040).unwrap();
+    assert!(
+        config
+            .events
+            .iter()
+            .all(|event| event.sample_pos == Some(3095))
+    );
 }
