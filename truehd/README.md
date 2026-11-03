@@ -60,4 +60,4 @@ the two stages will disagree about the stream.
 
 ## License
 
-Licensed under the Apache License, Version 2.0. See [LICENSE](../LICENSE) for details.
+Licensed under the Apache License, Version 2.0. See [LICENSE](../LICENSE) and [NOTICE](NOTICE) for details.
