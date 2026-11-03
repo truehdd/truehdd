@@ -58,20 +58,20 @@ jobs:
           AARCH64_MUSL_ARCHIVE=${{ env.RELEASE_DIR }}/${{ env.ARCHIVE_PREFIX }}-${{ env.LINUX_MUSL_ARM_TARGET }}.tar.gz
 
           mv ./target/${{ env.LINUX_MUSL_TARGET }}/${{ env.BUILD_PROFILE }}/${{ env.RELEASE_BIN }} ./${{ env.RELEASE_BIN }}
-          tar -cvzf ./${X86_64_MUSL_ARCHIVE} ./${{ env.RELEASE_BIN }}
+          tar -cvzf ./${X86_64_MUSL_ARCHIVE} ./${{ env.RELEASE_BIN }} ./LICENSE ./NOTICE
 
           mv ./target/${{ env.LINUX_MUSL_ARM_TARGET }}/${{ env.BUILD_PROFILE }}/${{ env.RELEASE_BIN }} ./${{ env.RELEASE_BIN }}
-          tar -cvzf ./${AARCH64_MUSL_ARCHIVE} ./${{ env.RELEASE_BIN }}
+          tar -cvzf ./${AARCH64_MUSL_ARCHIVE} ./${{ env.RELEASE_BIN }} ./LICENSE ./NOTICE
 
           # GNU builds
           X86_64_GNU_ARCHIVE=${{ env.RELEASE_DIR }}/${{ env.ARCHIVE_PREFIX }}-${{ env.LINUX_GNU_TARGET }}.tar.gz
           AARCH64_GNU_ARCHIVE=${{ env.RELEASE_DIR }}/${{ env.ARCHIVE_PREFIX }}-${{ env.LINUX_GNU_ARM_TARGET }}.tar.gz
 
           mv ./target/${{ env.LINUX_GNU_TARGET }}/${{ env.BUILD_PROFILE }}/${{ env.RELEASE_BIN }} ./${{ env.RELEASE_BIN }}
-          tar -cvzf ./${X86_64_GNU_ARCHIVE} ./${{ env.RELEASE_BIN }}
+          tar -cvzf ./${X86_64_GNU_ARCHIVE} ./${{ env.RELEASE_BIN }} ./LICENSE ./NOTICE
 
           mv ./target/${{ env.LINUX_GNU_ARM_TARGET }}/${{ env.BUILD_PROFILE }}/${{ env.RELEASE_BIN }} ./${{ env.RELEASE_BIN }}
-          tar -cvzf ./${AARCH64_GNU_ARCHIVE} ./${{ env.RELEASE_BIN }}
+          tar -cvzf ./${AARCH64_GNU_ARCHIVE} ./${{ env.RELEASE_BIN }} ./LICENSE ./NOTICE
 
           # Generate checksums
           python -c "import hashlib; import pathlib; print(hashlib.sha256(pathlib.Path('${X86_64_MUSL_ARCHIVE}').read_bytes()).hexdigest())" > ${X86_64_MUSL_ARCHIVE}.sha256
@@ -119,10 +119,10 @@ jobs:
           AARCH64_ARCHIVE_FILE=${{ env.RELEASE_DIR }}/${{ env.ARCHIVE_PREFIX }}-${{ env.WINDOWS_ARM_TARGET }}.zip
 
           mv ./target/${{ env.BUILD_PROFILE }}/${{ env.RELEASE_BIN }}.exe ./${{ env.RELEASE_BIN }}.exe
-          7z a ./${X86_64_ARCHIVE_FILE} ./${{ env.RELEASE_BIN }}.exe
+          7z a ./${X86_64_ARCHIVE_FILE} ./${{ env.RELEASE_BIN }}.exe ./LICENSE ./NOTICE
 
           mv ./target/${{ env.WINDOWS_ARM_TARGET }}/${{ env.BUILD_PROFILE }}/${{ env.RELEASE_BIN }}.exe ./${{ env.RELEASE_BIN }}.exe
-          7z a ./${AARCH64_ARCHIVE_FILE} ./${{ env.RELEASE_BIN }}.exe
+          7z a ./${AARCH64_ARCHIVE_FILE} ./${{ env.RELEASE_BIN }}.exe ./LICENSE ./NOTICE
 
           python -c "import hashlib; import pathlib; print(hashlib.sha256(pathlib.Path('${X86_64_ARCHIVE_FILE}').read_bytes()).hexdigest())" > ${X86_64_ARCHIVE_FILE}.sha256
           python -c "import hashlib; import pathlib; print(hashlib.sha256(pathlib.Path('${AARCH64_ARCHIVE_FILE}').read_bytes()).hexdigest())" > ${AARCH64_ARCHIVE_FILE}.sha256
@@ -163,7 +163,7 @@ jobs:
       - name: Create zipfile
         run: |
           ARCHIVE_FILE=${{ env.RELEASE_DIR }}/${{ env.ARCHIVE_PREFIX }}-universal-macOS.zip
-          zip -9 ./${ARCHIVE_FILE} ./${{ env.RELEASE_BIN }}
+          zip -9 ./${ARCHIVE_FILE} ./${{ env.RELEASE_BIN }} ./LICENSE ./NOTICE
 
           python -c "import hashlib; import pathlib; print(hashlib.sha256(pathlib.Path('${ARCHIVE_FILE}').read_bytes()).hexdigest())" > ${ARCHIVE_FILE}.sha256
 

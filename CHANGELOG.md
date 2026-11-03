@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added a `NOTICE` with `truehd` and `oamd` attribution; binary release archives now include it and the existing `LICENSE`.
+
 ### Fixed
 - `decode` now includes the OAMD block offset in exported DAMF timestamps. Events with a nonzero block offset were previously written too early.
 - `decode` no longer warns of a FIFO underrun on every access unit after recovering from a damaged one. `verify` never did. Comes from truehd
