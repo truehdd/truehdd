@@ -259,4 +259,4 @@ ffmpeg -i movie.mkv -c copy -f truehd - | truehdd decode - --output-path audio
 
 ## License
 
-Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE) for details.
