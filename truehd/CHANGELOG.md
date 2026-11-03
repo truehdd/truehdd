@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added a `NOTICE` file with project attribution for downstream distributions.
 - `AccessUnit::has_invalid_branch` and `DecoderState::has_invalid_branch` mark the access unit where the stream restarts at a branch the buffer-model conditions reject, the counterpart of `has_valid_branch` (#37)
 
 ### Changed

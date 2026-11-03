@@ -7,8 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added a `NOTICE` with `truehd` and `oamd` attribution; binary release archives now include it and the existing `LICENSE`.
+
 ### Fixed
 - `decode` now stops with parse exit code 4 when extraction rejects a frame, skips input, or ends with incomplete data, including without `--strict`. Partial output is finalized and no success summary is emitted; clean streams and recognized initial SMPTE timestamps retain their results.
+- `decode` now includes the OAMD block offset in exported DAMF timestamps. Events with a nonzero block offset were previously written too early.
 - `decode` no longer warns of a FIFO underrun on every access unit after recovering from a damaged one. `verify` never did. Comes from truehd
 - `decode` writes silence in place of access units it cannot parse or decode, where it used to leave them out and move everything after them earlier. `--json` counts them as `concealedFrames`, and `frames` includes them
 - `decode` no longer reports success when it could not decode a single access unit, as with an empty file, bytes that are not TrueHD, or a stream whose only major sync is damaged. It used to write nothing and exit 0; it now exits 4, as `verify` already did
