@@ -12,7 +12,7 @@ use truehd::process::{
 };
 use truehd::structs::access_unit::AccessUnit;
 use truehd::structs::channel::{ChannelGroup, ChannelLabel, FbaChannelMeaning};
-use truehd::structs::sync::{MAJOR_SYNC_FBA, MAJOR_SYNC_FBB};
+use truehd::structs::sync::{FormatInfo, MAJOR_SYNC_FBA, MAJOR_SYNC_FBB};
 
 pub fn cmd_info(args: &InfoArgs, cli: &Cli, multi: Option<&MultiProgress>) -> Result<()> {
     log::info!("Analyzing TrueHD stream: {}", args.input.display());
@@ -326,8 +326,8 @@ struct PresentationInfo {
     index: usize,
     channels: u8,
     presentation_type: Option<PresentationType>,
-    twoch_format: Option<ChannelGroup>,
-    sixch_ex: Option<String>,
+    channel_format: Option<String>,
+    surround_ex: Option<String>,
     assignments: Vec<ChannelLabel>,
     control: Option<bool>,
     // Absent for a syntax whose channel_meaning carries no per-presentation levels.
@@ -335,6 +335,55 @@ struct PresentationInfo {
     mix_level: Option<u8>,
     // 16ch
     chan_distribution: Option<bool>,
+}
+
+// Bit 0 is L/R and bit 3 is Ls/Rs in both the 6ch and 8ch decoder channel assignment.
+const ASSIGNMENT_LR: u8 = 1;
+const ASSIGNMENT_LS_RS: u8 = 1 << 3;
+// The 8ch surrounds besides Ls/Rs: Lb/Rb (bit 6), Cb (bit 7) and Lsd/Rsd (bit 9).
+const EIGHTCH_ASSIGNMENT_OTHER_SURROUNDS: u16 = 1 << 6 | 1 << 7 | 1 << 9;
+
+impl PresentationInfo {
+    fn read_sixch_modifier(&mut self, format_info: &FormatInfo) {
+        let assignment = format_info.sixch_decoder_channel_assignment;
+        self.read_multichannel_modifier(
+            format_info.sixch_decoder_channel_modifier,
+            assignment == ASSIGNMENT_LR,
+            assignment & ASSIGNMENT_LS_RS != 0,
+        );
+    }
+
+    fn read_eightch_modifier(&mut self, format_info: &FormatInfo) {
+        let assignment = format_info.eightch_decoder_channel_assignment;
+        self.read_multichannel_modifier(
+            format_info.eightch_decoder_channel_modifier,
+            assignment == ASSIGNMENT_LR as u16,
+            assignment & ASSIGNMENT_LS_RS as u16 != 0
+                && assignment & EIGHTCH_ASSIGNMENT_OTHER_SURROUNDS == 0,
+        );
+    }
+
+    /// A 6ch or 8ch decoder channel modifier is the channel format of a two-channel
+    /// presentation, the Surround EX flag of one whose surrounds are Ls/Rs, and otherwise
+    /// carries nothing.
+    fn read_multichannel_modifier(&mut self, modifier: u8, two_channel: bool, surround_ex: bool) {
+        if two_channel {
+            self.channel_format = Some(
+                ChannelGroup::from_multichannel_modifier(modifier)
+                    .map_or_else(|| "Reserved".to_string(), |format| format.to_string()),
+            );
+        } else if surround_ex {
+            self.surround_ex = Some(
+                match modifier {
+                    0 => "Not indicated",
+                    1 => "Not encoded",
+                    2 => "Encoded",
+                    _ => "Reserved",
+                }
+                .to_string(),
+            );
+        }
+    }
 }
 
 fn display_presentation_info(info: &PresentationInfo) {
@@ -360,11 +409,11 @@ fn display_basic_info(info: &PresentationInfo) {
 }
 
 fn display_format_info(info: &PresentationInfo) {
-    if let Some(format) = &info.twoch_format {
+    if let Some(format) = &info.channel_format {
         println!("    Channel format          {format}");
     }
 
-    if let Some(ex) = &info.sixch_ex {
+    if let Some(ex) = &info.surround_ex {
         println!("    Dolby Surround EX       {ex}");
     }
 }
@@ -536,8 +585,11 @@ impl<'a> PresentationBuilder<'a> {
         let format_info = &self.major_sync.format_info;
         let channel_meaning = self.fba_channel_meaning();
 
-        presentation.twoch_format =
-            Some(ChannelGroup::from_modifier(format_info.twoch_decoder_channel_modifier).unwrap());
+        presentation.channel_format = Some(
+            ChannelGroup::from_modifier(format_info.twoch_decoder_channel_modifier)
+                .unwrap()
+                .to_string(),
+        );
         presentation.control = Some(channel_meaning.twoch_control_enabled);
         presentation.dialogue_level = Some(-(channel_meaning.twoch_dialogue_norm as i8));
         presentation.mix_level = Some(channel_meaning.twoch_mix_level + 70);
@@ -547,24 +599,7 @@ impl<'a> PresentationBuilder<'a> {
         let format_info = &self.major_sync.format_info;
         let channel_meaning = self.fba_channel_meaning();
 
-        let assignment = format_info.sixch_decoder_channel_assignment;
-        if assignment == 1 {
-            presentation.twoch_format = Some(
-                ChannelGroup::from_modifier(format_info.twoch_decoder_channel_modifier).unwrap(),
-            );
-        }
-
-        if assignment & 8 != 0 {
-            presentation.sixch_ex = Some(
-                match format_info.twoch_decoder_channel_modifier {
-                    0 => "Not indicated",
-                    1 => "Not encoded",
-                    2 => "Encoded",
-                    _ => "Reserved",
-                }
-                .to_string(),
-            );
-        }
+        presentation.read_sixch_modifier(format_info);
 
         presentation.assignments =
             ChannelLabel::from_sixch_channel(format_info.sixch_decoder_channel_assignment).unwrap();
@@ -576,6 +611,8 @@ impl<'a> PresentationBuilder<'a> {
     fn configure_eightch_presentation(&self, presentation: &mut PresentationInfo) {
         let format_info = &self.major_sync.format_info;
         let channel_meaning = self.fba_channel_meaning();
+
+        presentation.read_eightch_modifier(format_info);
 
         presentation.assignments = ChannelLabel::from_eightch_channel(
             format_info.eightch_decoder_channel_assignment,
@@ -625,5 +662,30 @@ impl<'a> PresentationBuilder<'a> {
         presentation.presentation_type =
             Some(self.presentation_map.presentation_type_by_index(index));
         presentation
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn presentations_report_their_own_channel_modifier() {
+        let format_info = FormatInfo {
+            twoch_decoder_channel_modifier: 0,
+            sixch_decoder_channel_modifier: 3,
+            sixch_decoder_channel_assignment: 1,
+            eightch_decoder_channel_modifier: 2,
+            eightch_decoder_channel_assignment: 1,
+            ..Default::default()
+        };
+
+        let mut sixch = PresentationInfo::default();
+        sixch.read_sixch_modifier(&format_info);
+        let mut eightch = PresentationInfo::default();
+        eightch.read_eightch_modifier(&format_info);
+
+        assert_eq!(sixch.channel_format.as_deref(), Some("Reserved"));
+        assert_eq!(eightch.channel_format.as_deref(), Some("Lbin/Rbin"));
     }
 }
