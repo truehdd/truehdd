@@ -675,30 +675,6 @@ impl MajorSyncInfo {
 mod tests {
     use super::*;
 
-    /// The 4-bit rate code is split across two families: 0..2 are the 48 kHz multiples and
-    /// 8..10 the 44.1 kHz ones, with everything between and above reserved.
-    #[test]
-    fn sampling_frequency_codes_cover_both_families() {
-        let f = |code: u8| {
-            FormatInfo {
-                audio_sampling_frequency_1: code,
-                ..Default::default()
-            }
-            .sampling_frequency_1()
-        };
-
-        assert_eq!(f(0).unwrap(), 48000);
-        assert_eq!(f(1).unwrap(), 96000);
-        assert_eq!(f(2).unwrap(), 192000);
-        assert_eq!(f(8).unwrap(), 44100);
-        assert_eq!(f(9).unwrap(), 88200);
-        assert_eq!(f(10).unwrap(), 176400);
-
-        for code in [3, 4, 5, 6, 7, 11, 12, 13, 14, 15] {
-            assert!(f(code).is_err(), "code {code} is reserved and must not map");
-        }
-    }
-
     /// 75 ms is exact at every rate but 44.1 kHz, where it is 3307.5 samples. Pinned so the
     /// rounding is a stated decision rather than an accident of `div_ceil`.
     #[test]

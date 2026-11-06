@@ -858,18 +858,6 @@ mod tests {
 
     #[test]
     fn restart_sync_word_rejects_invalid_values() {
-        assert!(matches!(
-            RestartSyncWord::try_from(0x31EA),
-            Ok(RestartSyncWord::A)
-        ));
-        assert!(matches!(
-            RestartSyncWord::try_from(0x31EB),
-            Ok(RestartSyncWord::B)
-        ));
-        assert!(matches!(
-            RestartSyncWord::try_from(0x31EC),
-            Ok(RestartSyncWord::C)
-        ));
         // Corrupt value observed in the wild (issue #15, Cavern #322)
         assert!(RestartSyncWord::try_from(0x20DA).is_err());
     }

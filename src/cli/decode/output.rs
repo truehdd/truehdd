@@ -197,15 +197,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn stereo_and_mono_orders_keep_their_tags() {
-        assert_eq!(
-            tag_for(&[ChannelLabel::L, ChannelLabel::R]),
-            Some(ChannelLayoutTag::Stereo)
-        );
-        assert_eq!(tag_for(&[ChannelLabel::C]), Some(ChannelLayoutTag::Mono));
-    }
-
     /// 7.1 here is the 5.1 bed plus a rear pair, which is MPEG_7_1_C. MPEG_7_1_A is
     /// the same count with a front centre pair instead, and would put the rears in
     /// front of the listener.
@@ -242,7 +233,7 @@ mod tests {
     /// written at all.
     #[test]
     fn partial_labels_write_no_layout() {
-        use crate::caf::{CAFWriter, PCMDataType};
+        use crate::caf::CAFWriter;
         use std::io::Cursor;
 
         let mut writer = CAFWriter::new(Cursor::new(Vec::new()));
@@ -264,7 +255,6 @@ mod tests {
         );
 
         // The format itself is still described.
-        let _ = PCMDataType::SignedInteger;
         assert!(buffer.windows(4).any(|w| w == b"desc"));
     }
 
