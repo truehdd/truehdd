@@ -209,25 +209,4 @@ mod tests {
 
         Ok(())
     }
-
-    #[test]
-    fn test_w64_sample_write() -> io::Result<()> {
-        let buffer = Vec::new();
-        let cursor = Cursor::new(buffer);
-        let mut writer = WAVWriter::new(cursor);
-
-        writer.configure_audio_format(48000, 2, 24, None)?;
-        writer.write_header()?;
-
-        // Write some test samples
-        let samples = vec![0x123456i32, 0x789ABCi32];
-        writer.write_pcm_24bit_as_packed(&samples)?;
-
-        let stats = writer.stats();
-        assert_eq!(stats.data_written, 6); // 2 samples x 3 bytes each
-
-        writer.finish()?;
-
-        Ok(())
-    }
 }

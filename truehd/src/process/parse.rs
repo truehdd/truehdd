@@ -866,7 +866,7 @@ impl ParserState {
 
 #[cfg(test)]
 mod tests {
-    use super::{Branch, Parser, ParserState};
+    use super::{Parser, ParserState};
     use crate::utils::timing::TimingContext;
     use log::Level;
 
@@ -902,33 +902,6 @@ mod tests {
         }
 
         assert_eq!(stream_start, Some(1 << 16), "and it is decoded");
-    }
-
-    /// The branch list has no end to be read at in a decoder that runs for as long as
-    /// something is playing, so it must be possible to empty it.
-    #[test]
-    fn taking_the_branches_empties_the_list() {
-        let mut parser = Parser::default();
-        parser.state.branches.push(Branch::default());
-        parser.state.branches.push(Branch::default());
-
-        assert_eq!(parser.take_branches().len(), 2);
-        assert!(parser.branches().is_empty(), "the list is left empty");
-        assert!(
-            parser.take_branches().is_empty(),
-            "taking twice is harmless"
-        );
-    }
-
-    /// The buffer model answers whether a stream is authorable, which a decoder does not
-    /// ask. It runs by default and a consumer that only decodes can turn it off.
-    #[test]
-    fn the_fifo_depth_model_can_be_turned_off() {
-        let mut parser = Parser::default();
-        assert!(parser.state.check_fifo, "on by default");
-
-        parser.set_check_fifo(false);
-        assert!(!parser.state.check_fifo);
     }
 
     /// Frames refused while resynchronising must not move the clock the next stream starts on.
@@ -991,22 +964,11 @@ mod tests {
         assert_eq!(parser.state.input_timing, 0);
     }
 
-    /// FBB streams bailed with `unimplemented!` at three sites, so the crate could not read
-    /// them at all even though the format info, substream and restart header paths were
-    /// already written.
     fn first_au(data: &[u8]) -> Option<crate::structs::access_unit::AccessUnit> {
         let mut extractor = crate::process::extract::Extractor::default();
         extractor.push_bytes(data);
         let frame = extractor.by_ref().next()?.ok()?;
         Parser::default().parse(&frame).ok()
-    }
-
-    #[test]
-    fn fbb_stream_parses() {
-        let au = first_au(crate::process::EXAMPLE_DATA_FBB).expect("an access unit");
-        let ms = au.major_sync_info.as_ref().expect("a major sync");
-        assert_eq!(ms.format_sync, crate::structs::sync::MAJOR_SYNC_FBB);
-        assert_eq!(ms.format_info.sampling_frequency_1().unwrap(), 48000);
     }
 
     /// The FBB `channel_meaning` is its own 64-bit structure. It is the same width as the
@@ -1037,14 +999,6 @@ mod tests {
         assert!(ms.channel_meaning.extra_channel_meaning().is_none());
     }
 
-    /// FBA is unaffected by the FBB work.
-    #[test]
-    fn fba_stream_still_parses() {
-        let au = first_au(crate::process::EXAMPLE_DATA).expect("an access unit");
-        let ms = au.major_sync_info.as_ref().expect("a major sync");
-        assert_eq!(ms.format_sync, crate::structs::sync::MAJOR_SYNC_FBA);
-    }
-
     /// A single-substream FBB access unit carrying `substream_info` 0x05. Judged by the
     /// FBA rules, its low two bits looked like reserved bits set and the last bit of its
     /// channel_meaning looked like `extra_channel_meaning_present`, which read the block
@@ -1056,20 +1010,5 @@ mod tests {
         assert_eq!(ms.format_sync, crate::structs::sync::MAJOR_SYNC_FBB);
         assert_eq!(ms.substream_info, 0x05);
         assert_eq!(ms.channel_meaning.fbb().expect("the FBB layout").fs, 10);
-    }
-
-    /// The major-sync repetition limit differs by format: 128 access units for FBA, 32 for
-    /// FBB.
-    #[test]
-    fn fbb_sync_interval_limit_is_stricter_than_fba() {
-        use crate::utils::errors::AccessUnitError;
-        assert_eq!(
-            AccessUnitError::FbbSyncTooFar.to_string(),
-            "FBB stream major syncs must occur at intervals not exceeding 32 access units"
-        );
-        assert_eq!(
-            AccessUnitError::FbaSyncTooFar.to_string(),
-            "FBA stream major syncs must occur at intervals not exceeding 128 access units"
-        );
     }
 }

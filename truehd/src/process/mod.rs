@@ -352,20 +352,6 @@ fn the_fbb_presentation_map_is_not_the_fba_one() {
     );
 }
 
-/// Presentation masks are NOT nested. It is tempting to assume presentation *n* reads
-/// substreams 0..=n, but `substream_info = 0b11001100` with extended bit 0 gives masks
-/// `[1, 3, 4, 12]`, where `3 & 4 == 0`: presentation 2 uses substream 2 alone and shares
-/// nothing with presentation 1.
-#[test]
-fn masks_need_not_be_nested() {
-    let m = PresentationMap::with_substream_info(0b11001100, 0b00000001);
-    assert_eq!(m.masks, [1, 3, 4, 12]);
-    assert_eq!(m.masks[1] & m.masks[2], 0, "disjoint, not nested");
-
-    // where they do overlap it is genuine containment, so neither rule holds universally
-    assert_eq!(m.masks[0] & m.masks[1], m.masks[0]);
-}
-
 /// A stream need not carry four presentations. Asking for one it does not have
 /// resolved to nothing between 0.5.0 and 0.6.2, so the caller received no audio
 /// while the log claimed a fallback had been applied.

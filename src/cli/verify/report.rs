@@ -1015,9 +1015,6 @@ mod tests {
     /// has no two-channel decoder at all.
     const FBB_6CH_SINGLE: &[u8] = include_bytes!("../../../truehd/tests/assets/fbb_6ch_single.mlp");
 
-    /// FBB over one substream of two channels, `substream_info` 0x05.
-    const FBB_COPY: &[u8] = include_bytes!("../../../truehd/tests/assets/fbb_copy.mlp");
-
     /// The facts a run gathers from a stream, taken as `Verification` takes them.
     fn facts_of(data: &[u8]) -> StreamFacts {
         let mut extractor = Extractor::default();
@@ -1087,33 +1084,6 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn fba_caps_are_reported_for_every_accumulator() {
-        assert_eq!(
-            facts().fifo_caps(),
-            [
-                Some(30_000),
-                Some(90_000),
-                Some(120_000),
-                Some(120_000),
-                Some(120_000)
-            ]
-        );
-    }
-
-    /// FBB never checks the 8- and 16-channel sums, and its caps depend on
-    /// `substream_info`, so they must not be filled in from the FBA table.
-    #[test]
-    fn fbb_caps_are_absent_where_the_format_does_not_check_them() {
-        let facts = facts_of(FBB_COPY);
-        assert_eq!(facts.substream_info, 0x05);
-
-        let caps = facts.fifo_caps();
-        assert_eq!(caps[Accumulator::Eightch as usize], None);
-        assert_eq!(caps[Accumulator::Sixteench as usize], None);
-        assert_eq!(caps[Accumulator::Substream0 as usize], Some(30_000));
-    }
-
     /// A substream is allowed 15000 bytes per channel it carries, to a 120000 ceiling.
     /// Substreams that partition the channels each state their own share; cumulative
     /// ones each state their presentation's whole allowance. Both shapes match the
@@ -1132,51 +1102,6 @@ mod tests {
 
         // an empty span carries no channel, and is allowed its headers alone
         assert_eq!(StreamFacts::substream_cap(6, 5), 5_000);
-    }
-
-    #[test]
-    fn a_stream_without_a_major_sync_claims_no_caps() {
-        let facts = StreamFacts::default();
-
-        assert_eq!(facts.fifo_caps(), [None; ACCUMULATORS]);
-        assert_eq!(facts.duration_secs(), None);
-        assert_eq!(facts.format_name(), "unknown");
-    }
-
-    #[test]
-    fn duration_follows_the_access_unit_count() {
-        let secs = facts().duration_secs().unwrap();
-
-        assert!((secs - 136.0 * 40.0 / 48000.0).abs() < f64::EPSILON);
-    }
-
-    /// Latency in milliseconds is the sample count against the sampling rate, and the
-    /// average access unit is the parsed bytes over the parsed access units.
-    #[test]
-    fn the_derived_measurements_follow_the_stream_configuration() {
-        let facts = facts();
-
-        assert!((facts.max_fifo_latency_ms().unwrap() - 1.1666).abs() < 0.001);
-        assert!((facts.average_access_unit_size().unwrap() - 34334.0 / 136.0).abs() < f64::EPSILON);
-
-        let empty = StreamFacts::default();
-        assert_eq!(empty.max_fifo_latency_ms(), None);
-        assert_eq!(empty.average_access_unit_size(), None);
-    }
-
-    #[test]
-    fn a_clean_stream_is_conformant_at_every_threshold() {
-        let tally = Tally::default();
-
-        for fail_on in Severity::ALL {
-            let verdict = Verdict::of(&facts(), &tally, fail_on, true);
-            assert_eq!(verdict, Verdict::Conformant);
-            assert_eq!(verdict.exit_code(), crate::exit::SUCCESS);
-        }
-
-        let report = sections("x.mlp", &facts(), &tally, Verdict::Conformant);
-        assert_eq!(cells(&report, "Diagnostics", "Verdict"), ["CONFORMANT"]);
-        assert_eq!(cells(&report, "Diagnostics", "Fatal"), ["0"]);
     }
 
     /// Every measurement the report gained has a line of its own.

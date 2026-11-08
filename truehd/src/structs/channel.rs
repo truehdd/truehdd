@@ -555,6 +555,7 @@ impl Display for ChannelGroup {
 }
 
 impl ChannelGroup {
+    /// Reads `twoch_decoder_channel_modifier`.
     pub fn from_modifier(modifier: u8) -> Result<Self> {
         match modifier {
             0 => Ok(ChannelGroup::Stereo),
@@ -562,6 +563,18 @@ impl ChannelGroup {
             2 => Ok(ChannelGroup::LbinRbin),
             3 => Ok(ChannelGroup::Mono),
             _ => bail!("Invalid channel group modifier: {}", modifier),
+        }
+    }
+
+    /// Reads `sixch_decoder_channel_modifier` or `eightch_decoder_channel_modifier` of a
+    /// two-channel presentation. Unlike the 2ch field, these have no mono code: `None` for 3,
+    /// which is reserved.
+    pub fn from_multichannel_modifier(modifier: u8) -> Option<Self> {
+        match modifier {
+            0 => Some(ChannelGroup::Stereo),
+            1 => Some(ChannelGroup::LtRt),
+            2 => Some(ChannelGroup::LbinRbin),
+            _ => None,
         }
     }
 }
