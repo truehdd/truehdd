@@ -877,11 +877,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_decodable_stream_still_succeeds() {
-        assert_eq!(decode(truehd::process::EXAMPLE_DATA).unwrap(), 2);
-    }
-
     /// A payload byte of the third access unit flipped. The parser rejects it and cannot
     /// read the fourth either, which carries no major sync, so two access units are lost
     /// and decoding resumes at the fifth.

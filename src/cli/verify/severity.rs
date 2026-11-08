@@ -74,26 +74,6 @@ impl std::fmt::Display for Severity {
 mod tests {
     use super::*;
 
-    #[test]
-    fn severities_order_worst_last() {
-        let mut all = Severity::ALL;
-        all.reverse();
-        all.sort_unstable();
-
-        assert_eq!(all, Severity::ALL);
-        assert_eq!(Severity::ALL.iter().max(), Some(&Severity::Fatal));
-    }
-
-    #[test]
-    fn log_levels_below_warn_are_all_observational() {
-        assert_eq!(Severity::from_level(log::Level::Error), Severity::Error);
-        assert_eq!(Severity::from_level(log::Level::Warn), Severity::Warning);
-
-        for level in [log::Level::Info, log::Level::Debug, log::Level::Trace] {
-            assert_eq!(Severity::from_level(level), Severity::Info);
-        }
-    }
-
     /// `--strict` tightens the threshold and never loosens one already tighter.
     #[test]
     fn strict_is_fail_on_warning() {

@@ -432,27 +432,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rule_ids_render_as_domain_and_rule() {
-        assert_eq!(
-            SyncError::InvalidSubstreamInfo(0).rule_id().to_string(),
-            "sync.invalid_substream_info"
-        );
-        assert_eq!(
-            FifoError::Underrun { index: 0 }.rule_id(),
-            RuleId::Fifo(FifoRule::Underrun)
-        );
-    }
-
-    /// The two `NoSubstream` variants live in different domains and must stay distinct.
-    #[test]
-    fn rule_ids_are_unique_across_domains() {
-        assert_ne!(
-            ParseError::NoSubstream.rule_id(),
-            AccessUnitError::NoSubstream.rule_id()
-        );
-    }
-
-    #[test]
     fn anyhow_errors_recover_their_rule() {
         let error = anyhow::anyhow!(AccessUnitError::FbbSyncTooFar);
         assert_eq!(

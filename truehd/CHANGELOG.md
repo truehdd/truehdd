@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Added a `NOTICE` file with project attribution for downstream distributions.
+- `ChannelGroup::from_multichannel_modifier` reads the 6ch and 8ch decoder channel modifiers, where 3 is reserved and not mono as in the 2ch field. `from_modifier` remains the reader for the 2ch field
 - `AccessUnit::has_invalid_branch` and `DecoderState::has_invalid_branch` mark the access unit where the stream restarts at a branch the buffer-model conditions reject, the counterpart of `has_valid_branch` (#37)
 
 ### Changed

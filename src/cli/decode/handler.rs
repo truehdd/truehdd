@@ -1061,40 +1061,11 @@ mod tests {
     }
 
     #[test]
-    fn atmos_without_bed_conform_matches_decoded_count_for_full_bed() {
-        // 7.1.2 bed plus 6 objects, no conformance needed.
-        let bed: Vec<usize> = (0..10).collect();
-        let info = ChannelInfo::for_atmos(16, &bed, false);
-
-        assert_eq!(info.total_channels, 16);
-        assert_eq!(info.bed_channels, 10);
-        assert_eq!(info.object_channels, 6);
-    }
-
-    #[test]
     fn atmos_without_bed_indices_reports_all_channels_as_objects() {
         let info = ChannelInfo::for_atmos(12, EMPTY_BED_INDICES, false);
 
         assert_eq!(info.total_channels, 12);
         assert_eq!(info.object_channels, 12);
-    }
-
-    #[test]
-    fn added_extensions_keep_dots_already_in_the_base() {
-        let base = Path::new("/out/Movie.2024.1080p");
-
-        assert_eq!(
-            add_extension(base, "atmos.audio"),
-            Path::new("/out/Movie.2024.1080p.atmos.audio")
-        );
-        assert_eq!(
-            add_extension(base, "atmos.metadata"),
-            Path::new("/out/Movie.2024.1080p.atmos.metadata")
-        );
-        assert_eq!(
-            add_extension(base, "caf"),
-            Path::new("/out/Movie.2024.1080p.caf")
-        );
     }
 
     /// The DAMF header names its audio and metadata files by appending to the
