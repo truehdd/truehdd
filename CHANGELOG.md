@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added a `NOTICE` with `truehd` and `oamd` attribution; binary release archives now include it and the existing `LICENSE`.
 
 ### Fixed
+- `decode` wrote the padding that completes a stream's last access unit, up to 39 samples at 48 kHz, and counted it in `--json`. Output now ends on the stream's last sample. Comes from truehd
 - `info` showed the 2-channel presentation's channel format and Surround EX flag on the 6-channel one, and neither on the 8-channel one. Each presentation now shows its own
 - `decode` now includes the OAMD block offset in exported DAMF timestamps. Events with a nonzero block offset were previously written too early.
 - `decode` no longer warns of a FIFO underrun on every access unit after recovering from a damaged one. `verify` never did. Comes from truehd

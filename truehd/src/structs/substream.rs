@@ -258,6 +258,8 @@ impl SubstreamSegment {
                         )
                     }
                 }
+
+                ss.terminator = Some(tm);
             } else {
                 reader.seek(-18)?;
 

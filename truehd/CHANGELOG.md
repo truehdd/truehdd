@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING**: `structs::oamd` re-exports the [`oamd`](https://crates.io/crates/oamd) crate, which now owns these structures. Every type and function keeps the path it had, but `TEST_DATA` is `EXAMPLE_DATA` there and the other test payloads are no longer public
 
 ### Fixed
+- `SubstreamSegment::terminator` was never filled in, so `DecodedAccessUnit::sample_length` ignored the samples a stream's last access unit marks as padding and always reported the whole unit. It now ends where the stream does
 - Compiling the crate with optimizations takes well under 1 GB of memory and a few seconds again, instead of over 13 GB and a minute. Since bitstream-io 4.10, the writer `define_huffman_tree!` generates alongside each Huffman tree doubles in size with every level of the tree, and the crate never writes those trees, so it no longer defines that writer
 - `Parser::parse` no longer reports `FifoError::Underrun` on every access unit of a stream resumed after `reset_for_next_major_sync`. `parse_recovering` was never affected
 - After a branch the buffer-model conditions reject, `hires_output_timing` could be reported malformed as `RestartHeaderError::InvalidHiresOutputTiming` or `InvalidHiresOutputTimingSequence`, because its reader was not restarted with the stream. It now is, as it already was past a branch they accept (#37, fixed by @sven-pke)
