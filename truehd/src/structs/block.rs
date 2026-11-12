@@ -42,27 +42,16 @@ pub struct BlockHeader {
 ///
 /// Contains 8-160 samples per channel with optional restart header,
 /// block header, and compressed audio data.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Block {
     pub restart_header: Option<RestartHeader>,
     pub block_header: Option<BlockHeader>,
     pub block_data_bits: Option<u16>,
-    pub bypassed_lsb: [[i32; 16]; 160],
-    pub block_data: [[i32; 16]; 160],
+    /// One row per sample of the block (`block_size` rows).
+    pub bypassed_lsb: Vec<[i32; 16]>,
+    /// One row per sample of the block (`block_size` rows).
+    pub block_data: Vec<[i32; 16]>,
     pub block_header_crc: u8,
-}
-
-impl Default for Block {
-    fn default() -> Self {
-        Block {
-            restart_header: None,
-            block_header: None,
-            block_data_bits: None,
-            bypassed_lsb: [[0; 16]; 160],
-            block_data: [[0; 16]; 160],
-            block_header_crc: 0,
-        }
-    }
 }
 
 impl BlockHeader {
@@ -389,6 +378,12 @@ impl Block {
 
         header_setup.record(&mut state.perf.block_header_setup);
 
+        // Sized to the block rather than to the 160-sample maximum: a block is usually 40
+        // samples, and the arrays are copied into the decoder for every block of every
+        // substream.
+        b.bypassed_lsb = vec![[0; 16]; block_size];
+        b.block_data = vec![[0; 16]; block_size];
+
         for blki in 0..block_size {
             // bypassed_lsb
             let bypassed_lsb = Timer::start();
@@ -553,8 +548,15 @@ impl Block {
         }
 
         let ss_state = state.substream_state_mut()?;
-        *ss_state.bypassed_lsb = self.bypassed_lsb;
-        *ss_state.block_data = self.block_data;
+        let rows = self.block_data.len();
+        ss_state.bypassed_lsb[..rows].copy_from_slice(&self.bypassed_lsb);
+        ss_state.block_data[..rows].copy_from_slice(&self.block_data);
+        // Rows past this block keep what a full 160-row copy of a zero-padded block left there.
+        if ss_state.block_rows > rows {
+            ss_state.bypassed_lsb[rows..ss_state.block_rows].fill([0; 16]);
+            ss_state.block_data[rows..ss_state.block_rows].fill([0; 16]);
+        }
+        ss_state.block_rows = rows;
 
         Ok(())
     }

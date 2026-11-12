@@ -112,10 +112,11 @@ pub struct DecodedAccessUnit {
     /// PCM audio samples organized as `[sample_index][channel_index]`.
     ///
     /// Contains 24-bit signed integer samples with sample-major ordering.
-    /// - Array dimensions: [160 samples][16 channels]
+    /// - Dimensions: one row of 16 channels per sample of the access unit, so at least
+    ///   `sample_length` rows
     /// - Valid data length: Determined by `sample_length`
     /// - Channel count: Determined by stream configuration
-    pub pcm_data: [[i32; 16]; 160],
+    pub pcm_data: Vec<[i32; 16]>,
 
     /// Channel labels for the audio data.
     ///
@@ -182,6 +183,8 @@ pub struct DecoderSubstreamState {
 
     pub bypassed_lsb: Box<[[i32; 16]; 160]>,
     pub block_data: Box<[[i32; 16]; 160]>,
+    /// Rows of `bypassed_lsb` and `block_data` the last block wrote; the rest are zero.
+    pub block_rows: usize,
     pub dither_table: [i32; 256],
     pub decoded_sample_len: usize,
 
@@ -229,6 +232,7 @@ impl Default for DecoderSubstreamState {
 
             bypassed_lsb: Box::new([[0; 16]; 160]),
             block_data: Box::new([[0; 16]; 160]),
+            block_rows: 0,
             dither_table: [0; 256],
             decoded_sample_len: 0,
 
@@ -819,7 +823,9 @@ impl DecoderState {
             sample_length: self.samples_per_au
                 - self.substream_state[presentation_idx].zero_samples,
             channel_count: self.substream_state[presentation_idx].max_matrix_chan + 1,
-            pcm_data: *self.substream_state[presentation_idx].output_buffer,
+            pcm_data: self.substream_state[presentation_idx].output_buffer
+                [..self.samples_per_au.min(160)]
+                .to_vec(),
             oamd: if presentation_idx == 3 && self.effective_presentations[3] {
                 self.oamd.iter().cloned().collect::<Vec<_>>()
             } else {
