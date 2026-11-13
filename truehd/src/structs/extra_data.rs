@@ -265,7 +265,7 @@ impl ExtraData {
     /// [`evo_hmac_message`]: Self::evo_hmac_message
     #[cfg(feature = "evo-protection")]
     pub fn verify_evo_protection(&self, access_unit: &[u8], key: &[u8]) -> EvoProtectionStatus {
-        use hmac::{Hmac, Mac};
+        use hmac::{Hmac, KeyInit, Mac};
 
         let Some(evo_frame) = self.evo_frame.as_ref() else {
             return EvoProtectionStatus::Absent;
