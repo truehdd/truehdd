@@ -7,9 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-11-14
+
+### Changed
+- Updated dependency floors (hmac 0.13 and sha2 0.11 behind `evo-protection`, log, thiserror)
+
 ### Fixed
-- A branch the buffer-model conditions reject restarts the stream, but the `hires_output_timing` reader was carried across it. The field is serialised one bit per restart header over many access units, and the stream after a splice begins its own from the preamble, so the reader could take that preamble for data bits of the field it was part way through, `RestartHeaderError::InvalidHiresOutputTiming`, or compare the new stream's first field with the old stream's last, `RestartHeaderError::InvalidHiresOutputTimingSequence`, and report either once per substream about a field that was never malformed. The reader now starts over wherever the stream does, as it already did past a branch the conditions accept
-- A timestamp read for a sync candidate that then failed its major-sync CRC was left behind for the next valid frame to inherit, so a stream whose leading bytes happen to validate as a timestamp had it attributed to whatever access unit followed. A pending timestamp belongs to the candidate at the cursor, so it is now discarded whenever bytes are. Introduced in 0.7.2 (#34, fixed by @P0SlX)
+- `SubstreamSegment::terminator` was never filled in, so `DecodedAccessUnit::sample_length` ignored the samples a stream's last access unit marks as padding and always reported the whole unit. It now ends where the stream does
+- Building or checking the crate takes well under 1 GB of memory and a few seconds again, instead of up to 17 GB and a minute. Since bitstream-io 4.10, the writer `define_huffman_tree!` generates alongside each Huffman tree doubles in size with every level of the tree, and the crate never writes those trees, so it no longer defines that writer (#47)
+- `Parser::parse` no longer reports `FifoError::Underrun` on every access unit of a stream resumed after `reset_for_next_major_sync`. `parse_recovering` was never affected
+- After a branch the buffer-model conditions reject, `hires_output_timing` could be reported malformed as `RestartHeaderError::InvalidHiresOutputTiming` or `InvalidHiresOutputTimingSequence`, because its reader was not restarted with the stream. It now is, as it already was past a branch they accept (#37, fixed by @sven-pke)
+- A skipped substream whose end pointer lies before the current read position raises `SubstreamError::SubstreamSizeUnderflow`, as the same check on a decoded substream already did, instead of panicking in debug builds and failing with an untyped error in release builds (#38, fixed by @P0SlX)
+- A timestamp read for a sync candidate that then failed its major-sync CRC was left for the next valid frame to inherit, so `info` could attribute it to the wrong access unit. It is now discarded with its candidate. Introduced in 0.7.2 (#34, fixed by @P0SlX)
 
 ## [0.7.2] - 2026-09-15
 

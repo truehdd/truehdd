@@ -976,7 +976,7 @@ dependencies = [
 
 [[package]]
 name = "truehd"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "anyhow",
  "bitstream-io",
@@ -988,7 +988,7 @@ dependencies = [
 
 [[package]]
 name = "truehdd"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "anyhow",
  "chrono",
