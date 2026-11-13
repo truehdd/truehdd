@@ -58,6 +58,13 @@ macro_rules! log_or_err {
 
 #[derive(thiserror::Error, Debug)]
 pub enum DecodeError {
+    #[error("Block of {block} samples after {decoded} samples exceeds capacity {capacity}")]
+    SampleCapacityExceeded {
+        decoded: usize,
+        block: usize,
+        capacity: usize,
+    },
+
     #[error("Positive saturation from the recorrelator: value = {0}")]
     RecorrelatorPositiveSaturation(i64),
 
@@ -79,6 +86,9 @@ pub enum DecodeError {
 
 #[derive(thiserror::Error, Debug)]
 pub enum ExtractError {
+    #[error("Skipped {bytes} bytes between access units")]
+    SkippedBytes { bytes: u64 },
+
     #[error("Access unit length {actual} bytes is shorter than its {minimum}-byte header")]
     InvalidAccessUnitLength { actual: usize, minimum: usize },
 
@@ -349,6 +359,12 @@ pub enum MatrixError {
 
 #[derive(thiserror::Error, Debug)]
 pub enum RestartHeaderError {
+    #[error("Channel indices must fit sixteen slots: min {min}, max {max}, matrix {matrix}")]
+    InvalidChannelBounds { min: u8, max: u8, matrix: u8 },
+
+    #[error("Type-A matrix channel {0} leaves no room for both dither channels")]
+    MatrixChannelCapacity(u8),
+
     #[error("restart_sync_word must be 0x31EA, 0x31EB or 0x31EC. Read {0:#06X}")]
     InvalidRestartSyncWord(u16),
 
@@ -567,6 +583,9 @@ pub enum SubstreamError {
 
 #[derive(thiserror::Error, Debug)]
 pub enum SyncError {
+    #[error("Substream count must be between one and four, got {0}")]
+    InvalidSubstreamCount(usize),
+
     #[error("Invalid format_sync, Read {0:#08X}")]
     InvalidFormatSync(u32),
 

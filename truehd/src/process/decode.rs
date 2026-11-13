@@ -4,7 +4,7 @@ use crate::structs::access_unit::AccessUnit;
 use crate::structs::channel::ChannelLabel;
 use crate::structs::oamd::ObjectAudioMetadataPayload;
 use crate::utils::dither::dither_31eb;
-use crate::utils::errors::DecodeError;
+use crate::utils::errors::{DecodeError, ParseError};
 use anyhow::{Result, anyhow, bail};
 use log::{info, trace};
 use std::collections::VecDeque;
@@ -315,12 +315,53 @@ impl Default for DecoderState {
     }
 }
 
+#[test]
+fn decoder_capacity_guards_preserve_a_valid_block() {
+    for (decoded, block) in [(0, 160), (32, 16), (usize::MAX, 8)] {
+        let mut state = DecoderState {
+            substreams: 1,
+            samples_per_au: 40,
+            ..Default::default()
+        };
+        state.substream_state[0].decoded_sample_len = decoded;
+        state.substream_state[0].block_size = block;
+        assert!(state.decode_multi().is_err());
+    }
+    let mut state = DecoderState {
+        substreams: 1,
+        samples_per_au: 40,
+        ..Default::default()
+    };
+    state.substream_state[0].restart_sync_word = 0x31EA;
+    assert!(state.decode_multi().is_ok());
+    assert_eq!(state.substream_state[0].decoded_sample_len, 8);
+    for index in [MAX_PRESENTATIONS, usize::MAX] {
+        state.substream_index = index;
+        assert!(state.substream_state().is_err());
+        assert!(state.substream_state_mut().is_err());
+    }
+}
+
 impl DecoderState {
     pub fn substream_state_mut(&mut self) -> Result<&mut DecoderSubstreamState> {
+        let limit = self.substream_state.len();
+        if self.substream_index >= limit {
+            bail!(ParseError::InvalidSubstreamIndex(
+                self.substream_index.saturating_add(1),
+                limit
+            ));
+        }
         Ok(&mut self.substream_state[self.substream_index])
     }
 
     pub fn substream_state(&self) -> Result<&DecoderSubstreamState> {
+        let limit = self.substream_state.len();
+        if self.substream_index >= limit {
+            bail!(ParseError::InvalidSubstreamIndex(
+                self.substream_index.saturating_add(1),
+                limit
+            ));
+        }
         Ok(&self.substream_state[self.substream_index])
     }
 
@@ -488,6 +529,20 @@ impl DecoderState {
 
         let samples_per_au = self.samples_per_au;
         let current_substream_index = self.substream_index;
+
+        let decoded = self.substream_state()?.decoded_sample_len;
+        let capacity = samples_per_au.min(self.output_buffer.len());
+        if block_size == 0
+            || decoded
+                .checked_add(block_size)
+                .is_none_or(|end| end > capacity)
+        {
+            bail!(DecodeError::SampleCapacityExceeded {
+                decoded,
+                block: block_size,
+                capacity
+            });
+        }
 
         let (max_val, min_val) = if restart_sync_word == 0x31EC {
             (1 << 31, -(1 << 31))

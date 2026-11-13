@@ -101,6 +101,23 @@ pub struct RestartHeader {
 }
 
 impl RestartHeader {
+    fn validate_channels(&self) -> Result<()> {
+        if self.min_chan > 15 || self.max_chan > 15 || self.max_matrix_chan > 15 {
+            bail!(RestartHeaderError::InvalidChannelBounds {
+                min: self.min_chan,
+                max: self.max_chan,
+                matrix: self.max_matrix_chan,
+            });
+        }
+        // Type A needs two extra dither channels in the sixteen-slot matrix buffers.
+        if self.restart_sync_word == RestartSyncWord::A && self.max_matrix_chan > 13 {
+            bail!(RestartHeaderError::MatrixChannelCapacity(
+                self.max_matrix_chan
+            ));
+        }
+        Ok(())
+    }
+
     pub fn read(state: &mut ParserState, reader: &mut BsIoSliceReader) -> Result<Self> {
         let start_pos = reader.position()?;
 
@@ -120,6 +137,8 @@ impl RestartHeader {
             lossless_check: reader.get_n(8)?,
             ..Default::default()
         };
+
+        rh.validate_channels()?;
 
         'check_output_timing: {
             Self::check_output_timing_matches(state, rh.output_timing, reader)?;
@@ -598,6 +617,7 @@ impl RestartHeader {
     }
 
     pub fn update_decoder_state(&self, state: &mut DecoderState) -> Result<()> {
+        self.validate_channels()?;
         let valid = state.valid;
 
         // Compare the lossless check for every presentation being decoded, not

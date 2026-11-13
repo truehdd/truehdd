@@ -5,7 +5,6 @@ use crate::utils::buffer_pool::BufferPool;
 use crate::utils::crc::{CRC_MAJOR_SYNC_INFO_ALG, Crc16};
 use crate::utils::errors::ExtractError;
 use anyhow::Result;
-use log::error;
 use std::sync::Arc;
 
 /// Extracts audio frames from a continuous bitstream.
@@ -344,160 +343,145 @@ impl Iterator for Extractor {
             return None;
         }
 
-        loop {
-            'locked: {
-                if !self.locked {
-                    match self.resync() {
-                        Ok(()) => {}
-                        Err(ExtractError::InsufficientData) => return None,
-                        Err(error) => return Some(Err(error)),
-                    }
+        let error = 'locked: {
+            if !self.locked {
+                match self.resync() {
+                    Ok(()) => {}
+                    Err(ExtractError::InsufficientData) => return None,
+                    Err(error) => return Some(Err(error)),
                 }
+            }
 
-                if self.buffered_len() < 6 {
+            if self.buffered_len() < 6 {
+                return self.iter_insufficient();
+            };
+
+            let buffer = self.buffered();
+            let mut offset = 0;
+            let mut pre = 4;
+            let mut skip = if buffer[4] == 0xF8 && buffer[5] == 0x72 {
+                if self.buffered_len() < 21 {
                     return self.iter_insufficient();
                 };
 
-                let buffer = self.buffered();
-                let mut offset = 0;
-                let mut pre = 4;
-                let mut skip = if buffer[4] == 0xF8 && buffer[5] == 0x72 {
-                    if self.buffered_len() < 21 {
-                        return self.iter_insufficient();
+                let substreams = buffer[20] as usize >> 4;
+                if self.substreams != substreams {
+                    let error = ExtractError::SubstreamMismatch {
+                        found: substreams,
+                        expected: self.substreams,
                     };
+                    break 'locked error;
+                }
 
-                    let substreams = buffer[20] as usize >> 4;
-                    if self.substreams != substreams {
-                        let error = ExtractError::SubstreamMismatch {
-                            found: substreams,
-                            expected: self.substreams,
+                let Some(major_sync_info_len) = self.major_sync_info_len() else {
+                    return self.iter_insufficient();
+                };
+
+                major_sync_info_len + 2
+            } else {
+                0
+            };
+
+            let mut post = 0;
+            let mut substreams = self.substreams;
+            let mut parity = 0;
+
+            'outer: {
+                'inner: loop {
+                    if pre > 0 {
+                        pre -= 1;
+
+                        let Some(&byte) = buffer.get(offset) else {
+                            break 'inner;
                         };
-                        error!("Substream count mismatch: {error}");
 
-                        break 'locked;
+                        parity ^= byte;
+                        offset += 1;
+
+                        continue;
+                    }
+                    if skip > 0 {
+                        skip -= 1;
+                        offset += 1;
+
+                        continue;
+                    }
+                    if post > 0 {
+                        post -= 1;
+
+                        let Some(&byte) = buffer.get(offset) else {
+                            break 'inner;
+                        };
+
+                        parity ^= byte;
+                        offset += 1;
+
+                        continue;
+                    }
+                    if substreams > 0 {
+                        substreams -= 1;
+
+                        let Some(&byte) = buffer.get(offset) else {
+                            break 'inner;
+                        };
+
+                        post += 2 + if (byte >> 7) != 0 { 2 } else { 0 };
+
+                        continue;
                     }
 
-                    let Some(major_sync_info_len) = self.major_sync_info_len() else {
-                        return self.iter_insufficient();
-                    };
-
-                    major_sync_info_len + 2
-                } else {
-                    0
-                };
-
-                let mut post = 0;
-                let mut substreams = self.substreams;
-                let mut parity = 0;
-
-                'outer: {
-                    'inner: loop {
-                        if pre > 0 {
-                            pre -= 1;
-
-                            let Some(&byte) = buffer.get(offset) else {
-                                break 'inner;
-                            };
-
-                            parity ^= byte;
-                            offset += 1;
-
-                            continue;
-                        }
-                        if skip > 0 {
-                            skip -= 1;
-                            offset += 1;
-
-                            continue;
-                        }
-                        if post > 0 {
-                            post -= 1;
-
-                            let Some(&byte) = buffer.get(offset) else {
-                                break 'inner;
-                            };
-
-                            parity ^= byte;
-                            offset += 1;
-
-                            continue;
-                        }
-                        if substreams > 0 {
-                            substreams -= 1;
-
-                            let Some(&byte) = buffer.get(offset) else {
-                                break 'inner;
-                            };
-
-                            post += 2 + if (byte >> 7) != 0 { 2 } else { 0 };
-
-                            continue;
-                        }
-
-                        break 'outer;
-                    }
-
-                    return self.iter_insufficient();
+                    break 'outer;
                 }
 
-                if ((parity >> 4) ^ parity) & 0xF != 0xF {
-                    let error = ExtractError::ParityCheckFailed;
-                    error!("Frame parity check failed: {error}");
-
-                    break 'locked;
-                }
-
-                let Some(access_unit_len) = self.access_unit_len() else {
-                    return self.iter_insufficient();
-                };
-
-                // Even a parity-valid directory must fit inside the declared frame.
-                // In particular, never emit a zero-length frame without consuming input.
-                if access_unit_len < offset {
-                    self.error_count += 1;
-                    self.locked = false;
-                    self.consume_front(1);
-                    return Some(Err(ExtractError::InvalidAccessUnitLength {
-                        actual: access_unit_len,
-                        minimum: offset,
-                    }));
-                }
-
-                if self.buffered_len() < access_unit_len {
-                    return self.iter_insufficient();
-                };
-
-                // Use pooled buffer for zero-copy frame creation
-                let mut frame_buffer = self.buffer_pool.acquire();
-                frame_buffer.extend_from_slice(&self.buffered()[..access_unit_len]);
-                let offset = self.consumed;
-                let timestamp = self.timestamp.take();
-                self.consume_front(access_unit_len);
-
-                let frame = Frame {
-                    timestamp,
-                    data: frame_buffer.into(),
-                    index: self.frames_processed as u64,
-                    offset,
-                };
-
-                self.frames_processed += 1;
-                return Some(Ok(frame));
+                return self.iter_insufficient();
             }
 
-            if self.inited {
+            if ((parity >> 4) ^ parity) & 0xF != 0xF {
+                let error = ExtractError::ParityCheckFailed;
+                break 'locked error;
+            }
+
+            let Some(access_unit_len) = self.access_unit_len() else {
+                return self.iter_insufficient();
+            };
+
+            // Even a parity-valid directory must fit inside the declared frame.
+            // In particular, never emit a zero-length frame without consuming input.
+            if access_unit_len < offset {
                 self.error_count += 1;
-                if self.buffered_len() > 0 {
-                    self.consume_front(1);
-                }
+                self.locked = false;
+                self.consume_front(1);
+                return Some(Err(ExtractError::InvalidAccessUnitLength {
+                    actual: access_unit_len,
+                    minimum: offset,
+                }));
             }
 
-            match self.resync() {
-                Ok(_) => continue,
-                Err(ExtractError::InsufficientData) => return None,
-                Err(error) => return Some(Err(error)),
-            }
-        }
+            if self.buffered_len() < access_unit_len {
+                return self.iter_insufficient();
+            };
+
+            // Use pooled buffer for zero-copy frame creation
+            let mut frame_buffer = self.buffer_pool.acquire();
+            frame_buffer.extend_from_slice(&self.buffered()[..access_unit_len]);
+            let offset = self.consumed;
+            let timestamp = self.timestamp.take();
+            self.consume_front(access_unit_len);
+
+            let frame = Frame {
+                timestamp,
+                data: frame_buffer.into(),
+                index: self.frames_processed as u64,
+                offset,
+            };
+
+            self.frames_processed += 1;
+            return Some(Ok(frame));
+        };
+        self.error_count += 1;
+        self.locked = false;
+        self.consume_front(1);
+        Some(Err(error))
     }
 }
 
@@ -649,12 +633,14 @@ fn one_byte_fragments_preserve_a_major_sync_during_resync() -> anyhow::Result<()
 
     let mut extractor = Extractor::default();
     let mut frames = Vec::new();
+    let mut parity_failures = 0;
     for byte in &data {
         extractor.push_bytes(std::slice::from_ref(byte));
         loop {
             match extractor.next() {
                 Some(Ok(frame)) => frames.push(frame),
                 Some(Err(ExtractError::InsufficientData)) | None => break,
+                Some(Err(ExtractError::ParityCheckFailed)) => parity_failures += 1,
                 Some(Err(error)) => return Err(error.into()),
             }
         }
@@ -666,6 +652,7 @@ fn one_byte_fragments_preserve_a_major_sync_during_resync() -> anyhow::Result<()
     assert_eq!(frames[3].offset, 210);
     assert_eq!(frames[3].as_ref().len(), 20);
     assert_eq!(extractor.error_count(), 1);
+    assert_eq!(parity_failures, 1);
     assert_eq!(extractor.stream_position(), data.len() as u64);
     Ok(())
 }

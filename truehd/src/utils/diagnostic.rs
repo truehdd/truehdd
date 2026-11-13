@@ -96,6 +96,7 @@ macro_rules! rule_ids {
 
 rule_ids! {
     DecodeError => Decode / DecodeRule / "decode" {
+        SampleCapacityExceeded = "sample_capacity_exceeded",
         RecorrelatorPositiveSaturation = "recorrelator_positive_saturation",
         RecorrelatorNegativeSaturation = "recorrelator_negative_saturation",
         FilterBInputTooWide32 = "filter_b_input_too_wide32",
@@ -104,6 +105,7 @@ rule_ids! {
         OutputsExceedMaxBits = "outputs_exceed_max_bits",
     }
     ExtractError => Extract / ExtractRule / "extract" {
+        SkippedBytes = "skipped_bytes",
         InvalidAccessUnitLength = "invalid_access_unit_length",
         SubstreamMismatch = "substream_mismatch",
         ParityCheckFailed = "parity_check_failed",
@@ -187,6 +189,8 @@ rule_ids! {
         InvalidLsbBypass = "invalid_lsb_bypass",
     }
     RestartHeaderError => RestartHeader / RestartHeaderRule / "restart_header" {
+        InvalidChannelBounds = "invalid_channel_bounds",
+        MatrixChannelCapacity = "matrix_channel_capacity",
         HeavyDrcPresentInFbb = "heavy_drc_present_in_fbb",
         InvalidHiresOutputTiming = "invalid_hires_output_timing",
         InvalidHiresOutputTimingSequence = "invalid_hires_output_timing_sequence",
@@ -229,6 +233,7 @@ rule_ids! {
         CrcMismatch = "crc_mismatch",
     }
     SyncError => Sync / SyncRule / "sync" {
+        InvalidSubstreamCount = "invalid_substream_count",
         InvalidFormatSync = "invalid_format_sync",
         InvalidAudioSamplingFreq = "invalid_audio_sampling_freq",
         InvalidMajorSyncSignature = "invalid_major_sync_signature",

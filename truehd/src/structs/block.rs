@@ -509,8 +509,10 @@ impl Block {
                 channel_data[chi] = audio_data;
             }
 
-            block_data[min_chan..(max_chan + 1)]
-                .copy_from_slice(&channel_data[min_chan..(max_chan + 1)]);
+            if min_chan <= max_chan {
+                block_data[min_chan..(max_chan + 1)]
+                    .copy_from_slice(&channel_data[min_chan..(max_chan + 1)]);
+            }
 
             huffman.record(&mut state.perf.block_huffman_decode);
         }

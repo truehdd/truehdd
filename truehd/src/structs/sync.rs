@@ -24,9 +24,9 @@ use log::Level::{Error, Warn};
 use log::{debug, warn};
 
 use crate::log_or_err;
-use crate::process::PresentationMap;
 use crate::process::decode::DecoderState;
 use crate::process::parse::ParserState;
+use crate::process::{MAX_PRESENTATIONS, PresentationMap};
 use crate::structs::channel::ChannelMeaning;
 use crate::utils::bitstream_io::BsIoSliceReader;
 use crate::utils::errors::SyncError;
@@ -291,6 +291,9 @@ impl MajorSyncInfo {
         ms.variable_rate = reader.get()?;
         ms.peak_data_rate = reader.get_n(15)?;
         ms.substreams = reader.get_n::<u8>(4)? as usize;
+        if !(1..=MAX_PRESENTATIONS).contains(&ms.substreams) {
+            bail!(SyncError::InvalidSubstreamCount(ms.substreams));
+        }
 
         // peak data rate check
         if state.check_fifo
@@ -633,6 +636,9 @@ impl MajorSyncInfo {
     }
 
     pub fn update_decoder_state(&self, state: &mut DecoderState) -> Result<()> {
+        if !(1..=MAX_PRESENTATIONS).contains(&self.substreams) {
+            bail!(SyncError::InvalidSubstreamCount(self.substreams));
+        }
         self.format_info.update_decoder_state(state)?;
         if state.valid && state.substreams != self.substreams {
             state.valid = false;

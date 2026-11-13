@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `decode` no longer reports success when it could not decode a single access unit, as with an empty file, bytes that are not TrueHD, or a stream whose only major sync is damaged. It used to write nothing and exit 0; it now exits 4, as `verify` already did
 - `decode` warns when it stops at an access unit too short for its own header, where it used to stop there without a word. Comes from truehd
 - `verify` no longer reports `hires_output_timing` or lossless check faults at a splice the buffer-model conditions reject. Nothing was wrong with the audio. Comes from truehd
+- `verify` now reports bytes skipped between access units and rejects unrecognized prefixes instead of returning a clean verdict. Recognized SMPTE prefixes and clean streams keep their existing results; a reported extraction failure is counted once.
 
 ## [0.6.2] - 2026-09-15
 
