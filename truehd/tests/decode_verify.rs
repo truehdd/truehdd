@@ -29,6 +29,7 @@ const FBA_ATMOS_CBI_SLICE: &[u8] = include_bytes!("assets/fba_atmos_cbi.mlp");
 /// 400 access units of an Atmos encode whose object metadata carries the optional
 /// elements, which most encodes leave out.
 const FBA_ATMOS_DIMTRIM: &[u8] = include_bytes!("assets/fba_atmos_dimtrim.mlp");
+const FBA_SPLICED: &[u8] = include_bytes!("assets/fba_spliced.mlp");
 
 /// Access units 512..600 of an FBB (MLP) encode with two substreams: a
 /// six-channel independent presentation and its two-channel encoder downmix.

@@ -1030,6 +1030,8 @@ fn a_re_asserted_payload_still_reports_a_move() {
 
 #[test]
 fn damf_timestamp_includes_block_offset() {
+    use truehd::structs::oamd::TEST_DATA_TRIM;
+
     let mut oamd = ObjectAudioMetadataPayload::read(TEST_DATA_TRIM).unwrap();
     oamd.evo_sample_offset = 7;
     let update = &mut oamd.object_element.as_mut().unwrap().md_update_info;
