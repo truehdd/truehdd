@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Added a `NOTICE` with `truehd` and `oamd` attribution; binary release archives now include it and the existing `LICENSE`.
 
+### Changed
+- Updated dependencies (clap, crossbeam, log, serde_json)
+
 ### Fixed
 - `decode` wrote the padding that completes a stream's last access unit, up to 39 samples at 48 kHz, and counted it in `--json`. Output now ends on the stream's last sample. Comes from truehd
 - `info` showed the 2-channel presentation's channel format and Surround EX flag on the 6-channel one, and neither on the 8-channel one. Each presentation now shows its own
