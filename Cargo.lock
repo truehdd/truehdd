@@ -677,9 +677,9 @@ dependencies = [
 
 [[package]]
 name = "oamd"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76c4b9119cf66c5cdbc555ac0dbb9607a92a71e8fd6409c3217f429c05872f93"
+checksum = "690acb5e2c7e4a14c1c85ec79409856e02f4d3de94805a6548dffa0f8efad0fd"
 dependencies = [
  "anyhow",
  "bitstream-io",

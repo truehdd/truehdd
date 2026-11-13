@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated dependency floors (hmac 0.13 and sha2 0.11 behind `evo-protection`, log, thiserror)
 - `Crc8::update` advances eight bytes per step instead of one, with the same result. The substream check runs over every byte of the stream, and decoding takes 1 to 5% less time
 - **BREAKING**: `structs::oamd` re-exports the [`oamd`](https://crates.io/crates/oamd) crate, which now owns these structures. Every type and function keeps the path it had, but `TEST_DATA` is `EXAMPLE_DATA` there and the other test payloads are no longer public
+- Updated the `oamd` floor to 0.1.1, which rejects malformed metadata it used to panic on or misread
 
 ### Fixed
 - `SubstreamSegment::terminator` was never filled in, so `DecodedAccessUnit::sample_length` ignored the samples a stream's last access unit marks as padding and always reported the whole unit. It now ends where the stream does
