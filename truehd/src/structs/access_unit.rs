@@ -184,9 +184,9 @@ impl AccessUnit {
         };
 
         let directories = Timer::start();
-        for i in 0..substreams {
+        for (i, directory) in au.substream_directory[..substreams].iter_mut().enumerate() {
             state.substream_index = i;
-            au.substream_directory[i] = SubstreamDirectory::read(state, reader)?;
+            *directory = SubstreamDirectory::read(state, reader)?;
         }
         directories.record(&mut state.perf.substream_directories);
 
@@ -209,7 +209,7 @@ impl AccessUnit {
         state.au_output_timing = None;
 
         let segments = Timer::start();
-        for i in 0..substreams {
+        for (i, segment) in au.substream_segment[..substreams].iter_mut().enumerate() {
             state.substream_index = i;
 
             if state.substream_mask >> i & 1 == 0 {
@@ -230,7 +230,7 @@ impl AccessUnit {
                 trace!("Skipping substream {i} segment of length {offset}");
                 continue;
             }
-            au.substream_segment[i] = SubstreamSegment::read(state, reader)?;
+            *segment = SubstreamSegment::read(state, reader)?;
             state.has_parsed_substream = true;
         }
         segments.record(&mut state.perf.substream_segments);

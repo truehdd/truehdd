@@ -571,3 +571,27 @@ fn lossless_check_covers_lower_presentations() {
         "unexpected error: {msg}"
     );
 }
+
+/// Each clip of the splice ends its last access unit with a terminator, which carries the
+/// count of samples to drop from it, so the parsed access unit has to keep it.
+#[test]
+fn the_access_unit_ending_a_stream_keeps_its_terminator() {
+    let mut extractor = Extractor::default();
+    extractor.push_bytes(FBA_SPLICED);
+    let mut parser = Parser::default();
+    parser.set_allow_seamless_branch(true);
+
+    let terminated: Vec<usize> = extractor
+        .map_while(Result::ok)
+        .enumerate()
+        .filter_map(|(index, frame)| {
+            let access_unit = parser.parse(&frame).ok()?;
+            access_unit.substream_segment[0]
+                .terminator
+                .is_some()
+                .then_some(index)
+        })
+        .collect();
+
+    assert_eq!(terminated, [43, 343]);
+}

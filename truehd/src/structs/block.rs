@@ -143,10 +143,11 @@ impl BlockHeader {
             }
         }
 
-        for chi in restart.min_chan..=restart.max_chan {
+        let channels = restart.min_chan..=restart.max_chan;
+        for (chi, params) in channels.clone().zip(&mut bh.channel_params[channels]) {
             // params_for_this_chan
             if reader.get()? {
-                bh.channel_params[chi] = Some(ChannelParams::read(state, reader, chi)?);
+                *params = Some(ChannelParams::read(state, reader, chi)?);
             }
         }
 
