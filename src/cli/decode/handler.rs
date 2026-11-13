@@ -151,10 +151,9 @@ impl DecodeHandler {
         self.sample_buffer.clear();
         self.sample_buffer
             .reserve(decoded.sample_length * decoded.channel_count);
-        for sample_idx in 0..decoded.sample_length {
-            for ch in 0..decoded.channel_count {
-                self.sample_buffer.push(decoded.pcm_data[sample_idx][ch]);
-            }
+        for row in &decoded.pcm_data[..decoded.sample_length] {
+            self.sample_buffer
+                .extend_from_slice(&row[..decoded.channel_count]);
         }
     }
 
@@ -162,10 +161,8 @@ impl DecodeHandler {
         decoded: &truehd::process::decode::DecodedAccessUnit,
     ) -> Vec<i32> {
         let mut frame_samples = Vec::with_capacity(decoded.sample_length * decoded.channel_count);
-        for sample_idx in 0..decoded.sample_length {
-            for ch in 0..decoded.channel_count {
-                frame_samples.push(decoded.pcm_data[sample_idx][ch]);
-            }
+        for row in &decoded.pcm_data[..decoded.sample_length] {
+            frame_samples.extend_from_slice(&row[..decoded.channel_count]);
         }
         frame_samples
     }
@@ -609,23 +606,19 @@ impl DecodeHandler {
         self.sample_buffer
             .reserve(decoded.sample_length * total_output_channels);
 
-        for sample_idx in 0..decoded.sample_length {
+        let objects = bed_indices_len..bed_indices_len + self.cached_num_object_channels;
+
+        for row in &decoded.pcm_data[..decoded.sample_length] {
             // Handle bed channels using pre-computed mapping
             for &source_pos in channel_map.iter().take(TARGET_BED_CHANNELS) {
                 if let Some(source_pos) = source_pos {
-                    self.sample_buffer
-                        .push(decoded.pcm_data[sample_idx][source_pos]);
+                    self.sample_buffer.push(row[source_pos]);
                 } else {
                     self.sample_buffer.push(0i32);
                 }
             }
 
-            // Handle object channels
-            for obj_ch in 0..self.cached_num_object_channels {
-                let source_ch = bed_indices_len + obj_ch;
-                self.sample_buffer
-                    .push(decoded.pcm_data[sample_idx][source_ch]);
-            }
+            self.sample_buffer.extend_from_slice(&row[objects.clone()]);
         }
     }
 

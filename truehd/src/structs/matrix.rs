@@ -113,13 +113,14 @@ impl Matrixing {
                     let frac_bits = restart.frac_bits[pmi] as u32;
                     let cf_mask = restart.cf_mask[pmi];
 
-                    for chi in 0..=max_matrix_chan {
+                    for (chi, coeff) in matrices.m_coeff[..=max_matrix_chan].iter_mut().enumerate()
+                    {
                         if (cf_mask >> chi) & 1 == 0 {
-                            matrices.m_coeff[chi] = 0;
+                            *coeff = 0;
                             continue;
                         }
 
-                        matrices.m_coeff[chi] = reader.get_s(frac_bits + 2)?;
+                        *coeff = reader.get_s(frac_bits + 2)?;
                     }
                 }
             }
@@ -153,21 +154,21 @@ impl Matrixing {
                         let cf_mask = restart.cf_mask[pmi];
                         let delta_bits = restart.delta_bits[pmi] as u32;
 
-                        for chi in 0..=max_matrix_chan {
+                        for (chi, delta) in
+                            matrices.delta_cf[..=max_matrix_chan].iter_mut().enumerate()
+                        {
                             if delta_bits == 0 || (cf_mask >> chi) & 1 == 0 {
-                                matrices.delta_cf[chi] = 0;
+                                *delta = 0;
                                 continue;
                             }
 
-                            matrices.delta_cf[chi] = reader.get_s(delta_bits + 1)?;
+                            *delta = reader.get_s(delta_bits + 1)?;
                         }
                     }
                 }
             } else {
                 for matrices in matrixing.matrices[0..primitive_matrices].iter_mut() {
-                    for chi in 0..=max_matrix_chan {
-                        matrices.delta_cf[chi] = 0;
-                    }
+                    matrices.delta_cf[..=max_matrix_chan].fill(0);
                 }
             }
         } else {
@@ -188,15 +189,16 @@ impl Matrixing {
 
                 let coeff_bits = matrices.frac_bits as u32 + 2;
 
-                for chi in 0..=(max_matrix_chan + if restart_sync_word == 0x31EA { 2 } else { 0 }) {
+                let last_chan = max_matrix_chan + if restart_sync_word == 0x31EA { 2 } else { 0 };
+                for coeff in &mut matrices.m_coeff[..=last_chan] {
                     let m_flag = reader.get()?;
 
                     if !m_flag {
-                        matrices.m_coeff[chi] = 0;
+                        *coeff = 0;
                         continue;
                     }
 
-                    matrices.m_coeff[chi] = reader.get_s(coeff_bits)?;
+                    *coeff = reader.get_s(coeff_bits)?;
                 }
 
                 if restart_sync_word == 0x31EB {
