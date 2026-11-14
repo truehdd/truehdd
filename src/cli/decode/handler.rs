@@ -37,7 +37,6 @@ pub struct DecodeHandler {
     pub final_sample_rate: u32,
     segment_start_samples: u64,
     is_segmented: bool,
-    au_index: u64,
     pub start_time: Instant,
 
     // Bed conformance buffering
@@ -205,7 +204,6 @@ impl DecodeHandler {
             final_sample_rate: 48000,
             segment_start_samples: 0,
             is_segmented: false,
-            au_index: 0,
             start_time: Instant::now(),
 
             // Bed conformance buffering
@@ -329,24 +327,23 @@ impl DecodeHandler {
 
         self.decoded_frames += 1;
         self.total_samples += decoded.sample_length as u64;
-        self.au_index += 1;
 
         self.update_progress(pb, start_time)?;
 
         Ok(())
     }
 
-    pub(crate) fn handle_stream_restart(&mut self) -> Result<()> {
+    /// Starts a new segment, named after `stream_au`, the stream's access unit index.
+    pub(crate) fn handle_stream_restart(&mut self, stream_au: u64) -> Result<()> {
         info!(
-            "Stream restart detected at AU {}, creating new segment {}",
-            self.au_index,
+            "Stream restart detected at AU {stream_au}, creating new segment {}",
             self.segment_index + 1
         );
 
         self.segment_start_samples = self.total_samples;
         self.finalize()?;
         self.segment_index += 1;
-        self.segment_start_au = self.au_index;
+        self.segment_start_au = stream_au;
         self.is_segmented = true;
 
         // Reset for new segment
