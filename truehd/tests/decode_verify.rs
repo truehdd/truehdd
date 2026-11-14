@@ -479,6 +479,21 @@ fn fbb_copy_of_two_slice_decodes() {
     assert_eq!(resolved.samples, p0.samples);
 }
 
+/// A two-substream stream followed by a four-substream one, as where a disc turns from
+/// 5.1 to Atmos. The first major sync of the second stream declares a new substream count.
+fn surround_then_atmos() -> Vec<u8> {
+    [FBB_6CH_SLICE, FBA_ATMOS_DIMTRIM].concat()
+}
+
+#[test]
+fn the_extractor_keeps_the_access_unit_that_changes_the_substream_count() {
+    let mut extractor = Extractor::default();
+    extractor.push_bytes(&surround_then_atmos());
+    let frames = extractor.by_ref().filter(|r| r.is_ok()).count();
+
+    assert_eq!(frames, 88 + 400);
+}
+
 /// The stream's own lossless_check must catch decoded PCM that no longer
 /// matches what the encoder saw. The corruption flips one payload bit and
 /// repairs the segment parity and CRC, so only the restart header comparison

@@ -5,7 +5,7 @@ use crate::utils::buffer_pool::BufferPool;
 use crate::utils::crc::{CRC_MAJOR_SYNC_INFO_ALG, Crc16};
 use crate::utils::errors::ExtractError;
 use anyhow::Result;
-use log::error;
+use log::{error, info};
 use std::sync::Arc;
 
 /// Extracts audio frames from a continuous bitstream.
@@ -325,7 +325,7 @@ impl Iterator for Extractor {
             return None;
         }
 
-        loop {
+        'frames: loop {
             'locked: {
                 if !self.locked && self.resync().is_err() {
                     return None;
@@ -345,13 +345,15 @@ impl Iterator for Extractor {
 
                     let substreams = buffer[20] as usize >> 4;
                     if self.substreams != substreams {
-                        let error = ExtractError::SubstreamMismatch {
-                            found: substreams,
-                            expected: self.substreams,
-                        };
-                        error!("Substream count mismatch: {error}");
+                        // A new stream starts here. Lock on to this major sync again, which
+                        // checks its CRC and takes its substream count.
+                        info!(
+                            "Substream count changed from {} to {substreams}",
+                            self.substreams
+                        );
+                        self.locked = false;
 
-                        break 'locked;
+                        continue 'frames;
                     }
 
                     let Some(major_sync_info_len) = self.major_sync_info_len() else {
