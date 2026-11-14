@@ -651,6 +651,8 @@ fn run_writer_main(
     pb: Option<&ProgressBar>,
     progress_counter: Arc<AtomicU64>,
 ) -> Result<(), PipelineError> {
+    let mut stream_au = 0;
+
     for msg in rx {
         match msg {
             DecodeMsg::Decoded(mut slots) => {
@@ -660,12 +662,13 @@ fn run_writer_main(
                     };
 
                     let handler = outputs.handler_for(slot);
-                    if let Err(e) = process_frame(handler, decoded, pb) {
+                    if let Err(e) = process_frame(handler, decoded, stream_au, pb) {
                         outputs.finalize_best_effort();
                         return Err(PipelineError::Write(e));
                     }
                 }
 
+                stream_au += 1;
                 let count = progress_counter.fetch_add(1, Ordering::Relaxed) + 1;
                 if let Some(pb) = pb {
                     pb.set_position(count);
@@ -686,10 +689,11 @@ fn run_writer_main(
 fn process_frame(
     handler: &mut DecodeHandler,
     decoded: DecodedAccessUnit,
+    stream_au: u64,
     pb: Option<&ProgressBar>,
 ) -> Result<()> {
     if decoded.substream_info_changed {
-        handler.handle_stream_restart()?;
+        handler.handle_stream_restart(stream_au)?;
     }
 
     handler.handle_decoded_frame(decoded, &pb.cloned(), handler.start_time)?;
@@ -925,13 +929,18 @@ mod tests {
     }
 
     /// A stream that turns from 5.1 to Atmos part way through starts a segment whose
-    /// object metadata only arrives some access units in. The DAMF header has to name
-    /// the segment's audio and metadata files as they were written.
+    /// object metadata only arrives some access units in. The segment is named after
+    /// the access unit it starts at, and its DAMF header has to name the audio and
+    /// metadata files as they were written. The 5.1 stream is 88 access units; the
+    /// parser then cannot read the Atmos stream until its second major sync, and the
+    /// 97 access units in between are written as silence, so the segment starts at 185.
     #[test]
     fn a_segment_header_names_the_files_written() {
+        let surround = include_bytes!("../../../truehd/tests/assets/fbb_6ch.mlp");
+
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("input.thd");
-        let mut bytes = include_bytes!("../../../truehd/tests/assets/fbb_6ch.mlp").to_vec();
+        let mut bytes = surround.to_vec();
         bytes.extend_from_slice(include_bytes!(
             "../../../truehd/tests/assets/fba_atmos_dimtrim.mlp"
         ));
@@ -960,7 +969,7 @@ mod tests {
         )
         .unwrap_or_else(|e| panic!("{e}"));
 
-        let header = dir.path().join("out_0.atmos");
+        let header = dir.path().join("out_185.atmos");
         let header = std::fs::read_to_string(&header).expect("the Atmos segment has a header");
         for key in ["audio: ", "metadata: "] {
             let name = header
