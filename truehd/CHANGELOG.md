@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated the `oamd` floor to 0.1.1, which rejects malformed metadata it used to panic on or misread
 
 ### Fixed
+- The parser read the access unit where the substream count changes with the count of the stream before it, so its substream directory failed the parity check and the new stream was only read from its next major sync. It now takes the count the major sync declares, after reporting the change as before
 - The extractor kept the access unit where a stream's substream count changes, as where a disc turns from 5.1 to Atmos, only as far as one byte of it. It took the change for corruption, and the resync that followed passed over that access unit's major sync to the next one, so up to 128 access units of the new stream were lost. It now locks on to that major sync again
 - The first restart header after a branch the buffer-model conditions reject could fail with `RestartHeaderError::LosslessCheckMismatch` although nothing was decoded wrong, since its check covers samples from before the splice. That access unit is now excused, as past an accepted branch; later restart headers are checked as before (#37, fixed by @sven-pke)
 - An access unit too short for its own header raises `ExtractError::InvalidAccessUnitLength` instead of waiting indefinitely for more input, and errors met while resynchronising, such as a failed major-sync CRC, are now returned instead of ending iteration. Extraction can continue at the next candidate after either (#36, fixed by @P0SlX)

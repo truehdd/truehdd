@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `NOTICE` also credits the `oamd` crate, whose code truehd now takes from it.
 
 ### Fixed
-- `decode` lost up to 128 access units, about 107 ms, where a stream turns from one substream count to another, as where a disc turns from 5.1 to Atmos. They were not written as silence either, so the new stream started early. Comes from truehd
+- `decode` lost the start of the new stream where a stream turns from one substream count to another, as where a disc turns from 5.1 to Atmos. Up to two major sync periods of it were dropped or written as silence. It now decodes from the first access unit of the new stream. Comes from truehd
 - `decode` wrote a segment that turns to Atmos after a stream restart under three names: the audio kept its `.caf` name, the metadata took the access unit count where it was created, and the DAMF header named neither. The segment's files now share one base name and the header names them (#48)
 - A segment's file names carry the access unit where it starts in the stream, the number the restart log line gives. They used to count only the access units of that segment's presentation, so a presentation first written after a restart named its segment `_0`
 - `info` showed the 2-channel presentation's channel format and Surround EX flag on the 6-channel one, and neither on the 8-channel one. Each presentation now shows its own
