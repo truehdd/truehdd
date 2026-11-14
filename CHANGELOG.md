@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated dependencies (clap, crossbeam, log, serde_json)
 
 ### Fixed
+- `decode` now stops with parse exit code 4 when extraction rejects a frame, skips input, or ends with incomplete data, including without `--strict`. Partial output is finalized and no success summary is emitted; clean streams and recognized initial SMPTE timestamps retain their results.
 - `decode` wrote the padding that completes a stream's last access unit, up to 39 samples at 48 kHz, and counted it in `--json`. Output now ends on the stream's last sample. Comes from truehd
 - `decode` now includes the OAMD block offset in exported DAMF timestamps. Events with a nonzero block offset were previously written too early.
 - `decode` no longer warns of a FIFO underrun on every access unit after recovering from a damaged one. `verify` never did. Comes from truehd
