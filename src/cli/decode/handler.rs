@@ -26,6 +26,7 @@ pub struct DecodeHandler {
     current_audio_path: Option<PathBuf>,
     produced_files: Vec<PathBuf>,
     segment_index: u32,
+    segment_start_au: u64,
     sample_buffer: Vec<i32>,
     progress_buffer: String,
     has_atmos: bool,
@@ -193,6 +194,7 @@ impl DecodeHandler {
             current_audio_path: None,
             produced_files: Vec::new(),
             segment_index: 0,
+            segment_start_au: 0,
             sample_buffer: Vec::with_capacity(160 * 16), // TrueHD theoretical maximum
             progress_buffer: String::with_capacity(64),
             has_atmos: false,
@@ -277,11 +279,7 @@ impl DecodeHandler {
                 }
 
                 if let Some(ref base_path) = self.output_path {
-                    let effective_base = if self.is_segmented {
-                        self.get_segmented_base_path(base_path)
-                    } else {
-                        base_path.clone()
-                    };
+                    let effective_base = self.get_base_path_with_segment(base_path);
 
                     if self.bed_conform {
                         if self.bed_indices.is_some() {
@@ -311,8 +309,8 @@ impl DecodeHandler {
                     self.record_file(&create_path_with_suffix(&effective_base, "atmos"));
                 }
 
-                // Handle first-time Atmos file rename (not for segmented mode and not if we were probing)
-                if self.audio_writer.is_some() && !self.is_segmented && !was_atmos {
+                // Handle first-time Atmos file rename
+                if self.audio_writer.is_some() && !was_atmos {
                     self.handle_atmos_rename(&decoded)?;
                 }
             }
@@ -348,6 +346,7 @@ impl DecodeHandler {
         self.segment_start_samples = self.total_samples;
         self.finalize()?;
         self.segment_index += 1;
+        self.segment_start_au = self.au_index;
         self.is_segmented = true;
 
         // Reset for new segment
@@ -838,39 +837,11 @@ impl DecodeHandler {
         Ok(())
     }
 
-    fn get_segmented_base_path(&self, base_path: &Path) -> PathBuf {
-        if let Some(ref current_path) = self.current_audio_path {
-            // For segmented mode, derive base path by removing specific audio extensions
-            // but preserve the original base structure
-            let mut segmented_base = current_path.clone();
-            let path_str = current_path.to_string_lossy();
-
-            if path_str.ends_with(".atmos.audio") {
-                // Remove .atmos.audio extension
-                let base_name = path_str.strip_suffix(".atmos.audio").unwrap();
-                segmented_base = PathBuf::from(base_name);
-            } else if path_str.ends_with(".atmos.metadata") {
-                // Remove .atmos.metadata extension
-                let base_name = path_str.strip_suffix(".atmos.metadata").unwrap();
-                segmented_base = PathBuf::from(base_name);
-            } else {
-                // For other extensions, remove just the last extension
-                if let Some(stem) = current_path.file_stem() {
-                    segmented_base = current_path.with_file_name(stem);
-                }
-            }
-            segmented_base
-        } else {
-            // Use the segment naming convention for base path
-            self.get_base_path_with_segment(base_path)
-        }
-    }
-
     fn get_base_path_with_segment(&self, base_path: &Path) -> PathBuf {
         if self.segment_index > 0 {
             let filename = base_path.file_name().unwrap().to_string_lossy();
             let parent = base_path.parent().unwrap_or(Path::new("."));
-            parent.join(format!("{}_{}", filename, self.au_index))
+            parent.join(format!("{}_{}", filename, self.segment_start_au))
         } else {
             base_path.to_path_buf()
         }

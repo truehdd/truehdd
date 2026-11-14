@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `NOTICE` also credits the `oamd` crate, whose code truehd now takes from it.
 
 ### Fixed
+- `decode` wrote a segment that turns to Atmos after a stream restart under three names: the audio kept its `.caf` name, the metadata took the access unit count where it was created, and the DAMF header named neither. The segment's files now share one base name and the header names them (#48)
 - `info` showed the 2-channel presentation's channel format and Surround EX flag on the 6-channel one, and neither on the 8-channel one. Each presentation now shows its own
 - `decode` warns when it stops at an access unit too short for its own header, where it used to stop there without a word. Comes from truehd
 - `verify` no longer reports lossless check faults at a splice the buffer-model conditions reject. Nothing was wrong with the audio. Comes from truehd

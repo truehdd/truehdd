@@ -919,6 +919,53 @@ mod tests {
         assert_eq!(pcm[lost.end..], expected[lost.end..], "after it, in place");
     }
 
+    /// A stream that turns from 5.1 to Atmos part way through starts a segment whose
+    /// object metadata only arrives some access units in. The DAMF header has to name
+    /// the segment's audio and metadata files as they were written.
+    #[test]
+    fn a_segment_header_names_the_files_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("input.thd");
+        let mut bytes = include_bytes!("../../../truehd/tests/assets/fbb_6ch.mlp").to_vec();
+        bytes.extend_from_slice(include_bytes!(
+            "../../../truehd/tests/assets/fba_atmos_dimtrim.mlp"
+        ));
+        std::fs::write(&input, bytes).unwrap();
+        let output = dir.path().join("out");
+
+        let cli = Cli::try_parse_from([
+            "truehdd".as_ref(),
+            "decode".as_ref(),
+            input.as_os_str(),
+            "--output-path".as_ref(),
+            output.as_os_str(),
+            "--presentation".as_ref(),
+            "3".as_ref(),
+        ])
+        .unwrap();
+        let Commands::Decode(args) = cli.command else {
+            unreachable!()
+        };
+        run_threaded_pipeline(
+            &args,
+            Level::Error,
+            false,
+            None,
+            Arc::new(AtomicU64::new(0)),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+
+        let header = dir.path().join("out_0.atmos");
+        let header = std::fs::read_to_string(&header).expect("the Atmos segment has a header");
+        for key in ["audio: ", "metadata: "] {
+            let name = header
+                .lines()
+                .find_map(|line| line.trim().strip_prefix(key))
+                .unwrap();
+            assert!(dir.path().join(name).is_file(), "{name} is not written");
+        }
+    }
+
     /// The third access unit gets a reserved sampling frequency code after parsing. The
     /// decoder rejects it and cannot decode the fourth, which carries no major sync.
     #[test]
