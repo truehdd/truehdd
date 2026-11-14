@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-11-14
+
+### Fixed
+- The extractor kept the access unit where a stream's substream count changes, as where a disc turns from 5.1 to Atmos, only as far as one byte of it. It took the change for corruption, and the resync that followed passed over that access unit's major sync to the next one, so up to 128 access units of the new stream were lost. It now locks on to that major sync again
+- The parser read the access unit where the substream count changes with the count of the stream before it, so its substream directory failed the parity check and the new stream was only read from its next major sync. It now takes the count the major sync declares, after reporting the change as before
+
 ## [0.7.3] - 2026-11-14
 
 ### Changed
