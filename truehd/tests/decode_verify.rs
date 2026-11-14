@@ -494,6 +494,17 @@ fn the_extractor_keeps_the_access_unit_that_changes_the_substream_count() {
     assert_eq!(frames, 88 + 400);
 }
 
+#[test]
+fn the_parser_reads_the_access_unit_that_changes_the_substream_count() {
+    let mut extractor = Extractor::default();
+    extractor.push_bytes(&surround_then_atmos());
+    let mut parser = Parser::default();
+
+    for frame in extractor.by_ref().filter_map(Result::ok) {
+        parser.parse(&frame).unwrap();
+    }
+}
+
 /// The stream's own lossless_check must catch decoded PCM that no longer
 /// matches what the encoder saw. The corruption flips one payload bit and
 /// repairs the segment parity and CRC, so only the restart header comparison

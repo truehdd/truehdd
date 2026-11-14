@@ -319,21 +319,22 @@ impl MajorSyncInfo {
         state.variable_rate = ms.variable_rate;
         state.peak_data_rate = ms.peak_data_rate as usize;
 
-        if let Some(substreams) = state.substreams {
-            if substreams != ms.substreams {
-                log_or_err!(
-                    state,
-                    Warn,
-                    anyhow!(SyncError::SubstreamCountMismatch {
-                        read: ms.substreams,
-                        expected: substreams,
-                    }),
-                    reader
-                )
-            }
-        } else {
-            state.substreams = Some(ms.substreams);
+        if let Some(substreams) = state.substreams
+            && substreams != ms.substreams
+        {
+            log_or_err!(
+                state,
+                Warn,
+                anyhow!(SyncError::SubstreamCountMismatch {
+                    read: ms.substreams,
+                    expected: substreams,
+                }),
+                reader
+            )
         }
+
+        // The rest of the access unit is laid out for the count this major sync declares.
+        state.substreams = Some(ms.substreams);
 
         // FBA splits these four bits into reserved(2) and extended_substream_info(2). FBB
         // reserves all four and has no extended_substream_info; the field is kept so the

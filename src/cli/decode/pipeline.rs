@@ -931,12 +931,11 @@ mod tests {
     /// A stream that turns from 5.1 to Atmos part way through starts a segment whose
     /// object metadata only arrives some access units in. The segment is named after
     /// the access unit it starts at, and its DAMF header has to name the audio and
-    /// metadata files as they were written. The 5.1 stream is 88 access units; the
-    /// parser then cannot read the Atmos stream until its second major sync, and the
-    /// 97 access units in between are written as silence, so the segment starts at 185.
+    /// metadata files as they were written.
     #[test]
     fn a_segment_header_names_the_files_written() {
         let surround = include_bytes!("../../../truehd/tests/assets/fbb_6ch.mlp");
+        let segment_start = decode(surround).unwrap();
 
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("input.thd");
@@ -969,7 +968,7 @@ mod tests {
         )
         .unwrap_or_else(|e| panic!("{e}"));
 
-        let header = dir.path().join("out_185.atmos");
+        let header = dir.path().join(format!("out_{segment_start}.atmos"));
         let header = std::fs::read_to_string(&header).expect("the Atmos segment has a header");
         for key in ["audio: ", "metadata: "] {
             let name = header
