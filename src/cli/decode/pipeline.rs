@@ -213,7 +213,7 @@ fn run_extractor_thread(
     let result = input_reader.process_chunks(64 * 1024, |chunk| {
         extractor.push_bytes(chunk);
 
-        for frame_result in extractor.by_ref() {
+        while let Some(frame_result) = extractor.next() {
             match frame_result {
                 Ok(frame) => {
                     if tx.send(ExtractMsg::Frame(frame_index, frame)).is_err() {
@@ -224,22 +224,17 @@ fn run_extractor_thread(
                 }
                 Err(truehd::utils::errors::ExtractError::InsufficientData) => break,
                 Err(e) => {
+                    skipped_frames.store(extractor.error_count() as u64, Ordering::Relaxed);
                     if strict_mode {
-                        return Err(anyhow!("Extract error: {e}"));
+                        let _ = tx.send(ExtractMsg::Fatal(PipelineError::Parse(anyhow!(
+                            "Extract error: {e}"
+                        ))));
+                        return Ok(false);
                     }
-                    // The extractor resyncs internally; the frame is lost
+                    // The extractor resyncs on the next call; the frames up to there are lost
                     warn!("Extract error: {e}");
                 }
             }
-        }
-        // The extractor resyncs over damaged frames on its own, so the count
-        // is the only trace they leave
-        let skipped = extractor.error_count() as u64;
-        if skipped > skipped_frames.swap(skipped, Ordering::Relaxed) && strict_mode {
-            let _ = tx.send(ExtractMsg::Fatal(PipelineError::Parse(anyhow!(
-                "{skipped} corrupt frame(s) skipped"
-            ))));
-            return Ok(false);
         }
 
         Ok(true)
