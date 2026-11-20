@@ -1,9 +1,9 @@
 use anyhow::Result;
-use chrono::TimeZone;
 use std::env;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 use vergen_gitcl::{Emitter, Gitcl};
 
 fn main() -> Result<()> {
@@ -33,14 +33,11 @@ fn main() -> Result<()> {
 
     // Add build timestamp
     let now = match env::var("SOURCE_DATE_EPOCH") {
-        Ok(val) => chrono::Utc.timestamp_opt(val.parse::<i64>()?, 0).unwrap(),
-        Err(_) => chrono::Utc::now(),
+        Ok(val) => val.parse()?,
+        Err(_) => SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
     };
 
-    println!(
-        "cargo:rustc-env=BUILD_TIMESTAMP={}",
-        now.format("%Y-%m-%d %H:%M:%S UTC")
-    );
+    println!("cargo:rustc-env=BUILD_TIMESTAMP={}", format_utc(now));
 
     // Get truehd library version using cargo metadata
     let truehd_version = get_truehd_version_from_metadata().unwrap_or_else(|_| {
@@ -66,6 +63,33 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Seconds since the Unix epoch as `YYYY-MM-DD HH:MM:SS UTC`.
+fn format_utc(secs: u64) -> String {
+    let (days, time) = (secs / 86_400, secs % 86_400);
+
+    // Counted in years that start on 1 March, so a leap day is the last day of its year.
+    let days = days + 719_468;
+    let (era, day_of_era) = (days / 146_097, days % 146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month + 2) / 5 + 1;
+    let (month, carry) = if month < 10 {
+        (month + 3, 0)
+    } else {
+        (month - 9, 1)
+    };
+    let year = era * 400 + year_of_era + carry;
+
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02} UTC",
+        time / 3_600,
+        time % 3_600 / 60,
+        time % 60
+    )
 }
 
 /// Get truehd version using cargo metadata (works with published and local dependencies)

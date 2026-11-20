@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - The `NOTICE` also credits the `oamd` crate, whose code truehd now takes from it.
 
+### Changed
+- Dropped the `chrono` build dependency, which RustSec now lists as unmaintained (RUSTSEC-2026-0543), and the fourteen crates only it pulled in. The build date in `--version` reads as before
+
 ### Fixed
 - A major sync, restart header, block or terminator declaring more than the format has room for crashed `decode`, `info` and `verify`. It is now handled as any other damaged access unit. Comes from truehd (#45, reported by @Angel2mp3)
 - `verify` reports an access unit whose header fails the parity check as `extract.parity_check_failed`. It used to pass over the access units lost there without a finding, and could call the stream conformant. Comes from truehd (#45, reported by @Angel2mp3)
