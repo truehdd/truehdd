@@ -210,7 +210,11 @@ fn run_extractor_thread(
         }
     };
 
+    let mut supplied = 0u64;
+    let mut stopped = false;
+
     let result = input_reader.process_chunks(64 * 1024, |chunk| {
+        supplied += chunk.len() as u64;
         extractor.push_bytes(chunk);
 
         while let Some(frame_result) = extractor.next() {
@@ -218,6 +222,7 @@ fn run_extractor_thread(
                 Ok(frame) => {
                     if tx.send(ExtractMsg::Frame(frame_index, frame)).is_err() {
                         // Downstream exited; stop reading
+                        stopped = true;
                         return Ok(false);
                     }
                     frame_index += 1;
@@ -229,6 +234,7 @@ fn run_extractor_thread(
                         let _ = tx.send(ExtractMsg::Fatal(PipelineError::Parse(anyhow!(
                             "Extract error: {e}"
                         ))));
+                        stopped = true;
                         return Ok(false);
                     }
                     // The extractor resyncs on the next call; the frames up to there are lost
@@ -242,6 +248,18 @@ fn run_extractor_thread(
 
     if let Err(e) = result {
         let _ = tx.send(ExtractMsg::Fatal(PipelineError::Input(e)));
+        return;
+    }
+
+    let trailing = supplied.saturating_sub(extractor.stream_position());
+    if trailing > 0 && !stopped {
+        let message =
+            format!("{trailing} byte(s) at the end of the input are not a complete frame");
+        if strict_mode {
+            let _ = tx.send(ExtractMsg::Fatal(PipelineError::Parse(anyhow!(message))));
+        } else {
+            warn!("{message}");
+        }
     }
 }
 
@@ -813,7 +831,11 @@ mod tests {
     /// Six copies of the example stream's two access units.
     const ACCESS_UNITS: u64 = 12;
 
-    fn run(bytes: &[u8], format: AudioFormat) -> (TempDir, Result<DecodeSummary, PipelineError>) {
+    fn run(
+        bytes: &[u8],
+        format: AudioFormat,
+        strict: bool,
+    ) -> (TempDir, Result<DecodeSummary, PipelineError>) {
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("input.thd");
         std::fs::write(&input, bytes).unwrap();
@@ -835,7 +857,7 @@ mod tests {
         let result = run_threaded_pipeline(
             &args,
             Level::Error,
-            false,
+            strict,
             None,
             Arc::new(AtomicU64::new(0)),
         );
@@ -844,13 +866,13 @@ mod tests {
     }
 
     fn decode(bytes: &[u8]) -> Result<u64, PipelineError> {
-        run(bytes, AudioFormat::Caf)
+        run(bytes, AudioFormat::Caf, false)
             .1
             .map(|summary| summary.decoded_frames)
     }
 
     fn decode_to_pcm(bytes: &[u8]) -> (DecodeSummary, Vec<u8>) {
-        let (_dir, result) = run(bytes, AudioFormat::Pcm);
+        let (_dir, result) = run(bytes, AudioFormat::Pcm, false);
         let summary = result.unwrap_or_else(|e| panic!("{e}"));
         let pcm = std::fs::read(&summary.presentations[0].files[0]).unwrap();
 
@@ -874,6 +896,20 @@ mod tests {
         for bytes in [&[][..], &[0x5a; 4096][..]] {
             assert!(matches!(decode(bytes), Err(PipelineError::Parse(_))));
         }
+    }
+
+    /// The last access unit cut short. Nothing can be decoded from it, which is a warning
+    /// unless the run is strict.
+    #[test]
+    fn a_strict_decode_fails_on_a_last_frame_cut_short() {
+        let stream = example_stream();
+        let cut = &stream[..stream.len() - 10];
+
+        assert_eq!(decode(cut).unwrap(), ACCESS_UNITS - 1);
+        assert!(matches!(
+            run(cut, AudioFormat::Caf, true).1,
+            Err(PipelineError::Parse(_))
+        ));
     }
 
     /// A payload byte of the third access unit flipped. The parser rejects it and cannot
