@@ -88,6 +88,9 @@ pub enum ExtractError {
     #[error("Parity check failed for frame")]
     ParityCheckFailed,
 
+    #[error("Major sync declares {0} substreams, outside 1 to 4")]
+    InvalidSubstreamCount(usize),
+
     #[error("Insufficient buffer data for frame extraction")]
     InsufficientData,
 }
@@ -427,6 +430,12 @@ pub enum RestartHeaderError {
     )]
     MaxBitsMismatch { first: u8, second: u8 },
 
+    #[error("min_chan must be <= max_chan + 1. Read {min} and {max}")]
+    ChannelRangeReversed { min: u8, max: u8 },
+
+    #[error("max_matrix_chan must be <= 13 with restart_sync_word 0x31EA. Read {0}")]
+    MatrixChannelsLeaveNoNoise(u8),
+
     #[error("Channel assignment ch_assign[{index}] = {value} exceeds max_matrix_chan {max}")]
     ChannelAssignTooHigh { index: usize, value: u8, max: u8 },
 
@@ -597,6 +606,9 @@ pub enum SyncError {
 
     #[error("substreams must be constant throughout the stream. Read {read}, expected {expected}")]
     SubstreamCountMismatch { read: usize, expected: usize },
+
+    #[error("substreams must be 1 to 4. Read {0}")]
+    InvalidSubstreamCount(usize),
 
     #[error("Invalid major_sync_info, CRC failed. Calculated {calculated:#04X}, Read {read:#04X}")]
     MajorSyncCrcMismatch { calculated: u16, read: u16 },

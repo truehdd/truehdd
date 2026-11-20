@@ -816,8 +816,9 @@ impl DecoderState {
                 .channel_labels
                 .clone(),
             sampling_frequency: self.sampling_frequency,
-            sample_length: self.samples_per_au
-                - self.substream_state[presentation_idx].zero_samples,
+            sample_length: self
+                .samples_per_au
+                .saturating_sub(self.substream_state[presentation_idx].zero_samples),
             channel_count: self.substream_state[presentation_idx].max_matrix_chan + 1,
             pcm_data: *self.substream_state[presentation_idx].output_buffer,
             oamd: if presentation_idx == 3 && self.effective_presentations[3] {

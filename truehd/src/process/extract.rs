@@ -1,4 +1,5 @@
 use crate::log_or_err;
+use crate::process::MAX_PRESENTATIONS;
 use crate::structs::sync::{MAJOR_SYNC_FBA, MAJOR_SYNC_FBB};
 use crate::structs::timestamp::Timestamp;
 use crate::utils::buffer_pool::BufferPool;
@@ -260,8 +261,20 @@ impl Extractor {
                 continue;
             }
 
+            let substreams = (self.buffered()[20] >> 4) as usize;
+            if !(1..=MAX_PRESENTATIONS).contains(&substreams) {
+                self.error_count += 1;
+                self.consume_front(1);
+                log_or_err!(
+                    self,
+                    log::Level::Error,
+                    ExtractError::InvalidSubstreamCount(substreams)
+                );
+                continue;
+            }
+
             self.locked = true;
-            self.substreams = (self.buffered()[20] >> 4) as usize;
+            self.substreams = substreams;
 
             return Ok(());
         }
@@ -577,7 +590,7 @@ impl Frame {
     /// }
     /// ```
     pub fn is_major_sync(&self) -> bool {
-        self.data[4] == 0xF8 && self.data[5] == 0x72
+        self.data.get(4..6) == Some(&[0xF8, 0x72])
     }
 }
 

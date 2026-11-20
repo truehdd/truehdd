@@ -107,6 +107,7 @@ rule_ids! {
         InvalidAccessUnitLength = "invalid_access_unit_length",
         SubstreamMismatch = "substream_mismatch",
         ParityCheckFailed = "parity_check_failed",
+        InvalidSubstreamCount = "invalid_substream_count",
         InsufficientData = "insufficient_data",
     }
     ParseError => Parse / ParseRule / "parse" {
@@ -205,6 +206,8 @@ rule_ids! {
         InvalidSyncBForSubstream0 = "invalid_sync_b_for_substream0",
         InvalidSyncC = "invalid_sync_c",
         MaxBitsMismatch = "max_bits_mismatch",
+        ChannelRangeReversed = "channel_range_reversed",
+        MatrixChannelsLeaveNoNoise = "matrix_channels_leave_no_noise",
         ChannelAssignTooHigh = "channel_assign_too_high",
         ChannelAssignMisordered = "channel_assign_misordered",
         ChannelAssignDuplicate = "channel_assign_duplicate",
@@ -237,6 +240,7 @@ rule_ids! {
         FlagsMismatch = "flags_mismatch",
         PeakDataRateMismatch = "peak_data_rate_mismatch",
         SubstreamCountMismatch = "substream_count_mismatch",
+        InvalidSubstreamCount = "invalid_substream_count",
         MajorSyncCrcMismatch = "major_sync_crc_mismatch",
         ReservedSubstreamInfo = "reserved_substream_info",
         InvalidSubstreamInfo = "invalid_substream_info",

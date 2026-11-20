@@ -121,6 +121,20 @@ impl RestartHeader {
             ..Default::default()
         };
 
+        if rh.min_chan > rh.max_chan + 1 {
+            bail!(RestartHeaderError::ChannelRangeReversed {
+                min: rh.min_chan,
+                max: rh.max_chan
+            });
+        }
+
+        // 0x31EA adds two noise channels above max_matrix_chan, in rows of sixteen.
+        if rh.restart_sync_word == RestartSyncWord::A && rh.max_matrix_chan > 13 {
+            bail!(RestartHeaderError::MatrixChannelsLeaveNoNoise(
+                rh.max_matrix_chan
+            ));
+        }
+
         'check_output_timing: {
             Self::check_output_timing_matches(state, rh.output_timing, reader)?;
 

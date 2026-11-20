@@ -15,7 +15,7 @@
 //!
 //! Optional 8-bit parity check and CRC protection.
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use log::trace;
 
 use crate::log_or_err;
@@ -172,6 +172,14 @@ impl SubstreamSegment {
             }
             ss.block.push(Block::read(state, reader)?);
             decoded += state.substream_state()?.restart.block_size;
+
+            if decoded > state.samples_per_au {
+                bail!(SubstreamError::SampleCountMismatch {
+                    substream: state.substream_index,
+                    decoded,
+                    expected: state.samples_per_au,
+                });
+            }
             last_block_in_segment = reader.get()?;
             state.substream_state_mut()?.restart.block_index += 1;
         }

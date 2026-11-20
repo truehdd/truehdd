@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `NOTICE` also credits the `oamd` crate, whose code truehd now takes from it.
 
 ### Fixed
+- A major sync, restart header, block or terminator declaring more than the format has room for crashed `decode`, `info` and `verify`. It is now handled as any other damaged access unit. Comes from truehd (#45, reported by @Angel2mp3)
 - `decode` lost the start of the new stream where a stream turns from one substream count to another, as where a disc turns from 5.1 to Atmos. Up to two major sync periods of it were dropped or written as silence. It now decodes from the first access unit of the new stream. Comes from truehd
 - `decode` wrote a segment that turns to Atmos after a stream restart under three names: the audio kept its `.caf` name, the metadata took the access unit count where it was created, and the DAMF header named neither. The segment's files now share one base name and the header names them (#48)
 - A segment's file names carry the access unit where it starts in the stream, the number the restart log line gives. They used to count only the access units of that segment's presentation, so a presentation first written after a restart named its segment `_0`
