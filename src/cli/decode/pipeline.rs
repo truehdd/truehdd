@@ -1030,6 +1030,36 @@ mod tests {
         assert_eq!(summary.presentations[0].files, [dir.path().join("out.caf")]);
     }
 
+    /// The object presentation's second segment follows a first of 400 access units, and
+    /// its metadata arrives 136 in. That is inside a probe range of 200 counted from the
+    /// segment, and outside one that counts the first segment too.
+    #[test]
+    fn a_later_segment_is_probed_for_the_whole_range() {
+        let parts: [&[u8]; 4] = [
+            include_bytes!("../../../truehd/tests/assets/fba_atmos_dimtrim.mlp"),
+            include_bytes!("../../../truehd/tests/assets/fbb_6ch.mlp"),
+            include_bytes!("../../../truehd/tests/assets/fba_atmos_cbi.mlp"),
+            include_bytes!("../../../truehd/tests/assets/fba_atmos_obj.mlp"),
+        ];
+        let (_dir, result) = run_with(
+            &parts.concat(),
+            &[
+                "--presentation",
+                "3",
+                "--bed-conform",
+                "--probe-range",
+                "200",
+            ],
+            AudioFormat::Caf,
+            false,
+        );
+        let summary = result.unwrap_or_else(|e| panic!("{e}"));
+        let objects = summary.presentations.iter().find(|p| p.index == 3);
+
+        // A full 7.1.2 bed and the segment's 15 objects.
+        assert_eq!(objects.unwrap().channels, Some(25));
+    }
+
     /// The third access unit gets a reserved sampling frequency code after parsing. The
     /// decoder rejects it and cannot decode the fourth, which carries no major sync.
     #[test]

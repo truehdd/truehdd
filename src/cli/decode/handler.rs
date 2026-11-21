@@ -415,7 +415,7 @@ impl DecodeHandler {
         self.atmos_probe_buffer.push(frame_samples);
 
         // Check if we should stop probing
-        if self.decoded_frames + 1 >= self.atmos_probe_range {
+        if self.atmos_probe_buffer.len() as u64 >= self.atmos_probe_range {
             self.finalize_probing_phase()?;
         }
 

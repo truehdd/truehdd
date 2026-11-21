@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dropped the `chrono` build dependency, which RustSec now lists as unmaintained (RUSTSEC-2026-0543), and the fourteen crates only it pulled in. The build date in `--version` reads as before
 
 ### Fixed
+- `decode --bed-conform` probed a segment after the first for a single access unit once the stream was past the probe range, so a later segment was rarely conformed. Each segment is now probed for the whole range
 - `decode --bed-conform` wrote no audio for a stream or segment that ended inside the probe range without Atmos metadata, such as any presentation 3 without objects shorter than ten seconds. The access units held back for the probe are now written when the segment ends
 - `decode --bed-conform` damaged the `.atmos.audio` of a segment whose Atmos metadata first arrived after the probe range. Rows widened to the conformed layout went into a file whose header already stated the decoded channel count. Such a segment now keeps its decoded bed, with a warning that names `--probe-range`
 - A major sync, restart header, block or terminator declaring more than the format has room for crashed `decode`, `info` and `verify`. It is now handled as any other damaged access unit. Comes from truehd (#45, reported by @Angel2mp3)
