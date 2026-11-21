@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - `Crc8::update` advances eight bytes per step instead of one, with the same result. The substream check runs over every byte of the stream, and decoding takes 1 to 5% less time
 - **BREAKING**: `structs::oamd` re-exports the [`oamd`](https://crates.io/crates/oamd) crate, which now owns these structures. Every type and function keeps the path it had, but `TEST_DATA` is `EXAMPLE_DATA` there and the other test payloads are no longer public
-- Updated the `oamd` floor to 0.1.1, which rejects malformed metadata it used to panic on or misread
+- Updated the `oamd` floor to 0.1.2. It rejects malformed metadata it used to panic on or misread, and corrects the depth factor of a screen-anchored object, the gain of an object coded to repeat the previous object's, and the reserved divergence mode 3
 
 ### Fixed
 - Headers declaring more than the format has room for made the parser or decoder index past fixed-size state and panic. A major sync with 0 or more than 4 substreams, a restart header whose `min_chan` exceeds `max_chan + 1` or whose 0x31EA noise channels would pass the sixteenth channel, and blocks holding more samples than the access unit are now errors, and a terminator dropping more samples than the access unit holds leaves it empty (#45, reported by @Angel2mp3)
