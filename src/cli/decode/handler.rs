@@ -253,9 +253,15 @@ impl DecodeHandler {
                     .first()
                     .map(|bed| bed.to_index_vec());
 
-                // Build performance cache for bed conformance if needed
                 if self.bed_conform {
-                    self.build_bed_conformance_cache(decoded.channel_count);
+                    if self.effective_channel_count.is_none() {
+                        self.build_bed_conformance_cache(decoded.channel_count);
+                    } else {
+                        warn!(
+                            "Object audio metadata arrived after the {} access unit(s) probed for it, so this segment keeps its decoded bed. Raise --probe-range to conform it",
+                            self.atmos_probe_range
+                        );
+                    }
                 }
 
                 // If we were probing, finalize now that we found Atmos
@@ -279,22 +285,13 @@ impl DecodeHandler {
                 if let Some(ref base_path) = self.output_path {
                     let effective_base = self.get_base_path_with_segment(base_path);
 
-                    if self.bed_conform {
-                        if self.bed_indices.is_some() {
-                            rewrite_damf_header_for_bed_conform(
-                                &effective_base,
-                                oamd,
-                                self.warp_mode,
-                                self.frame_rate,
-                            )?;
-                        } else {
-                            create_damf_header_file(
-                                &effective_base,
-                                oamd,
-                                self.warp_mode,
-                                self.frame_rate,
-                            )?;
-                        }
+                    if self.conforms_bed() && self.bed_indices.is_some() {
+                        rewrite_damf_header_for_bed_conform(
+                            &effective_base,
+                            oamd,
+                            self.warp_mode,
+                            self.frame_rate,
+                        )?;
                     } else {
                         create_damf_header_file(
                             &effective_base,
@@ -386,8 +383,8 @@ impl DecodeHandler {
         self.calculate_and_cache_channel_count(decoded);
         let channel_count = self.effective_channel_count.unwrap();
 
-        if self.bed_conform && self.has_atmos {
-            self.write_bed_conform_samples(decoded);
+        if self.conforms_bed() {
+            self.apply_bed_conformance_direct(decoded);
         } else {
             self.extract_samples_into_buffer(decoded);
         }
@@ -473,7 +470,7 @@ impl DecodeHandler {
     fn write_buffered_samples(&mut self, channel_count: usize) -> Result<()> {
         // Clone the buffer to avoid borrowing conflicts
         let buffered_frames = self.atmos_probe_buffer.clone();
-        let apply_bed_conform = self.bed_conform && self.has_atmos;
+        let apply_bed_conform = self.conforms_bed();
         let original_channel_count = self.buffered_channel_count;
 
         if let Some(ref mut writer) = self.audio_writer {
@@ -531,27 +528,16 @@ impl DecodeHandler {
         conformed_samples
     }
 
-    fn write_bed_conform_samples(&mut self, decoded: &truehd::process::decode::DecodedAccessUnit) {
-        if self.cached_bed_channel_map.is_some() {
-            // Use optimized direct-to-buffer approach
-            self.apply_bed_conformance_direct(decoded);
-        } else {
-            // Fallback to original method for edge cases
-            let frame_samples = Self::extract_samples_from_frame(decoded);
-            let conformed_samples = Self::apply_bed_conformance_to_samples_static(
-                &frame_samples,
-                decoded.channel_count,
-                &self.bed_indices,
-            );
-            self.sample_buffer.clear();
-            self.sample_buffer.extend(conformed_samples);
-        }
+    /// Whether this segment's audio is written around a full 7.1.2 bed. Settled once
+    /// the segment's channel count is, since the audio file's header states it.
+    fn conforms_bed(&self) -> bool {
+        self.cached_bed_channel_map.is_some()
     }
 
     fn get_channel_info(&self, original_count: usize) -> ChannelInfo {
         if self.has_atmos {
             let bed_indices = self.bed_indices.as_deref().unwrap_or(EMPTY_BED_INDICES);
-            ChannelInfo::for_atmos(original_count, bed_indices, self.bed_conform)
+            ChannelInfo::for_atmos(original_count, bed_indices, self.conforms_bed())
         } else {
             ChannelInfo::for_regular(original_count)
         }
@@ -561,7 +547,7 @@ impl DecodeHandler {
     fn get_display_channel_info(&self, original_count: usize) -> ChannelInfo {
         if self.has_atmos && self.bed_indices.is_some() {
             let bed_indices = self.bed_indices.as_deref().unwrap_or(EMPTY_BED_INDICES);
-            ChannelInfo::for_atmos(original_count, bed_indices, self.bed_conform)
+            ChannelInfo::for_atmos(original_count, bed_indices, self.conforms_bed())
         } else {
             ChannelInfo::for_regular(original_count)
         }

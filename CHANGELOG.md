@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dropped the `chrono` build dependency, which RustSec now lists as unmaintained (RUSTSEC-2026-0543), and the fourteen crates only it pulled in. The build date in `--version` reads as before
 
 ### Fixed
+- `decode --bed-conform` damaged the `.atmos.audio` of a segment whose Atmos metadata first arrived after the probe range. Rows widened to the conformed layout went into a file whose header already stated the decoded channel count. Such a segment now keeps its decoded bed, with a warning that names `--probe-range`
 - A major sync, restart header, block or terminator declaring more than the format has room for crashed `decode`, `info` and `verify`. It is now handled as any other damaged access unit. Comes from truehd (#45, reported by @Angel2mp3)
 - `verify` reports an access unit whose header fails the parity check as `extract.parity_check_failed`. It used to pass over the access units lost there without a finding, and could call the stream conformant. Comes from truehd (#45, reported by @Angel2mp3)
 - `decode --strict` stops at an access unit the extractor rejects. It used to finish the 64 KiB it was reading first, and so wrote audio from past the loss before failing

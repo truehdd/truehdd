@@ -836,18 +836,31 @@ mod tests {
         format: AudioFormat,
         strict: bool,
     ) -> (TempDir, Result<DecodeSummary, PipelineError>) {
+        run_with(bytes, &[], format, strict)
+    }
+
+    fn run_with(
+        bytes: &[u8],
+        options: &[&str],
+        format: AudioFormat,
+        strict: bool,
+    ) -> (TempDir, Result<DecodeSummary, PipelineError>) {
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("input.thd");
         std::fs::write(&input, bytes).unwrap();
         let output = dir.path().join("out");
 
-        let cli = Cli::try_parse_from([
-            "truehdd".as_ref(),
-            "decode".as_ref(),
-            input.as_os_str(),
-            "--output-path".as_ref(),
-            output.as_os_str(),
-        ])
+        let cli = Cli::try_parse_from(
+            [
+                "truehdd".as_ref(),
+                "decode".as_ref(),
+                input.as_os_str(),
+                "--output-path".as_ref(),
+                output.as_os_str(),
+            ]
+            .into_iter()
+            .chain(options.iter().map(AsRef::as_ref)),
+        )
         .unwrap();
         let Commands::Decode(mut args) = cli.command else {
             unreachable!()
@@ -963,36 +976,12 @@ mod tests {
         let surround = include_bytes!("../../../truehd/tests/assets/fbb_6ch.mlp");
         let segment_start = decode(surround).unwrap();
 
-        let dir = tempfile::tempdir().unwrap();
-        let input = dir.path().join("input.thd");
         let mut bytes = surround.to_vec();
         bytes.extend_from_slice(include_bytes!(
             "../../../truehd/tests/assets/fba_atmos_dimtrim.mlp"
         ));
-        std::fs::write(&input, bytes).unwrap();
-        let output = dir.path().join("out");
-
-        let cli = Cli::try_parse_from([
-            "truehdd".as_ref(),
-            "decode".as_ref(),
-            input.as_os_str(),
-            "--output-path".as_ref(),
-            output.as_os_str(),
-            "--presentation".as_ref(),
-            "3".as_ref(),
-        ])
-        .unwrap();
-        let Commands::Decode(args) = cli.command else {
-            unreachable!()
-        };
-        run_threaded_pipeline(
-            &args,
-            Level::Error,
-            false,
-            None,
-            Arc::new(AtomicU64::new(0)),
-        )
-        .unwrap_or_else(|e| panic!("{e}"));
+        let (dir, result) = run_with(&bytes, &["--presentation", "3"], AudioFormat::Caf, false);
+        result.unwrap_or_else(|e| panic!("{e}"));
 
         let header = dir.path().join(format!("out_{segment_start}.atmos"));
         let header = std::fs::read_to_string(&header).expect("the Atmos segment has a header");
@@ -1003,6 +992,26 @@ mod tests {
                 .unwrap();
             assert!(dir.path().join(name).is_file(), "{name} is not written");
         }
+    }
+
+    /// Atmos metadata that only arrives once the audio file is open finds its channel
+    /// count already stated, so the bed stays as decoded.
+    #[test]
+    fn metadata_after_the_probe_leaves_the_bed_as_decoded() {
+        let mut bytes = include_bytes!("../../../truehd/tests/assets/fba_atmos_cbi.mlp").to_vec();
+        bytes.extend_from_slice(include_bytes!(
+            "../../../truehd/tests/assets/fba_atmos_obj.mlp"
+        ));
+        let audio = |options: &[&str]| {
+            let (dir, result) = run_with(&bytes, options, AudioFormat::Caf, false);
+            result.unwrap_or_else(|e| panic!("{e}"));
+            std::fs::read(dir.path().join("out.atmos.audio")).unwrap()
+        };
+
+        let decoded = audio(&["--presentation", "3"]);
+        let probed = audio(&["--presentation", "3", "--bed-conform", "--probe-range", "1"]);
+
+        assert!(probed == decoded, "the audio is not the decoded channels");
     }
 
     /// The third access unit gets a reserved sampling frequency code after parsing. The
