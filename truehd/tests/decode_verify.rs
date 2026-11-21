@@ -30,6 +30,10 @@ const FBA_ATMOS_CBI_SLICE: &[u8] = include_bytes!("assets/fba_atmos_cbi.mlp");
 /// elements, which most encodes leave out.
 const FBA_ATMOS_DIMTRIM: &[u8] = include_bytes!("assets/fba_atmos_dimtrim.mlp");
 
+/// 140 access units of an Atmos encode with four substreams, whose substream_info places
+/// the six and eight channel presentations differently from `FBA_ATMOS_DIMTRIM`.
+const FBA_ATMOS_OBJ: &[u8] = include_bytes!("assets/fba_atmos_obj.mlp");
+
 /// Access units 512..600 of an FBB (MLP) encode with two substreams: a
 /// six-channel independent presentation and its two-channel encoder downmix.
 /// 88 access units, 3520 samples at 48 kHz.
@@ -510,6 +514,49 @@ fn the_parser_reads_the_access_unit_that_changes_the_substream_count() {
     for frame in extractor.by_ref().filter_map(Result::ok) {
         parser.parse(&frame).unwrap();
     }
+}
+
+/// Decodes one presentation, returning its samples and the index of every access unit
+/// that reported a substream_info change.
+fn decode_one(data: &[u8], presentation: usize) -> (Vec<i32>, Vec<usize>) {
+    let mut extractor = Extractor::default();
+    extractor.push_bytes(data);
+    let mut parser = Parser::default();
+    let mut decoder = Decoder::default();
+    let mut pcm = Vec::new();
+    let mut changes = Vec::new();
+
+    for (index, frame) in extractor.by_ref().filter_map(Result::ok).enumerate() {
+        let access_unit = parser.parse(&frame).unwrap();
+        let decoded = decoder
+            .decode_presentation(&access_unit, presentation)
+            .unwrap();
+        if decoded.substream_info_changed {
+            changes.push(index);
+        }
+        for row in &decoded.pcm_data[..decoded.sample_length] {
+            pcm.extend_from_slice(&row[..decoded.channel_count]);
+        }
+    }
+
+    (pcm, changes)
+}
+
+/// Two four-substream streams end to end. The second builds its eight-channel
+/// presentation from substreams the first one's does not use.
+#[test]
+fn a_substream_info_change_reaches_the_substreams_decoded() {
+    let (spliced, _) = decode_one(&[FBA_ATMOS_OBJ, FBA_ATMOS_DIMTRIM].concat(), 2);
+    let (alone, _) = decode_one(FBA_ATMOS_DIMTRIM, 2);
+
+    assert!(spliced.ends_with(&alone));
+}
+
+#[test]
+fn a_substream_count_change_is_reported_as_a_substream_info_change() {
+    let (_, changes) = decode_one(&surround_then_atmos(), 1);
+
+    assert_eq!(changes, [88]);
 }
 
 /// The stream's own lossless_check must catch decoded PCM that no longer

@@ -640,16 +640,17 @@ impl MajorSyncInfo {
     pub fn update_decoder_state(&self, state: &mut DecoderState) -> Result<()> {
         self.format_info.update_decoder_state(state)?;
         if state.valid && state.substreams != self.substreams {
-            state.valid = false;
             warn!(
                 "Substream count must be constant: expected {}, found {}",
                 state.substreams, self.substreams
             )
         }
 
-        // Check for substream info changes that would require new output files
+        // The presentations, the substreams they need and their channel labels all follow
+        // from these three, so a change of any of them starts the decoder over.
         if state.valid
-            && (state.substream_info != self.substream_info
+            && (state.substreams != self.substreams
+                || state.substream_info != self.substream_info
                 || state.extended_substream_info != self.extended_substream_info)
         {
             log::debug!(
@@ -659,6 +660,7 @@ impl MajorSyncInfo {
                 state.extended_substream_info,
                 self.extended_substream_info
             );
+            state.valid = false;
             state.substream_info_changed = true;
         }
 

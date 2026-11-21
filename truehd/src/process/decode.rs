@@ -137,8 +137,9 @@ pub struct DecodedAccessUnit {
 
     /// Indicates whether this access unit triggered a substream info change.
     ///
-    /// This is `true` when substream_info or extended_substream_info changed,
-    /// indicating that channel layout may have changed requiring new output files.
+    /// This is `true` when the substream count, substream_info or
+    /// extended_substream_info changed, indicating that channel layout may have
+    /// changed requiring new output files.
     pub substream_info_changed: bool,
 }
 
