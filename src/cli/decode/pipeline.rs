@@ -1014,6 +1014,22 @@ mod tests {
         assert!(probed == decoded, "the audio is not the decoded channels");
     }
 
+    /// A probe still waiting for Atmos metadata when the stream ends holds every access
+    /// unit decoded so far.
+    #[test]
+    fn a_stream_shorter_than_the_probe_is_written() {
+        let bytes = include_bytes!("../../../truehd/tests/assets/fba_atmos_cbi.mlp");
+        let (dir, result) = run_with(
+            bytes,
+            &["--presentation", "3", "--bed-conform"],
+            AudioFormat::Caf,
+            false,
+        );
+        let summary = result.unwrap_or_else(|e| panic!("{e}"));
+
+        assert_eq!(summary.presentations[0].files, [dir.path().join("out.caf")]);
+    }
+
     /// The third access unit gets a reserved sampling frequency code after parsing. The
     /// decoder rejects it and cannot decode the fourth, which carries no major sync.
     #[test]

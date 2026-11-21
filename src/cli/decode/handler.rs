@@ -888,6 +888,10 @@ impl DecodeHandler {
             warn!("No object audio metadata in this presentation, nothing written");
         }
 
+        if self.atmos_probing && !self.atmos_probe_buffer.is_empty() {
+            self.finalize_probing_phase()?;
+        }
+
         if let Some(ref mut writer) = self.audio_writer {
             writer.finish()?;
         }
