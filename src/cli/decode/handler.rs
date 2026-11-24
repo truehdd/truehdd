@@ -285,7 +285,7 @@ impl DecodeHandler {
                 if let Some(ref base_path) = self.output_path {
                     let effective_base = self.get_base_path_with_segment(base_path);
 
-                    if self.conforms_bed() && self.bed_indices.is_some() {
+                    if self.conforms_bed() {
                         rewrite_damf_header_for_bed_conform(
                             &effective_base,
                             oamd,

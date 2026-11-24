@@ -406,7 +406,7 @@ impl Configuration {
             bail!("multiple update blocks are not supported yet, please submit a sample");
         }
 
-        if oamd.program_assignment.bed_assignment.len() != 1 {
+        if oamd.program_assignment.bed_assignment.len() > 1 {
             bail!("multiple bed instances are not supported yet, please submit a sample");
         }
 
@@ -857,6 +857,21 @@ const TEST_DATA_TRIM: &[u8] = &[
     0x03, 0x81, 0xF7, 0xC2, 0x07, 0xFB, 0xEF, 0x84, 0x0E, 0x00, 0x10, 0x08, 0x1C, 0x00, 0x20, 0x10,
     0x02, 0xB2, 0x20, 0xCC, 0xE6, 0xAB, 0xEF, 0x0C, 0xED, 0x0D, 0x29, 0x86, 0x85, 0x80,
 ];
+
+/// A program of objects alone has no bed assignment, and its objects are numbered from
+/// 10 as they are past a bed.
+#[test]
+fn a_program_without_a_bed_is_described() {
+    let mut oamd = ObjectAudioMetadataPayload::read(TEST_DATA_TRIM).unwrap();
+    oamd.program_assignment.bed_assignment.clear();
+    for object in &mut oamd.object_element.as_mut().unwrap().object_data {
+        object[0].b_object_in_bed_or_isf = false;
+    }
+
+    let configuration = Configuration::with_oamd_payload(&oamd, 48000, 0).unwrap();
+
+    assert_eq!(configuration.events[0].id, Some(10));
+}
 
 #[test]
 fn damf() {
