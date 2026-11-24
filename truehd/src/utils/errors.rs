@@ -75,6 +75,9 @@ pub enum DecodeError {
 
     #[error("Outputs in substream {substream} use more than max_bits {max_bits} bits")]
     OutputsExceedMaxBits { substream: usize, max_bits: u8 },
+
+    #[error("Object audio metadata cannot be read: {0}")]
+    UnreadableObjectAudioMetadata(String),
 }
 
 #[derive(thiserror::Error, Debug)]

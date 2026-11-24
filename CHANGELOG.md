@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dropped the `chrono` build dependency, which RustSec now lists as unmaintained (RUSTSEC-2026-0543), and the fourteen crates only it pulled in. The build date in `--version` reads as before
 
 ### Fixed
+- `decode` wrote silence up to the next major sync, on every presentation, when an access unit carried Atmos metadata it could not read. Only that metadata is skipped now, with a warning, and `--strict` still fails. Comes from truehd
 - `decode` ran a few samples long on a stream whose last access unit carries a major sync, writing the padding that access unit marks as audio. Comes from truehd
 - `decode` could write wrong samples for a stereo, 5.1 or DVD-Audio substream that scales its dither noise, which no stream seen so far does. Comes from truehd
 - `decode` and `verify` reported a FIFO underrun on every access unit after a stream turned to another presentation layout, as where one Atmos title follows another. The audio was right; the warnings are gone. Comes from truehd

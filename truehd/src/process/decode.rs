@@ -347,16 +347,30 @@ impl DecoderState {
         self.has_duplicate_sample = false;
         self.oamd.clear();
 
-        if let Some(extra_data) = &access_unit.extra_data
+        // Only the object presentation is described by this metadata, and its audio does
+        // not depend on it, so a payload that cannot be read costs that payload alone.
+        if self.effective_presentations[3]
+            && let Some(extra_data) = &access_unit.extra_data
             && let Some(evo_frame) = &extra_data.evo_frame
         {
             for evo_payload in &evo_frame.evo_payloads {
-                if evo_payload.evo_payload_id == 11 {
-                    let smploffst =
-                        evo_payload.evo_payload_config.smploffst.unwrap_or_default() as u64;
-                    let mut oamd = ObjectAudioMetadataPayload::read(&evo_payload.evo_payload_byte)?;
-                    oamd.evo_sample_offset = smploffst;
-                    self.oamd.push_back(oamd);
+                if evo_payload.evo_payload_id != 11 {
+                    continue;
+                }
+
+                match ObjectAudioMetadataPayload::read(&evo_payload.evo_payload_byte) {
+                    Ok(mut oamd) => {
+                        oamd.evo_sample_offset =
+                            evo_payload.evo_payload_config.smploffst.unwrap_or_default() as u64;
+                        self.oamd.push_back(oamd);
+                    }
+                    Err(error) => log_or_err!(
+                        self,
+                        log::Level::Warn,
+                        anyhow!(DecodeError::UnreadableObjectAudioMetadata(
+                            error.to_string()
+                        ))
+                    ),
                 }
             }
         }

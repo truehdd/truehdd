@@ -564,6 +564,26 @@ fn a_terminator_beside_a_restart_header_still_shortens_the_access_unit() {
     assert_eq!(decoded.sample_length, 32);
 }
 
+/// Object audio metadata describes the object presentation's audio and takes no part in
+/// decoding it, so a payload that cannot be read is no reason to lose the access unit.
+#[test]
+fn unreadable_object_audio_metadata_leaves_the_audio_decodable() {
+    let mut extractor = Extractor::default();
+    extractor.push_bytes(FBA_ATMOS_OBJ);
+    let frame = extractor.next().unwrap().unwrap();
+    let mut access_unit = Parser::default().parse(&frame).unwrap();
+    let evo_frame = access_unit.extra_data.as_mut().unwrap().evo_frame.as_mut();
+    for payload in &mut evo_frame.unwrap().evo_payloads {
+        payload.evo_payload_byte.clear();
+    }
+
+    let decoded = Decoder::default()
+        .decode_presentation(&access_unit, 3)
+        .unwrap();
+
+    assert!(decoded.oamd.is_empty());
+}
+
 /// Two four-substream streams end to end. The second builds its eight-channel
 /// presentation from substreams the first one's does not use.
 #[test]

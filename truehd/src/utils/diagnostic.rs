@@ -102,6 +102,7 @@ rule_ids! {
         FilterBInputTooWide24 = "filter_b_input_too_wide24",
         InvalidPresentation = "invalid_presentation",
         OutputsExceedMaxBits = "outputs_exceed_max_bits",
+        UnreadableObjectAudioMetadata = "unreadable_object_audio_metadata",
     }
     ExtractError => Extract / ExtractRule / "extract" {
         InvalidAccessUnitLength = "invalid_access_unit_length",
