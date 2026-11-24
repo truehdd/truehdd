@@ -270,10 +270,14 @@ impl RestartHeader {
                         state.has_valid_branch = true;
                         state.reset_for_branch();
 
+                        // Against the history the check above compares with, which
+                        // starts over wherever the stream does.
                         state.output_timing_deviation = state
                             .output_timing
-                            .wrapping_sub(state.first_output_timing)
-                            .wrapping_sub(state.au_counter * samples_per_au)
+                            .wrapping_sub(samples_per_au)
+                            .wrapping_sub(
+                                state.substream_state()?.output_timing_history[history_index],
+                            )
                             & 0xFFFF;
 
                         // The arrival was unwrapped before the branch was judged, so a

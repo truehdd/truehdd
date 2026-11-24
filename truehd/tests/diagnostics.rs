@@ -266,6 +266,33 @@ fn a_stream_after_a_substream_info_change_is_timed_on_its_own_clock() {
     assert_eq!(underruns, 0);
 }
 
+/// A stream that began again part way, here at a `substream_info` change, measures a
+/// later branch from where it began. Measured from the first access unit, the branch
+/// leaves every major sync after it looking like another one.
+#[test]
+fn a_branch_after_a_restarted_stream_is_the_only_one_found() {
+    let spliced = [FBA_ATMOS_OBJ, FBA_ATMOS_DIMTRIM, FBA_ATMOS_DIMTRIM].concat();
+    let mut extractor = Extractor::default();
+    extractor.push_bytes(&spliced);
+    let mut parser = Parser::default();
+
+    let branches: Vec<usize> = extractor
+        .by_ref()
+        .flatten()
+        .enumerate()
+        .filter_map(|(index, frame)| {
+            parser
+                .parse(&frame)
+                .unwrap()
+                .has_valid_branch
+                .then_some(index)
+        })
+        .collect();
+
+    // The change of substream_info, then the second copy following the first.
+    assert_eq!(branches, [140, 540]);
+}
+
 /// The blocks of a substream segment carry exactly one access unit of samples between
 /// them. Shrinking one block's `block_size` leaves the segment short, which the segment's
 /// own parity and CRC also notice, but neither of those says how many samples were lost.
