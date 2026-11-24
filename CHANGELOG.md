@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dropped the `chrono` build dependency, which RustSec now lists as unmaintained (RUSTSEC-2026-0543), and the fourteen crates only it pulled in. The build date in `--version` reads as before
 
 ### Fixed
+- The `verify` summary of a damaged stream covered only what followed the last access unit that failed, so one failure near the end left the FIFO depths, maxima and average access unit size describing almost nothing. Comes from truehd
 - `decode` and `verify` reported a seamless branch at every major sync after the first accepted branch of a stream that had already restarted once, along with FIFO and timing findings that followed from it. Comes from truehd
 - `decode` read its whole input once to count frames even when no progress bar was asked for, which used up an input that can only be read once. `/dev/stdin`, a process substitution or a named pipe given as the input path decoded to nothing or hung. The count is now made only for a progress bar over a regular file (#28)
 - `decode` wrote a second `sampleRate` and `events` header into `.atmos.metadata` after an Atmos metadata payload that describes no object, which left the file invalid. Such a payload is now passed over

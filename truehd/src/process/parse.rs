@@ -772,8 +772,17 @@ impl ParserState {
 
     pub fn reset_for_next_major_sync(&mut self) {
         let diagnostics = std::mem::take(&mut self.diagnostics);
+        let mut fifo_depth = std::mem::take(&mut self.fifo_depth);
+        fifo_depth.restart();
 
         *self = Self {
+            // What was measured over the stream so far still describes it.
+            fifo_depth,
+            max_data_rate: self.max_data_rate,
+            max_data_rate_au_index: self.max_data_rate_au_index,
+            max_latency: self.max_latency,
+            max_access_unit_size: self.max_access_unit_size,
+            total_access_unit_length: self.total_access_unit_length,
             fail_level: self.fail_level,
             allow_seamless_branch: self.allow_seamless_branch,
             check_fifo: self.check_fifo,

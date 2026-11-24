@@ -174,6 +174,27 @@ fn a_failed_access_unit_does_not_end_the_stream() {
     );
 }
 
+/// What the parser measured before an access unit failed still describes the stream.
+/// Here the last major sync is damaged, so nothing after it is parsed.
+#[test]
+fn measurements_outlive_a_failed_access_unit() {
+    let measured = |data: &[u8]| {
+        let mut extractor = Extractor::default();
+        extractor.push_bytes(data);
+        let mut parser = Parser::default();
+        for frame in extractor.by_ref().flatten() {
+            parser.parse_recovering(&frame);
+        }
+        parser.total_access_unit_bytes()
+    };
+
+    let mut damaged = repeated_example(6);
+    // A payload byte of the eleventh access unit, the first of the last copy.
+    damaged[5 * EXAMPLE_DATA.len() + 16 + 60] ^= 0xFF;
+
+    assert_eq!(measured(&damaged), measured(&repeated_example(5)));
+}
+
 /// `data` as a fixed-rate stream: every access unit arrives when the bytes before it
 /// have, at the peak data rate the major syncs are rewritten to state.
 fn at_a_fixed_rate(data: &[u8]) -> Vec<u8> {
