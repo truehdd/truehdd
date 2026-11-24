@@ -412,9 +412,9 @@ fn run_decoder_thread(
                             warn!(
                                 "Decode error at frame {index}: {e}; resuming at next major sync"
                             );
-                            decoder.reset_for_next_major_sync();
                             resyncing = true;
                         }
+                        decoder.reset_for_next_major_sync();
                         if !concealment.conceal(index, &tx) {
                             return;
                         }
@@ -1138,5 +1138,14 @@ mod tests {
             })
             .collect();
         assert_eq!(changes, [4]);
+    }
+
+    /// The fifth access unit fails while the decoder is still looking for a major sync
+    /// after the third. The sixth carries none, so it cannot be decoded either.
+    #[test]
+    fn a_failed_major_sync_while_resyncing_leaves_nothing_to_decode_from() {
+        let (_, concealed) = decode_rejecting(&[2, 4], &[]);
+
+        assert_eq!(concealed, 4);
     }
 }
