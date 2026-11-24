@@ -591,16 +591,10 @@ impl DecoderState {
                     for blki in 0..block_size {
                         let rematrix_buffer = &mut rematrix_buffer[blki];
                         let bypassed_lsb = &mut bypassed_lsb[blki];
-                        let dither_seed_shr7 = *dither_seed >> 7;
+                        let noise = noise_31ea(dither_seed, dither_shift);
 
-                        rematrix_buffer[max_matrix_chan + 1] =
-                            (((*dither_seed >> 15) as i8) << dither_shift) as i32;
-                        rematrix_buffer[max_matrix_chan + 2] =
-                            ((dither_seed_shr7 as i8) << dither_shift) as i32;
-
-                        *dither_seed =
-                            (dither_seed_shr7 ^ (dither_seed_shr7 << 5) ^ (*dither_seed << 16))
-                                & 0x7FFFFF;
+                        rematrix_buffer[max_matrix_chan + 1] = noise[0];
+                        rematrix_buffer[max_matrix_chan + 2] = noise[1];
 
                         for pmi in 0..primitive_matrices {
                             let mut acc = 0;
@@ -826,9 +820,30 @@ impl DecoderState {
     }
 }
 
+/// The next sample of the two noise channels a 0x31EA substream's matrices read, each a
+/// signed byte of the seed scaled by `dither_shift`.
+fn noise_31ea(dither_seed: &mut u32, dither_shift: u32) -> [i32; 2] {
+    let seed_shr7 = *dither_seed >> 7;
+    let noise = [
+        ((*dither_seed >> 15) as i8 as i32) << dither_shift,
+        (seed_shr7 as i8 as i32) << dither_shift,
+    ];
+
+    *dither_seed = (seed_shr7 ^ (seed_shr7 << 5) ^ (*dither_seed << 16)) & 0x7FFFFF;
+
+    noise
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shifted_noise_keeps_the_bits_above_a_byte() {
+        let mut seed = 100 << 15;
+
+        assert_eq!(noise_31ea(&mut seed, 1)[0], 200);
+    }
 
     #[test]
     fn a_presentation_above_the_copy_target_of_a_higher_one_is_decoded() {
