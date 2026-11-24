@@ -82,11 +82,12 @@ impl ExtraChannelMeaning {
                     ecm.sixteench_dynamic_object_count = reader.get_n(5)?;
                 }
             }
-
-            let pos = reader.position()?;
-
-            reader.seek((end_pos - pos) as i64)?;
         }
+
+        // The block is as long as it declares, whether its fields are read, fall short
+        // of that or run past it.
+        let pos = reader.position()?;
+        reader.seek(end_pos as i64 - pos as i64)?;
 
         Ok(ecm)
     }
@@ -576,5 +577,38 @@ impl ChannelGroup {
             2 => Some(ChannelGroup::LbinRbin),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extra_channel_meaning_is_skipped_whole_without_an_object_presentation() {
+        // A block of two words, in a stream whose substream_info declares no
+        // 16-channel presentation to read its fields for.
+        let data = [0x10, 0, 0, 0];
+        let reader = &mut BsIoSliceReader::from_slice(&data);
+
+        ExtraChannelMeaning::read(&mut ParserState::default(), reader).unwrap();
+
+        assert_eq!(reader.position().unwrap(), 32);
+    }
+
+    #[test]
+    fn extra_channel_meaning_ends_where_it_declares_when_its_fields_run_on() {
+        // A block of one word whose content description asks for a channel
+        // assignment, which ends 39 bits in.
+        let data = [0, 0, 0, 0x80, 0, 0];
+        let reader = &mut BsIoSliceReader::from_slice(&data);
+        let mut state = ParserState {
+            substream_info: 0x80,
+            ..Default::default()
+        };
+
+        ExtraChannelMeaning::read(&mut state, reader).unwrap();
+
+        assert_eq!(reader.position().unwrap(), 16);
     }
 }
