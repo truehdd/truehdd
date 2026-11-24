@@ -375,10 +375,13 @@ fn run_decoder_thread(
     let mut decoder = Decoder::default();
     decoder.set_fail_level(fail_level);
     let mut resyncing = false;
+    let mut stream_changed = false;
 
     for msg in rx {
         match msg {
-            ParseMsg::Au(index, au, stream_changed) => {
+            ParseMsg::Au(index, au, changed) => {
+                // Held until an access unit decodes, since one that fails carries nothing on.
+                stream_changed |= changed;
                 match decoder.decode_presentations(&au, &required_presentations) {
                     Ok(mut decoded) => {
                         if resyncing {
@@ -387,7 +390,7 @@ fn run_decoder_thread(
                         }
                         concealment.end_run();
                         concealment.learn(&decoded);
-                        if stream_changed {
+                        if std::mem::take(&mut stream_changed) {
                             for slot in decoded.iter_mut().flatten() {
                                 slot.substream_info_changed = true;
                             }
@@ -1060,10 +1063,10 @@ mod tests {
         assert_eq!(objects.unwrap().channels, Some(25));
     }
 
-    /// The third access unit gets a reserved sampling frequency code after parsing. The
-    /// decoder rejects it and cannot decode the fourth, which carries no major sync.
-    #[test]
-    fn access_units_the_decoder_rejects_are_written_as_silence() {
+    /// Runs the decoder thread over the example stream. The access units in `rejected`
+    /// get a sample the decoder cannot decode, which it finds after taking their major
+    /// sync, and those in `changed` are sent as changing the stream.
+    fn decode_rejecting(rejected: &[usize], changed: &[usize]) -> (Vec<DecodeMsg>, u64) {
         let mut extractor = Extractor::default();
         extractor.push_bytes(&example_stream());
         let mut parser = truehd::process::parse::Parser::default();
@@ -1071,16 +1074,16 @@ mod tests {
 
         for (index, frame) in extractor.map_while(Result::ok).enumerate() {
             let mut au = parser.parse(&frame).unwrap();
-            if index == 2 {
-                // `FormatInfo::map_sampling_freq` defines 0-2 and 8-10; 5 is reserved.
-                au.major_sync_info
-                    .as_mut()
-                    .unwrap()
-                    .format_info
-                    .audio_sampling_frequency_1 = 5;
+            if rejected.contains(&index) {
+                // A sample far outside the range a 24-bit substream can decode to.
+                au.substream_segment[0].block[0].block_data[0] = [i32::MAX; 16];
             }
             tx_parse
-                .send(ParseMsg::Au(index as u64, Box::new(au), false))
+                .send(ParseMsg::Au(
+                    index as u64,
+                    Box::new(au),
+                    changed.contains(&index),
+                ))
                 .unwrap();
         }
         drop(tx_parse);
@@ -1096,11 +1099,44 @@ mod tests {
             Concealment::new(Arc::clone(&concealed_frames)),
         );
 
-        let written = rx_decode
+        (
+            rx_decode.iter().collect(),
+            concealed_frames.load(Ordering::Relaxed),
+        )
+    }
+
+    /// The decoder rejects the third access unit and cannot decode the fourth, which
+    /// carries no major sync.
+    #[test]
+    fn access_units_the_decoder_rejects_are_written_as_silence() {
+        let (messages, concealed) = decode_rejecting(&[2], &[]);
+
+        let written = messages
             .iter()
             .filter(|msg| matches!(msg, DecodeMsg::Decoded(_)))
             .count() as u64;
         assert_eq!(written, ACCESS_UNITS, "every access unit is written");
-        assert_eq!(concealed_frames.load(Ordering::Relaxed), 2);
+        assert_eq!(concealed, 2);
+    }
+
+    /// The access unit that changes the stream is the one the decoder rejects, so the
+    /// change has to reach the writer with the next one decoded, the fifth.
+    #[test]
+    fn a_stream_change_survives_its_access_unit_failing_to_decode() {
+        let (messages, _) = decode_rejecting(&[2], &[2]);
+
+        let changes: Vec<usize> = messages
+            .iter()
+            .enumerate()
+            .filter_map(|(index, msg)| match msg {
+                DecodeMsg::Decoded(decoded) => decoded
+                    .iter()
+                    .flatten()
+                    .any(|slot| slot.substream_info_changed)
+                    .then_some(index),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(changes, [4]);
     }
 }
