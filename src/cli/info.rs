@@ -498,22 +498,19 @@ impl<'a> PresentationBuilder<'a> {
             return self.build_fbb_presentations();
         }
 
-        let mut presentations = Vec::new();
-        let mut last_presentation = PresentationInfo::default();
+        (0..self.major_sync.substreams.max(3))
+            .map(|index| {
+                // The channels are those of the substream the presentation ends at,
+                // which a copy shares with the presentation it copies. The rest is the
+                // presentation's own, as its decoder reads it.
+                let presentation = match self.presentation_map.top_substream(index) {
+                    Some(substream) => self.build_presentation(index, substream),
+                    None => PresentationInfo::default(),
+                };
 
-        for index in 0..self.major_sync.substreams.max(3) {
-            let presentation = if index < self.major_sync.substreams {
-                let info = self.build_presentation_for_substream(index);
-                last_presentation = info.clone();
-                info
-            } else {
-                last_presentation.clone()
-            };
-
-            presentations.push(self.finalize_presentation(presentation, index));
-        }
-
-        presentations
+                self.finalize_presentation(presentation, index)
+            })
+            .collect()
     }
 
     /// FBB declares one presentation, or two when substream 1 is also to be decoded.
@@ -549,7 +546,10 @@ impl<'a> PresentationBuilder<'a> {
     }
 
     fn channels_of_substream(&self, index: usize) -> Option<u8> {
-        let restart_header = self.access_unit.substream_segment[index]
+        let restart_header = self
+            .access_unit
+            .substream_segment
+            .get(index)?
             .block
             .first()?
             .restart_header
@@ -557,9 +557,9 @@ impl<'a> PresentationBuilder<'a> {
         Some(restart_header.max_matrix_chan + 1)
     }
 
-    fn build_presentation_for_substream(&self, index: usize) -> PresentationInfo {
+    fn build_presentation(&self, index: usize, substream: usize) -> PresentationInfo {
         let mut presentation = PresentationInfo {
-            channels: self.channels_of_substream(index),
+            channels: self.channels_of_substream(substream),
             ..Default::default()
         };
 
@@ -671,6 +671,8 @@ impl<'a> PresentationBuilder<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use truehd::structs::block::Block;
+    use truehd::structs::restart_header::RestartHeader;
 
     #[test]
     fn a_substream_without_a_restart_header_has_no_channel_count() {
@@ -685,6 +687,33 @@ mod tests {
             PresentationBuilder::new(&major_sync, &access_unit).build_all_presentations();
 
         assert_eq!(presentations[0].channels, None);
+    }
+
+    /// With `substream_info` 0x1C the six-channel presentation takes both substreams
+    /// and the eight-channel one is the two-channel presentation again.
+    #[test]
+    fn a_copy_has_the_channel_count_of_the_presentation_it_copies() {
+        let major_sync = truehd::structs::sync::MajorSyncInfo {
+            format_sync: MAJOR_SYNC_FBA,
+            substreams: 2,
+            substream_info: 0x1C,
+            ..Default::default()
+        };
+        let mut access_unit = AccessUnit::default();
+        for (substream, max_matrix_chan) in [(0, 1), (1, 5)] {
+            access_unit.substream_segment[substream].block = vec![Block {
+                restart_header: Some(RestartHeader {
+                    max_matrix_chan,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }];
+        }
+
+        let presentations =
+            PresentationBuilder::new(&major_sync, &access_unit).build_all_presentations();
+
+        assert_eq!(presentations[2].channels, Some(2));
     }
 
     #[test]
