@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dropped the `chrono` build dependency, which RustSec now lists as unmaintained (RUSTSEC-2026-0543), and the fourteen crates only it pulled in. The build date in `--version` reads as before
 
 ### Fixed
+- `decode` wrote silence for a presentation requested together with a higher one that is a copy of a lower one, as `--presentation 1,2` on a stream whose 8-channel presentation is its stereo one. Comes from truehd
 - An Evolution frame that runs past the end of its extra data is reported as `extra_data.evo_frame_overrun`. The access unit used to fail on an unrelated end of input error. Comes from truehd
 - `info` crashed on a stream whose first access unit has a substream that does not open with a restart header. It now leaves out that presentation's channel count
 - `decode --bed-conform` could crash, or write channels from the wrong samples, when the Atmos metadata declares a bed with more channels than presentation 3 decodes. Such a segment now keeps its decoded channels, with a warning

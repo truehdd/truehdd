@@ -414,38 +414,29 @@ impl DecoderState {
         self.effective_presentations =
             presentation_map.effective_presentations(required_presentations)?;
 
-        // Find the highest required presentation for fallback logic
-        let highest_required = required_presentations
-            .iter()
-            .enumerate()
-            .rev()
-            .find_map(|(i, &required)| if required { Some(i) } else { None })
-            .unwrap_or(3);
-
-        // Set presentation field for compatibility (using highest required)
-        match presentation_map.presentation_type_by_index(highest_required) {
-            PresentationType::Invalid => {
-                if !self.valid {
-                    let Some(max_independent) = presentation_map.max_independent_presentation()
-                    else {
-                        bail!("No presentation is available");
-                    };
-                    info!(
-                        "Presentation {highest_required} is not available, using presentation {max_independent}"
-                    );
-                    self.presentation = max_independent;
+        if let Some(highest_required) = required_presentations.iter().rposition(|&r| r) {
+            match presentation_map.presentation_type_by_index(highest_required) {
+                PresentationType::Invalid => {
+                    if let Some(max_independent) = presentation_map.max_independent_presentation() {
+                        info!(
+                            "Presentation {highest_required} is not available, using presentation {max_independent}"
+                        );
+                    }
                 }
-            }
-            PresentationType::CopyOf(copy_index) => {
-                if !self.valid {
+                PresentationType::CopyOf(copy_index) => {
                     info!("Presentation {highest_required} is a copy of presentation {copy_index}")
                 }
-                self.presentation = copy_index;
+                _ => {}
             }
-            _ => {
-                self.presentation = highest_required;
-            }
-        };
+        }
+
+        // Substreams are decoded up to this one, so it is the highest presentation
+        // decoded, which need not be the one the highest request resolves to.
+        self.presentation = self
+            .effective_presentations
+            .iter()
+            .rposition(|&decoded| decoded)
+            .unwrap_or(0);
 
         Ok(())
     }
@@ -832,5 +823,25 @@ impl DecoderState {
         };
 
         Ok(decoded)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_presentation_above_the_copy_target_of_a_higher_one_is_decoded() {
+        // Presentation 1 is independent and presentation 2 a copy of presentation 0.
+        let mut state = DecoderState {
+            presentation_map: Some(PresentationMap::with_substream_info(0x18, 0)),
+            ..Default::default()
+        };
+
+        state
+            .update_presentations(&[false, true, true, false])
+            .unwrap();
+
+        assert_eq!(state.presentation, 1);
     }
 }
