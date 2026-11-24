@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dropped the `chrono` build dependency, which RustSec now lists as unmaintained (RUSTSEC-2026-0543), and the fourteen crates only it pulled in. The build date in `--version` reads as before
 
 ### Fixed
+- `decode` and `verify` reported a FIFO underrun on every access unit after a stream turned to another presentation layout, as where one Atmos title follows another. The audio was right; the warnings are gone. Comes from truehd
 - `decode` kept writing into the same file when the sampling rate or channel count changed with `substream_info` unchanged, as where a 5.1 title is followed by a 7.1 one of the same substream layout. The rest went in under a header that no longer described it. Such a change now starts a new segment
 - `decode` could write noise after a second damaged access unit. When a major sync failed to decode while it was already looking for one, the access units after it were decoded from what the failed one left behind. They are now written as silence up to the next major sync
 - `decode` kept writing into the old segment when the first access unit of a changed stream failed to decode, so the new layout went into a file whose header states the old one. The new segment now starts at the next access unit decoded

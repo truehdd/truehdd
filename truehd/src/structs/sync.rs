@@ -382,7 +382,7 @@ impl MajorSyncInfo {
 
                 state.has_parsed_au = false;
                 state.has_substream_info_changed = true;
-                state.reset_for_branch();
+                state.restart_stream_clock();
 
                 if !c1 {
                     log_or_err!(
@@ -587,7 +587,7 @@ impl MajorSyncInfo {
 
             state.has_parsed_au = false;
             state.has_substream_info_changed = true;
-            state.reset_for_branch();
+            state.restart_stream_clock();
 
             if substream_info != state.substream_info & 0xF {
                 log_or_err!(

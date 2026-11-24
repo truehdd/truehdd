@@ -8,8 +8,8 @@ use truehd::utils::crc::{
     CRC_MAJOR_SYNC_INFO_ALG, CRC_RESTART_BLOCK_HEADER_ALG, CRC_SUBSTREAM_ALG, Crc8, Crc16,
 };
 use truehd::utils::diagnostic::{
-    AccessUnitRule, BlockRule, ChannelRule, Diagnostic, DiagnosticMode, RestartHeaderRule, RuleId,
-    SubstreamRule, SyncRule,
+    AccessUnitRule, BlockRule, ChannelRule, Diagnostic, DiagnosticMode, FifoRule,
+    RestartHeaderRule, RuleId, SubstreamRule, SyncRule,
 };
 use truehd::utils::errors::{RestartHeaderError, SubstreamError};
 
@@ -26,6 +26,10 @@ const FBA_ATMOS_CBI: &[u8] = include_bytes!("assets/fba_atmos_cbi.mlp");
 /// Evolution frames that carry their metadata. The shape a normal Atmos stream has, unlike
 /// `FBA_ATMOS_CBI`, whose sixteen elements are all bed and which carries no object metadata.
 const FBA_ATMOS_OBJ: &[u8] = include_bytes!("assets/fba_atmos_obj.mlp");
+
+/// An FBA Atmos encode of four substreams whose `substream_info` differs from that of
+/// `FBA_ATMOS_OBJ`.
+const FBA_ATMOS_DIMTRIM: &[u8] = include_bytes!("assets/fba_atmos_dimtrim.mlp");
 
 /// An FBB (DVD-Audio) encode with two substreams, `flags` 0x4000 and `substream_info`
 /// 0x0D, so substream 1 is also to be decoded.
@@ -246,6 +250,20 @@ fn diagnostics_of_presentations(
     }
 
     parser.take_diagnostics()
+}
+
+/// A stream turning to another `substream_info` begins again, clocks included. Timed on
+/// the clock of the stream before it, its access units all seem to leave the FIFO at once.
+#[test]
+fn a_stream_after_a_substream_info_change_is_timed_on_its_own_clock() {
+    let spliced = [FBA_ATMOS_OBJ, FBA_ATMOS_DIMTRIM].concat();
+
+    let underruns = diagnostics_of(&spliced)
+        .iter()
+        .filter(|diagnostic| diagnostic.rule == RuleId::Fifo(FifoRule::Underrun))
+        .count();
+
+    assert_eq!(underruns, 0);
 }
 
 /// The blocks of a substream segment carry exactly one access unit of samples between

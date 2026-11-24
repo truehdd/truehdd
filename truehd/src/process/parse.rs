@@ -818,11 +818,7 @@ impl ParserState {
     /// Restarts the timing and FIFO model, and the `hires_output_timing` reader, as if the
     /// stream began at this access unit.
     pub fn restart_stream_for_branch(&mut self, output_timing: usize) {
-        self.output_timing_deviation = 0;
-        self.unwrapped_input_timing = self.input_timing;
-        self.prev_unwrapped_input_timing = 0;
-        self.first_input_timing = self.input_timing;
-        self.first_unwrapped_input_timing = self.unwrapped_input_timing;
+        self.restart_stream_clock();
 
         let mut output_timing = output_timing;
         if output_timing < self.input_timing {
@@ -830,6 +826,16 @@ impl ParserState {
         }
         self.output_timing = output_timing;
         self.first_output_timing = output_timing;
+    }
+
+    /// The part of [`restart_stream_for_branch`](Self::restart_stream_for_branch) that
+    /// does not wait for a restart header to give the output timing.
+    pub fn restart_stream_clock(&mut self) {
+        self.output_timing_deviation = 0;
+        self.unwrapped_input_timing = self.input_timing;
+        self.prev_unwrapped_input_timing = 0;
+        self.first_input_timing = self.input_timing;
+        self.first_unwrapped_input_timing = self.unwrapped_input_timing;
         self.fifo_output_clock = None;
 
         for ss_state in &mut self.substream_state {
