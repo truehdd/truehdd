@@ -1064,17 +1064,24 @@ mod tests {
     }
 
     /// Two streams with the same `substream_info`, of six and of eight channels. One
-    /// file states one channel count, so each needs its own.
+    /// file states one channel count and layout, so the second stream gets its own,
+    /// the same file it decodes to alone.
     #[test]
     fn a_channel_count_change_starts_a_segment() {
+        let eight = include_bytes!("../../../truehd/tests/assets/fba_192k_8ch.mlp");
         let mut bytes = include_bytes!("../../../truehd/tests/assets/fba_192k.mlp").to_vec();
-        bytes.extend_from_slice(include_bytes!(
-            "../../../truehd/tests/assets/fba_192k_8ch.mlp"
-        ));
-        let (_dir, result) = run(&bytes, AudioFormat::Caf, false);
-        let summary = result.unwrap_or_else(|e| panic!("{e}"));
+        bytes.extend_from_slice(eight);
+        let files = |bytes: &[u8]| {
+            let (dir, result) = run(bytes, AudioFormat::Caf, false);
+            let summary = result.unwrap_or_else(|e| panic!("{e}"));
+            (dir, summary.presentations[0].files.clone())
+        };
 
-        assert_eq!(summary.presentations[0].files.len(), 2);
+        let (_spliced_dir, spliced) = files(&bytes);
+        let (_alone_dir, alone) = files(eight);
+
+        assert_eq!(spliced.len(), 2);
+        assert!(std::fs::read(&spliced[1]).unwrap() == std::fs::read(&alone[0]).unwrap());
     }
 
     /// Runs the decoder thread over the example stream. The access units in `rejected`

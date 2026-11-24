@@ -334,7 +334,11 @@ impl DecoderState {
 
         if !self.valid {
             self.update_presentations(required_presentations)?;
+        }
 
+        // Every major sync states the channel assignments, and may change them while
+        // the presentations stay as they are.
+        if access_unit.major_sync_info.is_some() {
             for (i, &required) in self.effective_presentations.iter().enumerate() {
                 if required {
                     let presentation = self
