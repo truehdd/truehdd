@@ -108,12 +108,20 @@ impl PresentationMap {
     /// The FBA derivation: `substream_info` bits 2-7 and `extended_substream_info` select
     /// the 2-, 6-, 8- and 16-channel presentations.
     pub fn with_substream_info(substream_info: u8, extended_substream_info: u8) -> Self {
+        // extended_substream_info extends the 16-channel presentation and is undefined
+        // without one.
+        let sixteench = if substream_info >> 7 != 0 {
+            8 | (7 ^ (7 >> (extended_substream_info & 3)))
+        } else {
+            0
+        };
+
         Self {
             masks: [
                 1,
                 (substream_info >> 2) & 3,
                 (substream_info >> 4) & 7,
-                ((substream_info >> 4) & 8) | (7 ^ (7 >> (extended_substream_info & 3))),
+                sixteench,
             ],
         }
     }
@@ -270,6 +278,13 @@ fn a_presentation_ending_at_a_lower_substream_is_not_a_copy() {
         map.presentation_type_by_index(2),
         PresentationType::Independent
     );
+}
+
+#[test]
+fn extended_substream_info_means_nothing_without_a_sixteen_channel_presentation() {
+    let map = PresentationMap::with_substream_info(0x14, 3);
+
+    assert_eq!(map.masks[3], 0);
 }
 
 #[test]

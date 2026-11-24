@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated the `oamd` floor to 0.1.2. It rejects malformed metadata it used to panic on or misread, and corrects the depth factor of a screen-anchored object, the gain of an object coded to repeat the previous object's, and the reserved divergence mode 3
 
 ### Fixed
+- `PresentationMap::with_substream_info` took `extended_substream_info` into the 16-channel presentation even where `substream_info` declares none, so a stream setting those undefined bits was decoded from substreams it does not have. They are now ignored there
 - `DecodedAccessUnit::channel_labels` kept the labels of the first major sync when a later one changed the channel assignment without changing `substream_info`. They are now read at every major sync
 - A fixed-rate stream reported `AccessUnitError::FixedRateMismatch` on every access unit after a stream restart, at a rejected branch or a change of `substream_info`: the bytes were counted from the start of the input and the time from the restart. Both are now counted from the restart
 - `Parser::reset_for_next_major_sync`, and so `parse_recovering` after every access unit that fails, discarded what the parser had measured over the stream: the FIFO peaks, the maximum data rate, latency and access unit size, and the byte total. They now carry over, as the branch records already did
