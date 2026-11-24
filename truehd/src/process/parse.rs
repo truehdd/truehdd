@@ -557,6 +557,9 @@ pub struct ParserState {
 
     pub input_timing: usize,
     pub first_input_timing: usize,
+    /// `total_access_unit_length` where `first_input_timing` was taken, so the two
+    /// measure the same stretch.
+    pub first_total_access_unit_length: usize,
     pub prev_input_timing: usize,
     pub wrapped_input_timing: usize,
 
@@ -659,6 +662,7 @@ impl Default for ParserState {
 
             input_timing: 0,
             first_input_timing: 0,
+            first_total_access_unit_length: 0,
             prev_input_timing: 0,
             wrapped_input_timing: 0,
 
@@ -835,6 +839,7 @@ impl ParserState {
         self.unwrapped_input_timing = self.input_timing;
         self.prev_unwrapped_input_timing = 0;
         self.first_input_timing = self.input_timing;
+        self.first_total_access_unit_length = self.total_access_unit_length;
         self.first_unwrapped_input_timing = self.unwrapped_input_timing;
         self.fifo_output_clock = None;
 

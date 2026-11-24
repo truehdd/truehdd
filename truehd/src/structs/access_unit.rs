@@ -100,6 +100,7 @@ impl AccessUnit {
 
         if !state.has_parsed_au {
             state.first_input_timing = au.input_timing as usize;
+            state.first_total_access_unit_length = state.total_access_unit_length;
         }
 
         {
@@ -602,7 +603,8 @@ impl AccessUnit {
         if !state.variable_rate {
             let data_rate_16x =
                 (state.unwrapped_input_timing - state.first_input_timing) * state.peak_data_rate;
-            let total_length_16x = state.total_access_unit_length << 8;
+            let total_length_16x =
+                (state.total_access_unit_length - state.first_total_access_unit_length) << 8;
             if data_rate_16x.abs_diff(total_length_16x) >= 0x100 {
                 log_or_err!(
                     state,

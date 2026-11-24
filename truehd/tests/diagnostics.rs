@@ -174,6 +174,61 @@ fn a_failed_access_unit_does_not_end_the_stream() {
     );
 }
 
+/// `data` as a fixed-rate stream: every access unit arrives when the bytes before it
+/// have, at the peak data rate the major syncs are rewritten to state.
+fn at_a_fixed_rate(data: &[u8]) -> Vec<u8> {
+    let nibble = |word: u16| ((word >> 12) ^ (word >> 8) ^ (word >> 4) ^ word) as u8 & 0xF;
+    let crc = Crc16::new(&CRC_MAJOR_SYNC_INFO_ALG);
+    let mut data = data.to_vec();
+    let first_timing = u16::from_be_bytes([data[2], data[3]]);
+    let mut at = 0;
+
+    while at + 4 <= data.len() {
+        let words = (u16::from_be_bytes([data[at], data[at + 1]]) & 0xFFF) as usize;
+        let old = u16::from_be_bytes([data[at + 2], data[at + 3]]);
+        let new = first_timing.wrapping_add((at / 2) as u16);
+        data[at + 2..at + 4].copy_from_slice(&new.to_be_bytes());
+        data[at] ^= (nibble(old) ^ nibble(new)) << 4;
+
+        if data[at + 4..at + 7] == [0xF8, 0x72, 0x6F] {
+            // variable_rate clear, peak_data_rate one word a sample.
+            data[at + 18..at + 20].copy_from_slice(&[0x01, 0x00]);
+            let value = crc.update(crc.init, &data[at + 4..at + 30]);
+            data[at + 30..at + 32].copy_from_slice(&value.to_be_bytes());
+        }
+
+        at += words * 2;
+    }
+
+    data
+}
+
+/// A fixed-rate stream is held to its rate from where it was picked up again, in bytes
+/// as in time.
+#[test]
+fn a_fixed_rate_stream_keeps_its_rate_after_a_failed_access_unit() {
+    let mut data = at_a_fixed_rate(FBA_2CH);
+    let eleventh: usize = (0..10).fold(0, |at, _| {
+        at + (u16::from_be_bytes([data[at], data[at + 1]]) & 0xFFF) as usize * 2
+    });
+    data[eleventh + 97] ^= 0xFF;
+
+    let diagnostics = diagnostics_of(&data);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == log::Level::Error),
+        "an access unit fails"
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.rule
+                != RuleId::AccessUnit(AccessUnitRule::FixedRateMismatch))
+    );
+}
+
 /// A corrupt cumulative pointer for an unselected substream can point behind the
 /// segment already read. The parser must report it instead of panicking on subtraction.
 #[test]
