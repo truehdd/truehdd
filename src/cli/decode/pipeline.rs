@@ -708,7 +708,7 @@ fn process_frame(
     stream_au: u64,
     pb: Option<&ProgressBar>,
 ) -> Result<()> {
-    if decoded.substream_info_changed {
+    if decoded.substream_info_changed || handler.segment_cannot_hold(&decoded) {
         handler.handle_stream_restart(stream_au)?;
     }
 
@@ -1061,6 +1061,20 @@ mod tests {
 
         // A full 7.1.2 bed and the segment's 15 objects.
         assert_eq!(objects.unwrap().channels, Some(25));
+    }
+
+    /// Two streams with the same `substream_info`, of six and of eight channels. One
+    /// file states one channel count, so each needs its own.
+    #[test]
+    fn a_channel_count_change_starts_a_segment() {
+        let mut bytes = include_bytes!("../../../truehd/tests/assets/fba_192k.mlp").to_vec();
+        bytes.extend_from_slice(include_bytes!(
+            "../../../truehd/tests/assets/fba_192k_8ch.mlp"
+        ));
+        let (_dir, result) = run(&bytes, AudioFormat::Caf, false);
+        let summary = result.unwrap_or_else(|e| panic!("{e}"));
+
+        assert_eq!(summary.presentations[0].files.len(), 2);
     }
 
     /// Runs the decoder thread over the example stream. The access units in `rejected`

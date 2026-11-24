@@ -238,6 +238,13 @@ impl DecodeHandler {
             return Ok(());
         }
 
+        // The first access unit of a segment gives its layout, whatever is written.
+        if self.buffered_channel_count == 0 {
+            self.buffered_channel_count = decoded.channel_count;
+            self.buffered_sample_rate = decoded.sampling_frequency;
+            self.buffered_channel_labels = decoded.channel_labels.clone();
+        }
+
         // Reset frame processing flag for new frame
         self.current_frame_processed = false;
         self.final_sample_rate = decoded.sampling_frequency;
@@ -266,13 +273,6 @@ impl DecodeHandler {
 
                 // If we were probing, finalize now that we found Atmos
                 if self.atmos_probing {
-                    // Store channel info if not already done (for immediate OAMD case)
-                    if self.buffered_channel_count == 0 {
-                        self.buffered_channel_count = decoded.channel_count;
-                        self.buffered_sample_rate = decoded.sampling_frequency;
-                        self.buffered_channel_labels = decoded.channel_labels.clone();
-                    }
-
                     // Add current frame to buffer before finalizing
                     let frame_samples = Self::extract_samples_from_frame(&decoded);
                     self.atmos_probe_buffer.push(frame_samples);
@@ -328,6 +328,17 @@ impl DecodeHandler {
         self.update_progress(pb, start_time)?;
 
         Ok(())
+    }
+
+    /// Whether `decoded` differs from the open segment in what its file states once:
+    /// the sampling rate and the channel count.
+    pub(crate) fn segment_cannot_hold(
+        &self,
+        decoded: &truehd::process::decode::DecodedAccessUnit,
+    ) -> bool {
+        self.buffered_channel_count != 0
+            && (self.buffered_channel_count != decoded.channel_count
+                || self.buffered_sample_rate != decoded.sampling_frequency)
     }
 
     /// Starts a new segment, named after `stream_au`, the stream's access unit index.
@@ -399,11 +410,7 @@ impl DecodeHandler {
         &mut self,
         decoded: &truehd::process::decode::DecodedAccessUnit,
     ) -> Result<()> {
-        // Store channel info for buffered samples
-        if self.buffered_channel_count == 0 {
-            self.buffered_channel_count = decoded.channel_count;
-            self.buffered_sample_rate = decoded.sampling_frequency;
-            self.buffered_channel_labels = decoded.channel_labels.clone();
+        if self.atmos_probe_buffer.is_empty() {
             info!(
                 "Starting Atmos probe buffering: {} channels, {} Hz (range: {} AUs)",
                 decoded.channel_count, decoded.sampling_frequency, self.atmos_probe_range
@@ -646,13 +653,6 @@ impl DecodeHandler {
                 decoded.channel_count,
                 channel_info.total_channels,
             );
-
-            // Also store original channel info for buffering purposes
-            if self.buffered_channel_count == 0 {
-                self.buffered_channel_count = decoded.channel_count;
-                self.buffered_sample_rate = decoded.sampling_frequency;
-                self.buffered_channel_labels = decoded.channel_labels.clone();
-            }
         }
     }
 
