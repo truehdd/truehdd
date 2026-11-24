@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dropped the `chrono` build dependency, which RustSec now lists as unmaintained (RUSTSEC-2026-0543), and the fourteen crates only it pulled in. The build date in `--version` reads as before
 
 ### Fixed
+- `info` crashed on a stream whose first access unit has a substream that does not open with a restart header. It now leaves out that presentation's channel count
 - `decode --bed-conform` could crash, or write channels from the wrong samples, when the Atmos metadata declares a bed with more channels than presentation 3 decodes. Such a segment now keeps its decoded channels, with a warning
 - `decode` wrote wrong audio for the rest of a stream that turns to another presentation layout with the same number of substreams, as where one Atmos title follows another. The new segment was decoded from the substreams the old layout used. Comes from truehd
 - `decode --bed-conform` probed a segment after the first for a single access unit once the stream was past the probe range, so a later segment was rarely conformed. Each segment is now probed for the whole range

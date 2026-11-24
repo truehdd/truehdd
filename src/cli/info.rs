@@ -324,7 +324,8 @@ fn display_stream_info(info: &StreamInfo) {
 #[derive(Default, Clone)]
 struct PresentationInfo {
     index: usize,
-    channels: u8,
+    // Absent when the substream opens without a restart header to state it.
+    channels: Option<u8>,
     presentation_type: Option<PresentationType>,
     channel_format: Option<String>,
     surround_ex: Option<String>,
@@ -401,7 +402,9 @@ fn display_basic_info(info: &PresentationInfo) {
     } else {
         "channels"
     };
-    println!("    Number of {entity_type:10}    {}", info.channels);
+    if let Some(channels) = info.channels {
+        println!("    Number of {entity_type:10}    {channels}");
+    }
 
     if let Some(presentation_type) = &info.presentation_type {
         println!("    Presentation type       {presentation_type}");
@@ -545,13 +548,13 @@ impl<'a> PresentationBuilder<'a> {
             .collect()
     }
 
-    fn channels_of_substream(&self, index: usize) -> u8 {
-        self.access_unit.substream_segment[index].block[0]
+    fn channels_of_substream(&self, index: usize) -> Option<u8> {
+        let restart_header = self.access_unit.substream_segment[index]
+            .block
+            .first()?
             .restart_header
-            .as_ref()
-            .unwrap()
-            .max_matrix_chan
-            + 1
+            .as_ref()?;
+        Some(restart_header.max_matrix_chan + 1)
     }
 
     fn build_presentation_for_substream(&self, index: usize) -> PresentationInfo {
@@ -668,6 +671,21 @@ impl<'a> PresentationBuilder<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_substream_without_a_restart_header_has_no_channel_count() {
+        let major_sync = truehd::structs::sync::MajorSyncInfo {
+            format_sync: MAJOR_SYNC_FBA,
+            substreams: 1,
+            ..Default::default()
+        };
+        let access_unit = AccessUnit::default();
+
+        let presentations =
+            PresentationBuilder::new(&major_sync, &access_unit).build_all_presentations();
+
+        assert_eq!(presentations[0].channels, None);
+    }
 
     #[test]
     fn presentations_report_their_own_channel_modifier() {
