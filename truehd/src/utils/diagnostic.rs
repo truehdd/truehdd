@@ -168,6 +168,7 @@ rule_ids! {
         EvoFrameTooLong = "evo_frame_too_long",
         EvoFrameNoRoom = "evo_frame_no_room",
         EvoFrameMisaligned = "evo_frame_misaligned",
+        EvoFrameOverrun = "evo_frame_overrun",
         EvoFramePaddingNotZero = "evo_frame_padding_not_zero",
         ExtraDataParityMismatch = "extra_data_parity_mismatch",
     }

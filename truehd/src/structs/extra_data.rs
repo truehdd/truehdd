@@ -184,17 +184,39 @@ impl ExtraData {
             // says so, and the whole payload is then padding. There is no
             // frame from it: it skips its digest check and writes nothing to its Evolution
             // sink. Reading one anyway would invent a frame out of the padding.
+            let room = extra_data_bits - 24;
             let evo_frame = if extra_data.evo_frame_byte_length == 0 {
                 None
             } else {
                 let start_pos = reader.position()?;
-                let evo_frame = EvoFrame::read(reader)?;
-                Some((evo_frame, (reader.position()? - start_pos) as usize))
+                // Nothing bounds the frame reader but the access unit, so an end of
+                // input here is a frame that ran past everything after it.
+                let evo_frame = EvoFrame::read(reader)
+                    .ok()
+                    .zip(reader.position().ok())
+                    .map(|(frame, end_pos)| (frame, (end_pos - start_pos) as usize))
+                    .filter(|&(_, bits)| bits <= room);
+
+                if evo_frame.is_none() {
+                    log_or_err!(
+                        state,
+                        log::Level::Warn,
+                        anyhow!(ExtraDataError::EvoFrameOverrun {
+                            extra_len: extra_data.extra_data_length
+                        }),
+                        reader
+                    );
+
+                    // Neither the frame nor the parity byte can be trusted.
+                    return Ok(extra_data);
+                }
+
+                evo_frame
             };
 
-            let actual_evo_frame_bits = evo_frame.as_ref().map_or(0, |(_, bits)| *bits);
+            let padding_bits = room - evo_frame.as_ref().map_or(0, |(_, bits)| *bits);
 
-            for _ in 0..(extra_data_bits - 24 - actual_evo_frame_bits) {
+            for _ in 0..padding_bits {
                 if reader.get()? {
                     log_or_err!(
                         state,
@@ -328,5 +350,31 @@ impl ExtraData {
         }
 
         Some(evo)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_evo_frame_longer_than_extra_data_is_reported() {
+        // extra_data_length 3 and evo_frame_byte_length 1, then a frame whose one
+        // payload declares three bytes. The access unit ends where extra_data does.
+        let data = [0xC0, 0x03, 0x00, 0x01, 0x00, 0x42, 0x06, 0x00];
+        let mut state = ParserState {
+            flags: 0x1000,
+            fail_level: log::Level::Warn,
+            access_unit_length: data.len() / 2,
+            ..Default::default()
+        };
+        let reader = &mut BsIoSliceReader::from_slice(&data);
+
+        let error = ExtraData::read(&mut state, reader).unwrap_err();
+
+        assert!(matches!(
+            error.downcast_ref(),
+            Some(ExtraDataError::EvoFrameOverrun { extra_len: 3 })
+        ));
     }
 }

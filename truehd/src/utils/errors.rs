@@ -291,6 +291,9 @@ pub enum ExtraDataError {
     #[error("evo_frame() in extra_data does not begin on a byte boundary")]
     EvoFrameMisaligned,
 
+    #[error("evo_frame() reads past the end of extra_data. extra_data_length = {extra_len}")]
+    EvoFrameOverrun { extra_len: u16 },
+
     #[error(
         "evo_frame() padding bits should be all zeros. Please submit a sample if you see this."
     )]
