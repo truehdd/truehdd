@@ -132,34 +132,53 @@ impl PresentationMap {
     }
 
     pub fn presentation_type_by_index(&self, index: usize) -> PresentationType {
-        if index >= self.masks.len() {
+        let Some(top) = self.top_substream(index) else {
             return PresentationType::Invalid;
-        }
-        let this_mask = self.masks[index];
+        };
 
-        if this_mask >> index != 0 {
-            if let Some(down_i) = (index + 1..self.masks.len())
-                .find(|&i| self.masks[i] >> i != 0 && (self.masks[i] >> index) & 1 != 0)
-            {
-                return PresentationType::DownmixOf(down_i);
-            }
-            return PresentationType::Independent;
+        // The first presentation to end at a substream is the one decoded there, and
+        // any later one ending there is a copy of it.
+        if let Some(first) = self.presentation_topped_by(top)
+            && first < index
+        {
+            return PresentationType::CopyOf(first);
         }
 
-        if let Some(copy_i) = (0..index).rev().find(|&i| this_mask >> i != 0) {
-            return PresentationType::CopyOf(copy_i);
+        if let Some(down_i) = (index + 1..self.masks.len())
+            .find(|&i| self.masks[i] >> top > 1 && (self.masks[i] >> top) & 1 != 0)
+        {
+            return PresentationType::DownmixOf(down_i);
         }
 
-        PresentationType::Invalid
+        PresentationType::Independent
     }
 
-    pub fn max_independent_presentation(&self) -> Option<usize> {
+    /// The highest substream a presentation takes, which is where it is decoded and the
+    /// slot it is returned in. `None` for a presentation the stream does not carry.
+    pub fn top_substream(&self, index: usize) -> Option<usize> {
         self.masks
-            .iter()
-            .enumerate()
+            .get(index)
+            .and_then(|mask| mask.checked_ilog2())
+            .map(|top| top as usize)
+    }
+
+    /// The highest substream that completes a presentation: the slot of the highest
+    /// presentation the stream carries.
+    pub fn max_independent_presentation(&self) -> Option<usize> {
+        (0..MAX_PRESENTATIONS)
             .rev()
-            .find(|&(i, &mask)| mask >> i != 0)
-            .map(|(i, _)| i)
+            .find(|&substream| self.presentation_topped_by(substream).is_some())
+    }
+
+    /// The first presentation whose highest substream is `substream`, which is the one
+    /// decoded there.
+    ///
+    /// It is the presentation of the same index wherever that one is independent. Where
+    /// it is not, a higher presentation may end at this substream: with `substream_info`
+    /// 0x34 the six-channel presentation is a copy of the two-channel one, and the
+    /// eight-channel presentation is the one substream 1 completes.
+    pub fn presentation_topped_by(&self, substream: usize) -> Option<usize> {
+        self.masks.iter().position(|&mask| mask >> substream == 1)
     }
 
     pub fn substream_mask_by_index(&self, index: usize) -> u8 {
@@ -182,7 +201,9 @@ impl PresentationMap {
                     // A presentation the stream does not carry resolves to the highest
                     // one it does, so those substreams are still needed
                     let index = match self.presentation_type_by_index(i) {
-                        PresentationType::Invalid => self.max_independent_presentation(),
+                        PresentationType::Invalid => self
+                            .max_independent_presentation()
+                            .and_then(|substream| self.presentation_topped_by(substream)),
                         _ => Some(i),
                     };
                     mask | index.map_or(0, |i| self.substream_mask_by_index(i))
@@ -203,18 +224,15 @@ impl PresentationMap {
             .enumerate()
             .filter(|&(_, &required)| required)
         {
-            match self.presentation_type_by_index(i) {
-                // A stream need not carry four presentations. Asking for one it does
-                // not have decodes the highest available rather than nothing
-                PresentationType::Invalid => {
-                    let Some(max_independent) = self.max_independent_presentation() else {
-                        bail!("No presentation is available");
-                    };
-                    presentations[max_independent] = true;
-                }
-                PresentationType::CopyOf(copy_i) => presentations[copy_i] = true,
-                _ => presentations[i] = true,
-            }
+            // A stream need not carry four presentations. Asking for one it does not
+            // have decodes the highest available rather than nothing
+            let Some(slot) = self
+                .top_substream(i)
+                .or_else(|| self.max_independent_presentation())
+            else {
+                bail!("No presentation is available");
+            };
+            presentations[slot] = true;
         }
 
         Ok(presentations)
@@ -238,6 +256,20 @@ impl Display for PresentationType {
             PresentationType::Independent => write!(f, "Independent"),
         }
     }
+}
+
+#[test]
+fn a_presentation_ending_at_a_lower_substream_is_not_a_copy() {
+    let map = PresentationMap::with_substream_info(0x34, 0);
+
+    assert_eq!(
+        map.presentation_type_by_index(1),
+        PresentationType::CopyOf(0)
+    );
+    assert_eq!(
+        map.presentation_type_by_index(2),
+        PresentationType::Independent
+    );
 }
 
 #[test]

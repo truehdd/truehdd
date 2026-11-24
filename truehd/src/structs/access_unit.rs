@@ -65,8 +65,8 @@ pub struct AccessUnit {
     /// Indicates if this access unit is at a valid branch point.
     pub has_valid_branch: bool,
 
-    /// Indicates if this access unit is at a branch point the buffer-model conditions
-    /// reject, where the parser restarts the stream.
+    /// Indicates that the parser restarts the stream at this access unit: at a branch
+    /// point the buffer-model conditions reject, or where `substream_info` changes.
     pub has_invalid_branch: bool,
 }
 

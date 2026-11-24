@@ -337,8 +337,13 @@ impl DecoderState {
 
             for (i, &required) in self.effective_presentations.iter().enumerate() {
                 if required {
-                    self.substream_state[i].channel_labels =
-                        access_unit.get_channel_labels(i).unwrap_or_default();
+                    let presentation = self
+                        .presentation_map
+                        .and_then(|map| map.presentation_topped_by(i))
+                        .unwrap_or(i);
+                    self.substream_state[i].channel_labels = access_unit
+                        .get_channel_labels(presentation)
+                        .unwrap_or_default();
                 }
             }
         }
@@ -431,9 +436,12 @@ impl DecoderState {
         if let Some(highest_required) = required_presentations.iter().rposition(|&r| r) {
             match presentation_map.presentation_type_by_index(highest_required) {
                 PresentationType::Invalid => {
-                    if let Some(max_independent) = presentation_map.max_independent_presentation() {
+                    if let Some(highest) = presentation_map
+                        .max_independent_presentation()
+                        .and_then(|slot| presentation_map.presentation_topped_by(slot))
+                    {
                         info!(
-                            "Presentation {highest_required} is not available, using presentation {max_independent}"
+                            "Presentation {highest_required} is not available, using presentation {highest}"
                         );
                     }
                 }
@@ -569,8 +577,11 @@ impl DecoderState {
         // lossless matrix
         if self.effective_presentations[current_substream_index] {
             if let Some(presentation_map) = self.presentation_map {
-                let substream_mask =
-                    presentation_map.substream_mask_by_index(current_substream_index);
+                let substream_mask = presentation_map
+                    .presentation_topped_by(current_substream_index)
+                    .map_or(0, |presentation| {
+                        presentation_map.substream_mask_by_index(presentation)
+                    });
                 let decoded_sample_len =
                     self.substream_state[current_substream_index].decoded_sample_len;
 

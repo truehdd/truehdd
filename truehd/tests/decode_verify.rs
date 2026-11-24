@@ -47,6 +47,9 @@ const FBB_6CH_SLICE: &[u8] = include_bytes!("assets/fbb_6ch.mlp");
 /// 88 access units, 3520 samples at 48 kHz.
 const FBB_COPY_SLICE: &[u8] = include_bytes!("assets/fbb_copy.mlp");
 
+/// A 192 kHz FBA encode with three substreams and `substream_info` 0x7C.
+const FBA_192K: &[u8] = include_bytes!("assets/fba_192k.mlp");
+
 /// FBA encodes with three substreams spliced end to end: 512 access units, starting over
 /// at access units 44 and 344, where both branch points fail the buffer-model conditions.
 const FBA_SPLICED: &[u8] = include_bytes!("assets/fba_spliced.mlp");
@@ -582,6 +585,34 @@ fn unreadable_object_audio_metadata_leaves_the_audio_decodable() {
         .unwrap();
 
     assert!(decoded.oamd.is_empty());
+}
+
+/// With `substream_info` 0x34 the six-channel presentation is the two-channel one and
+/// the eight-channel presentation is built from substreams 0 and 1, which is what the
+/// six-channel presentation of this 0x7C stream is built from.
+#[test]
+fn a_presentation_topped_by_a_lower_substream_decodes_from_its_own_substreams() {
+    let (expected, _) = decode_one(FBA_192K, 1);
+
+    let mut extractor = Extractor::default();
+    extractor.push_bytes(FBA_192K);
+    let mut parser = Parser::default();
+    let mut decoder = Decoder::default();
+    let mut pcm = Vec::new();
+
+    for frame in extractor.by_ref().filter_map(Result::ok) {
+        let mut access_unit = parser.parse(&frame).unwrap();
+        if let Some(major_sync) = &mut access_unit.major_sync_info {
+            major_sync.substream_info = 0x34;
+        }
+        // There is no presentation 3, so this asks for the highest there is.
+        let decoded = decoder.decode_presentation(&access_unit, 3).unwrap();
+        for row in &decoded.pcm_data[..decoded.sample_length] {
+            pcm.extend_from_slice(&row[..decoded.channel_count]);
+        }
+    }
+
+    assert!(pcm == expected);
 }
 
 /// Two four-substream streams end to end. The second builds its eight-channel
