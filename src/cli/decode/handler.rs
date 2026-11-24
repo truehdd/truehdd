@@ -560,8 +560,15 @@ impl DecodeHandler {
                 .as_deref()
                 .unwrap_or(EMPTY_BED_INDICES)
                 .to_vec();
-            self.cached_num_object_channels =
-                original_channel_count.saturating_sub(bed_indices.len());
+            if bed_indices.len() > original_channel_count {
+                warn!(
+                    "Object audio metadata declares a bed of {} channel(s) but only {} are decoded, so this segment keeps its decoded channels",
+                    bed_indices.len(),
+                    original_channel_count
+                );
+                return;
+            }
+            self.cached_num_object_channels = original_channel_count - bed_indices.len();
 
             // Pre-compute bed channel mapping for faster lookup
             let mut channel_map = vec![None; TARGET_BED_CHANNELS];
@@ -1017,6 +1024,18 @@ mod tests {
 
         assert_eq!(info.total_channels, 12);
         assert_eq!(info.object_channels, 12);
+    }
+
+    #[test]
+    fn a_bed_larger_than_the_decoded_channels_is_not_conformed() {
+        let mut handler =
+            DecodeHandler::new(None, AudioFormat::Caf, true, false, None, None, 12000);
+        handler.has_atmos = true;
+        handler.bed_indices = Some((0..10).collect());
+
+        handler.build_bed_conformance_cache(8);
+
+        assert!(!handler.conforms_bed());
     }
 
     /// The DAMF header names its audio and metadata files by appending to the
