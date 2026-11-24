@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dropped the `chrono` build dependency, which RustSec now lists as unmaintained (RUSTSEC-2026-0543), and the fourteen crates only it pulled in. The build date in `--version` reads as before
 
 ### Fixed
+- `decode` wrote a second `sampleRate` and `events` header into `.atmos.metadata` after an Atmos metadata payload that describes no object, which left the file invalid. Such a payload is now passed over
 - `decode` stopped with "multiple bed instances are not supported" on an Atmos program that has no bed at all, only objects. Such a program is now written, and `--bed-conform` gives it the silent 7.1.2 bed its header then names
 - A stream whose major sync carries `extra_channel_meaning` without an Atmos presentation failed its major sync CRC and decoded to nothing. Comes from truehd
 - `decode` wrote stereo by default, and wrong audio with `--presentation 2`, for a stream of two substreams whose 6-channel presentation is its stereo one and whose 8-channel presentation is not. Comes from truehd

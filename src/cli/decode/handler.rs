@@ -687,6 +687,12 @@ impl DecodeHandler {
             let mut conf =
                 Configuration::with_oamd_payload(oamd, sample_rate, segment_relative_pos)?;
 
+            // A payload describing no object has nothing to add, and must not pass for
+            // the state the next one is compared with.
+            if conf.events.is_empty() {
+                return Ok(());
+            }
+
             let (mut events_diff, remove_header) = if !self.prev_events.is_empty() {
                 (
                     Event::compare_event_vectors(&self.prev_events, &conf.events),
@@ -1036,6 +1042,33 @@ mod tests {
         handler.build_bed_conformance_cache(8);
 
         assert!(!handler.conforms_bed());
+    }
+
+    #[test]
+    fn a_payload_without_objects_does_not_restart_the_metadata_file() {
+        use truehd::structs::oamd::{EXAMPLE_DATA, ObjectAudioMetadataPayload};
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut handler = DecodeHandler::new(
+            Some(dir.path().join("out")),
+            AudioFormat::Caf,
+            false,
+            false,
+            None,
+            None,
+            12000,
+        );
+        handler.has_atmos = true;
+        let objects = ObjectAudioMetadataPayload::read(EXAMPLE_DATA).unwrap();
+        let mut none = ObjectAudioMetadataPayload::read(EXAMPLE_DATA).unwrap();
+        none.object_element = None;
+
+        for oamd in [&objects, &none, &objects] {
+            handler.write_metadata(oamd, 48000).unwrap();
+        }
+
+        let metadata = std::fs::read_to_string(dir.path().join("out.atmos.metadata")).unwrap();
+        assert_eq!(metadata.matches("sampleRate").count(), 1);
     }
 
     /// The DAMF header names its audio and metadata files by appending to the
