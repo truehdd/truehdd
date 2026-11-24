@@ -11,6 +11,7 @@ use truehd::process::decode::Decoder;
 use truehd::process::extract::Extractor;
 use truehd::process::parse::Parser;
 use truehd::structs::channel::ChannelLabel;
+use truehd::structs::substream::Terminator;
 use truehd::utils::bitstream_io::BsIoSliceReader;
 use truehd::utils::crc::{CRC_RESTART_BLOCK_HEADER_ALG, Crc8};
 
@@ -540,6 +541,27 @@ fn decode_one(data: &[u8], presentation: usize) -> (Vec<i32>, Vec<usize>) {
     }
 
     (pcm, changes)
+}
+
+/// A stream may end on the access unit that carries a major sync, whose restart header
+/// starts the substream state over.
+#[test]
+fn a_terminator_beside_a_restart_header_still_shortens_the_access_unit() {
+    let mut extractor = Extractor::default();
+    extractor.push_bytes(FBA_2CH_SLICE);
+    let frame = extractor.next().unwrap().unwrap();
+    let mut access_unit = Parser::default().parse(&frame).unwrap();
+    access_unit.substream_segment[0].terminator = Some(Terminator {
+        zero_samples_indicated: true,
+        zero_samples: 8,
+        ..Default::default()
+    });
+
+    let decoded = Decoder::default()
+        .decode_presentation(&access_unit, 0)
+        .unwrap();
+
+    assert_eq!(decoded.sample_length, 32);
 }
 
 /// Two four-substream streams end to end. The second builds its eight-channel

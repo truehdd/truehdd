@@ -368,13 +368,6 @@ impl DecoderState {
 
             let substream_segment = &access_unit.substream_segment[i];
 
-            // Handle zero samples for required presentations
-            if let Some(terminator) = &substream_segment.terminator
-                && terminator.zero_samples_indicated
-            {
-                self.substream_state[i].zero_samples = terminator.zero_samples as usize;
-            }
-
             self.substream_index = i;
             let ss_state = &mut self.substream_state[self.substream_index];
             ss_state.decoded_sample_len = 0;
@@ -383,6 +376,13 @@ impl DecoderState {
                 block.update_decoder_state(self)?;
                 self.decode_multi()?;
             }
+
+            // After the blocks, since a restart header among them starts the state over.
+            self.substream_state[i].zero_samples = substream_segment
+                .terminator
+                .as_ref()
+                .filter(|terminator| terminator.zero_samples_indicated)
+                .map_or(0, |terminator| terminator.zero_samples as usize);
         }
 
         let mut result: [Option<DecodedAccessUnit>; MAX_PRESENTATIONS] =
