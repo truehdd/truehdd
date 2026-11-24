@@ -3,6 +3,7 @@ use crate::timestamp::time_str;
 use anyhow::Result;
 use indicatif::{MultiProgress, ProgressBar, style::ProgressStyle};
 use log::info;
+use std::io::{Seek, SeekFrom};
 use std::path::Path;
 use truehd::process::extract::Extractor;
 
@@ -84,6 +85,11 @@ pub(crate) fn estimate_total_frames(input_path: &Path) -> Result<u64> {
             successful_frames += 1;
         }
     }
+
+    // A path naming an open descriptor, such as /dev/stdin, can share one read position
+    // between every open of it, so give back what was read.
+    let _ = std::fs::File::open(input_path)
+        .and_then(|mut file| file.seek(SeekFrom::Current(-(bytes_read as i64))));
 
     let count_elapsed = count_start.elapsed();
     let read_speed_mbps = if count_elapsed.as_secs_f64() > 0.0 {

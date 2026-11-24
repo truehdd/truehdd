@@ -22,34 +22,29 @@ pub fn cmd_decode(args: &DecodeArgs, cli: &Cli, multi: Option<&MultiProgress>) -
         args.presentation
     );
 
-    let is_pipe = args.input.to_string_lossy() == "-";
-
     if let Some(ref path) = args.output_path {
         info!("Output path specified: {}", path.display());
     }
 
-    // Estimate total frames once if needed
-    let total_frames = if !args.no_estimate_progress && !is_pipe {
-        Some(
-            estimate_total_frames(&args.input).map_err(|source| ExitError {
-                code: crate::exit::INPUT,
-                source,
-            })?,
-        )
-    } else {
-        None
-    };
-
-    // Create progress bar
-    let pb = if let Some(multi) = multi {
-        if cli.progress {
-            Some(create_progress_bar(multi, total_frames)?)
+    // The estimate reads the whole input ahead of the decode, which only a regular file
+    // survives, and only a progress bar has a use for it.
+    let multi = multi.filter(|_| cli.progress);
+    let is_stdin = args.input.as_os_str() == "-";
+    let total_frames =
+        if multi.is_some() && !args.no_estimate_progress && !is_stdin && args.input.is_file() {
+            Some(
+                estimate_total_frames(&args.input).map_err(|source| ExitError {
+                    code: crate::exit::INPUT,
+                    source,
+                })?,
+            )
         } else {
             None
-        }
-    } else {
-        None
-    };
+        };
+
+    let pb = multi
+        .map(|multi| create_progress_bar(multi, total_frames))
+        .transpose()?;
 
     let fail_level = if cli.strict {
         Level::Warn
