@@ -14,40 +14,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dropped the `chrono` build dependency, which RustSec now lists as unmaintained (RUSTSEC-2026-0543), and the fourteen crates only it pulled in. The build date in `--version` reads as before
 
 ### Fixed
-- `info` described presentation n from substream n and repeated the last substream for the rest. A presentation that is a copy of a lower one could be shown with another presentation's channel count and levels, against its own "Copy of" line. Each presentation is now described from the substreams the presentation map gives it
-- The `verify` summary of a damaged stream covered only what followed the last access unit that failed, so one failure near the end left the FIFO depths, maxima and average access unit size describing almost nothing. Comes from truehd
-- `decode` and `verify` reported a seamless branch at every major sync after the first accepted branch of a stream that had already restarted once, along with FIFO and timing findings that followed from it. Comes from truehd
-- `decode` read its whole input once to count frames even when no progress bar was asked for, which used up an input that can only be read once. `/dev/stdin`, a process substitution or a named pipe given as the input path decoded to nothing or hung. The count is now made only for a progress bar over a regular file (#28)
-- `decode` wrote a second `sampleRate` and `events` header into `.atmos.metadata` after an Atmos metadata payload that describes no object, which left the file invalid. Such a payload is now passed over
-- `decode` stopped with "multiple bed instances are not supported" on an Atmos program that has no bed at all, only objects. Such a program is now written, and `--bed-conform` gives it the silent 7.1.2 bed its header then names
-- A stream whose major sync carries `extra_channel_meaning` without an Atmos presentation failed its major sync CRC and decoded to nothing. Comes from truehd
-- `decode` wrote stereo by default, and wrong audio with `--presentation 2`, for a stream of two substreams whose 6-channel presentation is its stereo one and whose 8-channel presentation is not. Comes from truehd
-- `decode` wrote silence up to the next major sync, on every presentation, when an access unit carried Atmos metadata it could not read. Only that metadata is skipped now, with a warning, and `--strict` still fails. Comes from truehd
-- `decode` ran a few samples long on a stream whose last access unit carries a major sync, writing the padding that access unit marks as audio. Comes from truehd
-- `decode` could write wrong samples for a stereo, 5.1 or DVD-Audio substream that scales its dither noise, which no stream seen so far does. Comes from truehd
-- `decode` and `verify` reported a FIFO underrun on every access unit after a stream turned to another presentation layout, as where one Atmos title follows another. The audio was right; the warnings are gone. Comes from truehd
-- `decode` kept writing into the same file when the sampling rate or channel count changed with `substream_info` unchanged, as where a 5.1 title is followed by a 7.1 one of the same substream layout. The rest went in under a header that no longer described it. Such a change now starts a new segment
-- `decode` could write noise after a second damaged access unit. When a major sync failed to decode while it was already looking for one, the access units after it were decoded from what the failed one left behind. They are now written as silence up to the next major sync
-- `decode` kept writing into the old segment when the first access unit of a changed stream failed to decode, so the new layout went into a file whose header states the old one. The new segment now starts at the next access unit decoded
-- `decode` wrote silence for a presentation requested together with a higher one that is a copy of a lower one, as `--presentation 1,2` on a stream whose 8-channel presentation is its stereo one. Comes from truehd
-- An Evolution frame that runs past the end of its extra data is reported as `extra_data.evo_frame_overrun`. The access unit used to fail on an unrelated end of input error. Comes from truehd
-- `info` crashed on a stream whose first access unit has a substream that does not open with a restart header. It now leaves out that presentation's channel count
+
+#### Stream changes and segments
+- `decode` wrote wrong audio for the rest of a stream that turns to another presentation layout with the same number of substreams, as where one Atmos title follows another. Comes from truehd
+- `decode` lost the start of the new stream where the substream count changes, as where a disc turns from 5.1 to Atmos. Up to two major sync periods were dropped or written as silence. Comes from truehd
+- `decode` starts a new segment when the sampling rate or channel count changes on its own. The rest used to go into the same file, under a header that no longer described it
+- `decode` starts the new segment at the next access unit decoded when the first one of a changed stream fails to decode. It used to carry on in the old file
+- A segment's files share one base name, numbered by the access unit where the segment starts in the stream, and the DAMF header names them. A segment that turns to Atmos after a restart used to be written under three names (#48)
+- `decode` and `verify` no longer report a FIFO underrun on every access unit after a change of presentation layout. Comes from truehd
+- `decode` and `verify` no longer report a seamless branch at every major sync after the first branch of a stream that had already restarted. Comes from truehd
+- `verify` no longer reports lossless check faults at a splice the buffer-model conditions reject. Comes from truehd
+
+#### Atmos output and `--bed-conform`
+- `decode --bed-conform` wrote no audio for a stream or segment that ended inside the probe range without Atmos metadata, such as any short presentation 3 without objects. The access units the probe holds are now written when the segment ends
+- `decode --bed-conform` damaged the `.atmos.audio` of a segment whose Atmos metadata first arrived after the probe range. Such a segment now keeps its decoded bed, with a warning that names `--probe-range`
+- `decode --bed-conform` probed a segment after the first for a single access unit once the stream was past the probe range. Each segment is now probed for the whole range
 - `decode --bed-conform` could crash, or write channels from the wrong samples, when the Atmos metadata declares a bed with more channels than presentation 3 decodes. Such a segment now keeps its decoded channels, with a warning
-- `decode` wrote wrong audio for the rest of a stream that turns to another presentation layout with the same number of substreams, as where one Atmos title follows another. The new segment was decoded from the substreams the old layout used. Comes from truehd
-- `decode --bed-conform` probed a segment after the first for a single access unit once the stream was past the probe range, so a later segment was rarely conformed. Each segment is now probed for the whole range
-- `decode --bed-conform` wrote no audio for a stream or segment that ended inside the probe range without Atmos metadata, such as any presentation 3 without objects shorter than ten seconds. The access units held back for the probe are now written when the segment ends
-- `decode --bed-conform` damaged the `.atmos.audio` of a segment whose Atmos metadata first arrived after the probe range. Rows widened to the conformed layout went into a file whose header already stated the decoded channel count. Such a segment now keeps its decoded bed, with a warning that names `--probe-range`
+- `decode` writes an Atmos program that has objects and no bed. It used to stop with "multiple bed instances are not supported"
+- `decode` left `.atmos.metadata` invalid, with a second header, after an Atmos metadata payload that describes no object
+- `decode` wrote two wrong values into `.atmos.metadata`: the `depthFactor` of a screen-anchored object for the two larger codes, now 1.0 and 2.0, and the `gain` of an object that repeats an inactive object's, now `-inf`. Comes from `oamd` 0.1.2
+- `decode` skips Atmos metadata it cannot read, with a warning, where it used to write silence on every presentation up to the next major sync. `--strict` still fails. Comes from truehd
+
+#### Decoding
+- `decode` wrote stereo by default, and wrong audio with `--presentation 2`, for a stream of two substreams whose 6-channel presentation is its stereo one and whose 8-channel presentation is not. Comes from truehd
+- `decode` wrote silence for a presentation requested together with a higher one that is a copy of a lower one, as `--presentation 1,2` on a stream whose 8-channel presentation is its stereo one. Comes from truehd
+- A stream whose major sync carries `extra_channel_meaning` without an Atmos presentation failed its major sync CRC and decoded to nothing. Comes from truehd
+- `decode` ran a few samples long on a stream whose last access unit carries a major sync. Comes from truehd
+- `decode` could write wrong samples for a stereo, 5.1 or DVD-Audio substream that scales its dither noise, which no stream seen so far does. Comes from truehd
+
+#### Damaged streams
 - A major sync, restart header, block or terminator declaring more than the format has room for crashed `decode`, `info` and `verify`. It is now handled as any other damaged access unit. Comes from truehd (#45, reported by @Angel2mp3)
-- `verify` reports an access unit whose header fails the parity check as `extract.parity_check_failed`. It used to pass over the access units lost there without a finding, and could call the stream conformant. Comes from truehd (#45, reported by @Angel2mp3)
+- `decode` could write noise after a second damaged access unit, when a major sync failed to decode while it was already looking for one. The access units after it are now written as silence up to the next major sync
 - `decode --strict` stops at an access unit the extractor rejects. It used to finish the 64 KiB it was reading first, and so wrote audio from past the loss before failing
-- `decode` warns when the input ends part way through a frame, and fails under `--strict`. The cut frame used to be dropped without a word (#46, reported by @Angel2mp3)
-- `decode` wrote two wrong values into `.atmos.metadata`. A screen-anchored object's `depthFactor` read 0.75 and 1.0 for the two larger codes, which mean 1.0 and 2.0, and an object coded to repeat the previous object's `gain` took a stale one when that object was inactive, where it is now `-inf`. Comes from `oamd` 0.1.2
-- `decode` lost the start of the new stream where a stream turns from one substream count to another, as where a disc turns from 5.1 to Atmos. Up to two major sync periods of it were dropped or written as silence. It now decodes from the first access unit of the new stream. Comes from truehd
-- `decode` wrote a segment that turns to Atmos after a stream restart under three names: the audio kept its `.caf` name, the metadata took the access unit count where it was created, and the DAMF header named neither. The segment's files now share one base name and the header names them (#48)
-- A segment's file names carry the access unit where it starts in the stream, the number the restart log line gives. They used to count only the access units of that segment's presentation, so a presentation first written after a restart named its segment `_0`
+- `decode` warns when the input ends part way through a frame, and fails under `--strict` (#46, reported by @Angel2mp3)
+- `decode` warns when it stops at an access unit too short for its own header. Comes from truehd
+- `verify` reports an access unit whose header fails the parity check as `extract.parity_check_failed`. It used to pass over the access units lost there, and could call the stream conformant. Comes from truehd (#45, reported by @Angel2mp3)
+- `verify` reports an Evolution frame that runs past the end of its extra data as `extra_data.evo_frame_overrun`, where it used to report an unrelated end of input. Comes from truehd
+- The `verify` summary of a damaged stream covers the whole stream. It used to cover only what followed the last access unit that failed. Comes from truehd
+
+#### Input
+- `decode` reads `/dev/stdin`, a process substitution or a named pipe given as the input path. It used to read the whole input once to count frames, which left nothing to decode. The count is now made only for a progress bar over a regular file (#28)
+
+#### `info`
+- `info` describes each presentation from the substreams the presentation map gives it. A presentation that is a copy of a lower one could be shown with another presentation's channel count and levels
 - `info` showed the 2-channel presentation's channel format and Surround EX flag on the 6-channel one, and neither on the 8-channel one. Each presentation now shows its own
-- `decode` warns when it stops at an access unit too short for its own header, where it used to stop there without a word. Comes from truehd
-- `verify` no longer reports lossless check faults at a splice the buffer-model conditions reject. Nothing was wrong with the audio. Comes from truehd
+- `info` crashed on a stream whose first access unit has a substream that does not open with a restart header. It now leaves out that presentation's channel count
 
 ## [0.6.3] - 2026-11-14
 
